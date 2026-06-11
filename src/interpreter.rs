@@ -4,8 +4,8 @@
 
 use crate::ast::{BinOp, Expr, Stmt, UnOp};
 use crate::differentiation::{
-    diff_block_components, diff_component_equation, diff_scalar_by_scalar,
-    diff_scalar_by_tensor,
+    diff_block_components, diff_component_equation, diff_scalar_by_scalar, diff_scalar_by_tensor,
+    diff_tensor_by_tensor,
 };
 use crate::error::Error;
 use crate::renderer::components::tensor_to_component_matrix;
@@ -160,13 +160,14 @@ impl Interpreter {
                     (Value::Tensor(t), "T") => {
                         Ok(Value::Tensor(Rc::new(TensorExpr::transpose(t)?)))
                     }
-                    (Value::Scalar(_), "T") => {
-                        Err(Error::msg("`.T` is not defined for scalars"))
-                    }
+                    (Value::Scalar(_), "T") => Err(Error::msg("`.T` is not defined for scalars")),
                     (_, other) => Err(Error::msg(format!("unknown property `.{other}`"))),
                 }
             }
-            Expr::Unary { op: UnOp::Neg, expr } => match self.eval(expr)? {
+            Expr::Unary {
+                op: UnOp::Neg,
+                expr,
+            } => match self.eval(expr)? {
                 Value::Scalar(s) => Ok(Value::Scalar(Rc::new(ScalarExpr::Neg(s)))),
                 Value::Tensor(t) => Ok(Value::Tensor(Rc::new(TensorExpr::Neg(t)))),
             },
@@ -187,26 +188,24 @@ impl Interpreter {
         use BinOp::*;
         match (op, l, r) {
             // A : B — double contraction (2:2 scalar, 2:4 / 4:2 order 2)
-            (Ddot, Value::Tensor(a), Value::Tensor(b)) => {
-                match (a.order(), b.order()) {
-                    (2, 2) => {
-                        if a.dim() != b.dim() {
-                            return Err(Error::msg(format!(
-                                "dimension mismatch in `:`: {} vs {}",
-                                a.dim(),
-                                b.dim()
-                            )));
-                        }
-                        Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
+            (Ddot, Value::Tensor(a), Value::Tensor(b)) => match (a.order(), b.order()) {
+                (2, 2) => {
+                    if a.dim() != b.dim() {
+                        return Err(Error::msg(format!(
+                            "dimension mismatch in `:`: {} vs {}",
+                            a.dim(),
+                            b.dim()
+                        )));
                     }
-                    (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
-                    (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
-                    (oa, ob) => Err(Error::msg(format!(
-                        "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
-                         {oa} and {ob}"
-                    ))),
+                    Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
                 }
-            }
+                (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
+                (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                (oa, ob) => Err(Error::msg(format!(
+                    "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
+                         {oa} and {ob}"
+                ))),
+            },
             (Ddot, l, r) => Err(Error::msg(format!(
                 "`:` is not defined between {} and {}",
                 kind(&l),
@@ -225,35 +224,35 @@ impl Interpreter {
                 Ok(Value::Scalar(Rc::new(node)))
             }
             // tensor ∘ tensor
-            (Mul, Value::Tensor(a), Value::Tensor(b)) => {
-                Ok(Value::Tensor(Rc::new(TensorExpr::matmul(a, b)?)))
-            }
+            (Mul, Value::Tensor(a), Value::Tensor(b)) => Ok(simplified_tensor_value(Rc::new(
+                TensorExpr::matmul(a, b)?,
+            ))),
             (Add, Value::Tensor(a), Value::Tensor(b)) => {
-                Ok(Value::Tensor(Rc::new(TensorExpr::add(a, b)?)))
+                Ok(simplified_tensor_value(Rc::new(TensorExpr::add(a, b)?)))
             }
             (Sub, Value::Tensor(a), Value::Tensor(b)) => {
-                Ok(Value::Tensor(Rc::new(TensorExpr::sub(a, b)?)))
+                Ok(simplified_tensor_value(Rc::new(TensorExpr::sub(a, b)?)))
             }
             // scalar * tensor (either side), with coefficient folding so
             // 2 * (½ T : Q) reads T : Q.
             (Mul, Value::Scalar(s), Value::Tensor(t))
             | (Mul, Value::Tensor(t), Value::Scalar(s)) => {
-                if let TensorExpr::ScalarMul(s2, inner) = &*t {
+                let out = if let TensorExpr::ScalarMul(s2, inner) = &*t {
                     let merged = crate::symbolic::fold_mul(&s, s2);
                     if matches!(&*merged, ScalarExpr::Num(x) if *x == 1.0) {
-                        return Ok(Value::Tensor(inner.clone()));
+                        inner.clone()
+                    } else {
+                        Rc::new(TensorExpr::ScalarMul(merged, inner.clone()))
                     }
-                    return Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(
-                        merged,
-                        inner.clone(),
-                    ))));
-                }
-                Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(s, t))))
+                } else {
+                    Rc::new(TensorExpr::ScalarMul(s, t))
+                };
+                Ok(simplified_tensor_value(out))
             }
             // tensor / scalar = (1/s) * tensor
             (Div, Value::Tensor(t), Value::Scalar(s)) => {
                 let inv = ScalarExpr::Div(Rc::new(ScalarExpr::Num(1.0)), s);
-                Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(
+                Ok(simplified_tensor_value(Rc::new(TensorExpr::ScalarMul(
                     Rc::new(inv),
                     t,
                 ))))
@@ -351,9 +350,7 @@ impl Interpreter {
                             _ => return Err(Error::msg("`n` must be a scalar")),
                         },
                         other => {
-                            return Err(Error::msg(format!(
-                                "unknown gstrain keyword `{other}`"
-                            )))
+                            return Err(Error::msg(format!("unknown gstrain keyword `{other}`")))
                         }
                     }
                 }
@@ -526,13 +523,11 @@ impl Interpreter {
     ///   matched structurally, with a strict independence check rejecting
     ///   hidden dependence (e.g. `det(F)` inside `diff(…, C)`).
     /// - tensor / tensor → opaque order-4 `Diff` node.
-    fn builtin_diff(
-        &mut self,
-        args: &[Expr],
-        kwargs: &[(String, Expr)],
-    ) -> Result<Value, Error> {
+    fn builtin_diff(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
         if args.len() != 2 || !kwargs.is_empty() {
-            return Err(Error::msg("`diff` takes exactly two arguments: diff(expr, X)"));
+            return Err(Error::msg(
+                "`diff` takes exactly two arguments: diff(expr, X)",
+            ));
         }
         let num = self.eval(&args[0])?;
         let den = self.eval(&args[1])?;
@@ -547,9 +542,10 @@ impl Interpreter {
                     ));
                 };
                 return match num {
-                    Value::Scalar(s) => {
-                        Ok(Value::Scalar(diff_scalar_by_scalar(&s, name)?))
-                    }
+                    Value::Scalar(s) => Ok(Value::Scalar(simplify_scalar(
+                        &diff_scalar_by_scalar(&s, name)?,
+                        RuleSet::Continuum,
+                    ))),
                     Value::Tensor(_) => Err(Error::msg(
                         "differentiating a tensor with respect to a scalar is not \
                          supported yet",
@@ -566,7 +562,10 @@ impl Interpreter {
             )));
         }
         match num {
-            Value::Scalar(s) => Ok(Value::Tensor(diff_scalar_by_tensor(&s, &den)?)),
+            Value::Scalar(s) => Ok(Value::Tensor(simplify_tensor(
+                &diff_scalar_by_tensor(&s, &den)?,
+                RuleSet::Continuum,
+            ))),
             Value::Tensor(t) => {
                 if t.order() != 2 {
                     return Err(Error::msg(format!(
@@ -575,32 +574,25 @@ impl Interpreter {
                         t.order()
                     )));
                 }
-                if !matches!(&*den, TensorExpr::Var { .. }) {
-                    return Err(Error::msg(
-                        "tensor-by-tensor diff requires a declared tensor variable \
-                         as the denominator (component formulas need a plain symbol)",
-                    ));
-                }
                 // Label the numerator with its source variable name (if any)
                 // so the symbol display reads ∂C/∂F rather than ∂(FᵀF)/∂F.
                 let num_label = match &args[0] {
                     Expr::Ident(name) => self.display_lhs(name),
                     _ => None,
                 };
-                Ok(Value::Tensor(Rc::new(TensorExpr::Diff {
-                    num: t,
-                    den,
-                    num_label,
-                })))
+                let den_label = match &args[1] {
+                    Expr::Ident(name) => self.display_lhs(name),
+                    _ => None,
+                };
+                Ok(Value::Tensor(simplify_tensor(
+                    &diff_tensor_by_tensor(&t, &den, num_label, den_label)?,
+                    RuleSet::Continuum,
+                )))
             }
         }
     }
 
-    fn builtin_scalar(
-        &mut self,
-        args: &[Expr],
-        kwargs: &[(String, Expr)],
-    ) -> Result<Value, Error> {
+    fn builtin_scalar(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
         if args.len() != 1 || !kwargs.is_empty() {
             return Err(Error::msg(
                 "`Scalar` takes exactly one argument: Scalar(\"<latex>\")",
@@ -616,11 +608,7 @@ impl Interpreter {
         })))
     }
 
-    fn builtin_tensor(
-        &mut self,
-        args: &[Expr],
-        kwargs: &[(String, Expr)],
-    ) -> Result<Value, Error> {
+    fn builtin_tensor(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
         if args.len() != 1 {
             return Err(Error::msg(
                 "`Tensor` expects a string LaTeX name as its first argument",
@@ -642,9 +630,7 @@ impl Interpreter {
                 "antisymmetric" => props.antisymmetric = expect_bool(value, "antisymmetric")?,
                 "orthogonal" => props.orthogonal = expect_bool(value, "orthogonal")?,
                 "isotropic" => props.isotropic = expect_bool(value, "isotropic")?,
-                other => {
-                    return Err(Error::msg(format!("unknown Tensor property `{other}`")))
-                }
+                other => return Err(Error::msg(format!("unknown Tensor property `{other}`"))),
             }
         }
         let order = order.ok_or_else(|| Error::msg("`Tensor` requires `order=<n>`"))?;
@@ -695,11 +681,7 @@ impl Interpreter {
             // display(C, mode=symbol): mode values arrive as bare identifiers.
             let val = match raw {
                 Expr::Ident(s) | Expr::Str(s) => s.clone(),
-                other => {
-                    return Err(Error::msg(format!(
-                        "invalid value for `{key}`: {other:?}"
-                    )))
-                }
+                other => return Err(Error::msg(format!("invalid value for `{key}`: {other:?}"))),
             };
             match key.as_str() {
                 "mode" if callee == "display" => mode = val,
@@ -752,7 +734,7 @@ impl Interpreter {
             return Some(label.clone());
         }
         match value {
-            Value::Tensor(_) if name.chars().count() == 1 => Some(format!("\\bm {name}")),
+            Value::Tensor(t) if name.chars().count() == 1 => Some(default_tensor_label(name, t)),
             _ => Some(name.to_string()),
         }
     }
@@ -776,15 +758,20 @@ impl Interpreter {
                 "{lhs}{}",
                 crate::renderer::spectral::tensor_to_spectral(t)?
             )),
-            (Value::Scalar(_), "spectral") => Err(Error::msg(
-                "spectral display is only defined for tensors",
-            )),
+            (Value::Scalar(_), "spectral") => {
+                Err(Error::msg("spectral display is only defined for tensors"))
+            }
             // Derivative components use the abstract-index engine and carry
             // their own ∂C_ij/∂F_mn left-hand side.
             (Value::Tensor(t), "components" | "matrix" | "block_components")
                 if matches!(&**t, TensorExpr::Diff { .. }) =>
             {
-                let TensorExpr::Diff { num, den, num_label } = &**t else {
+                let TensorExpr::Diff {
+                    num,
+                    den,
+                    num_label,
+                } = &**t
+                else {
                     unreachable!()
                 };
                 let label = num_label.clone().unwrap_or_else(|| tensor_to_latex(num));
@@ -801,9 +788,9 @@ impl Interpreter {
                 "block_components is only available for fourth-order derivative \
                  variables (e.g. A = diff(P, F))",
             )),
-            (Value::Scalar(_), "components" | "matrix") => Err(Error::msg(
-                "component display is only defined for tensors",
-            )),
+            (Value::Scalar(_), "components" | "matrix") => {
+                Err(Error::msg("component display is only defined for tensors"))
+            }
             (_, other) => Err(Error::msg(format!(
                 "unknown display mode `{other}` (supported: symbol, components, \
                  matrix, block_components)"
@@ -830,8 +817,8 @@ impl Interpreter {
     /// preference:
     /// 1. the label declared via `Scalar("...")`/`Tensor("...")` for this
     ///    name (kept across reassignment);
-    /// 2. a bold symbol synthesized from a single-character tensor name
-    ///    (`C` -> `\bm C`);
+    /// 2. a tensor symbol synthesized from a single-character tensor name
+    ///    (`C` -> `\bm C`, fourth-order `A` -> `\mathbb A`);
     /// 3. the plain variable name (multi-character names stay plain —
     ///    `\bm dCdF` would bold only the `d`).
     fn display_lhs(&self, name: &str) -> Option<String> {
@@ -840,10 +827,22 @@ impl Interpreter {
             return Some(label.clone());
         }
         match value {
-            Value::Tensor(_) if name.chars().count() == 1 => Some(format!("\\bm {name}")),
+            Value::Tensor(t) if name.chars().count() == 1 => Some(default_tensor_label(name, t)),
             _ => Some(name.to_string()),
         }
     }
+}
+
+fn default_tensor_label(name: &str, tensor: &Rc<TensorExpr>) -> String {
+    if tensor.order() == 4 {
+        format!("\\mathbb {name}")
+    } else {
+        format!("\\bm {name}")
+    }
+}
+
+fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
+    Value::Tensor(simplify_tensor(&t, RuleSet::Continuum))
 }
 
 fn kind(v: &Value) -> &'static str {
@@ -867,7 +866,9 @@ fn op_name(op: BinOp) -> &'static str {
 fn expect_usize(expr: &Expr, what: &str) -> Result<usize, Error> {
     match expr {
         Expr::Num(n) if n.fract() == 0.0 && *n >= 0.0 => Ok(*n as usize),
-        _ => Err(Error::msg(format!("`{what}` must be a non-negative integer"))),
+        _ => Err(Error::msg(format!(
+            "`{what}` must be a non-negative integer"
+        ))),
     }
 }
 

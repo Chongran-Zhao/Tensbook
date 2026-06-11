@@ -5,16 +5,16 @@
 //!   into a second-order tensor expression using continuum-mechanics rules
 //!   (`∂(det F)/∂F = det(F) F^{-T}`, `∂tr(FᵀF)/∂F = 2F`, chain rule, ...);
 //! - tensor-by-tensor: `diff(C, F)` — kept as an opaque order-4
-//!   [`TensorExpr::Diff`] node; its component formula is produced on demand
-//!   via the abstract-index engine ([`crate::indices`]).
+//!   [`TensorExpr::Diff`] node; compound denominators are first treated as a
+//!   synthetic independent variable, then their component formula is produced
+//!   on demand via the abstract-index engine ([`crate::indices`]).
 //!
 //! Index convention: `(∂P/∂F)_{iJkL} = ∂P_{iJ}/∂F_{kL}` — result indices are
 //! the numerator's followed by the denominator's.
 
 use crate::error::Error;
 use crate::indices::{
-    abstract_component, component_base, contract, differentiate, instantiate,
-    render_terms,
+    abstract_component, component_base, contract, differentiate, instantiate, render_terms,
 };
 use crate::symbolic::{fold_mul, fold_pow, with_coeff, ScalarExpr};
 use crate::tensor::{TensorExpr, TensorProperties};
@@ -69,6 +69,54 @@ pub fn diff_scalar_by_tensor(
             x.clone(),
         ))),
     }
+}
+
+/// `∂T/∂X` for a second-order tensor `T` and a second-order tensor expression
+/// `X`.
+///
+/// Declared tensor denominators are kept directly. Compound denominators are
+/// treated as synthetic independent variables, mirroring
+/// [`diff_scalar_by_tensor`]: occurrences of the compound `X` are replaced by
+/// a fresh tensor variable for component differentiation, while hidden
+/// dependence on `X`'s underlying variables is rejected.
+pub fn diff_tensor_by_tensor(
+    t: &Rc<TensorExpr>,
+    x: &Rc<TensorExpr>,
+    num_label: Option<String>,
+    den_label: Option<String>,
+) -> Result<Rc<TensorExpr>, Error> {
+    if t.order() != 2 || x.order() != 2 {
+        return Err(Error::msg(
+            "tensor-by-tensor diff requires second-order numerator and denominator",
+        ));
+    }
+    if matches!(&**x, TensorExpr::Var { .. }) {
+        return Ok(Rc::new(TensorExpr::Diff {
+            num: t.clone(),
+            den: x.clone(),
+            num_label,
+        }));
+    }
+
+    let rewritten = match cauchy_green_factor(x) {
+        Some(a) => rewrite_tensor_for_compound(t, x, &a),
+        None => t.clone(),
+    };
+    check_independence_tensor(&rewritten, x)?;
+
+    let latex = den_label.unwrap_or_else(|| "\\bm X".to_string());
+    let x_var = Rc::new(TensorExpr::Var {
+        name: latex.clone(),
+        latex,
+        order: x.order(),
+        dim: x.dim(),
+        props: TensorProperties {
+            symmetric: x.is_symmetric(),
+            ..Default::default()
+        },
+    });
+    let rewritten = replace_tensor(&rewritten, x, &x_var);
+    Ok(d_tensor(&rewritten, &x_var)?.unwrap_or_else(|| zero_fourth_like(&x_var)))
 }
 
 /// If `x` is structurally `AᵀA` or `A Aᵀ`, return `A`.
@@ -137,7 +185,22 @@ fn rewrite_scalar_for_compound(
         ScalarExpr::Sub(p, q) => Rc::new(ScalarExpr::Sub(rw(p), rw(q))),
         ScalarExpr::Mul(p, q) => Rc::new(ScalarExpr::Mul(rw(p), rw(q))),
         ScalarExpr::Div(p, q) => Rc::new(ScalarExpr::Div(rw(p), rw(q))),
-        ScalarExpr::Pow(p, q) => Rc::new(ScalarExpr::Pow(rw(p), rw(q))),
+        ScalarExpr::Pow(p, q) => {
+            if let ScalarExpr::Det(t) = &**p {
+                if t == a {
+                    if let Some(exp) = half_rational_expr(q) {
+                        return Rc::new(ScalarExpr::Pow(Rc::new(ScalarExpr::Det(x.clone())), exp));
+                    }
+                    if let Some(n) = numeric_value(q) {
+                        return Rc::new(ScalarExpr::Pow(
+                            Rc::new(ScalarExpr::Det(x.clone())),
+                            Rc::new(ScalarExpr::Num(n / 2.0)),
+                        ));
+                    }
+                }
+            }
+            Rc::new(ScalarExpr::Pow(rw(p), rw(q)))
+        }
         ScalarExpr::Neg(p) => Rc::new(ScalarExpr::Neg(rw(p))),
     }
 }
@@ -153,7 +216,7 @@ fn rewrite_tensor_for_compound(
     let rw = |e: &Rc<ScalarExpr>| rewrite_scalar_for_compound(e, x, a);
     let rwt = |e: &Rc<TensorExpr>| rewrite_tensor_for_compound(e, x, a);
     match &**t {
-        TensorExpr::Var { .. } => t.clone(),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
         TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
             base: rwt(base),
             scale: scale.clone(),
@@ -169,7 +232,11 @@ fn rewrite_tensor_for_compound(
         TensorExpr::Transpose(p) => Rc::new(TensorExpr::Transpose(rwt(p))),
         TensorExpr::Inverse(p) => Rc::new(TensorExpr::Inverse(rwt(p))),
         TensorExpr::InverseTranspose(p) => Rc::new(TensorExpr::InverseTranspose(rwt(p))),
-        TensorExpr::Diff { num, den, num_label } => Rc::new(TensorExpr::Diff {
+        TensorExpr::Diff {
+            num,
+            den,
+            num_label,
+        } => Rc::new(TensorExpr::Diff {
             num: rwt(num),
             den: rwt(den),
             num_label: num_label.clone(),
@@ -182,16 +249,167 @@ fn rewrite_tensor_for_compound(
             base: rwt(base),
             base_latex: base_latex.clone(),
         }),
-        TensorExpr::SpectralFn { func, base, base_latex } => {
-            Rc::new(TensorExpr::SpectralFn {
-                func: func.clone(),
-                base: rwt(base),
-                base_latex: base_latex.clone(),
-            })
-        }
+        TensorExpr::SpectralFn {
+            func,
+            base,
+            base_latex,
+        } => Rc::new(TensorExpr::SpectralFn {
+            func: func.clone(),
+            base: rwt(base),
+            base_latex: base_latex.clone(),
+        }),
         TensorExpr::ScalarMul(s, p) => Rc::new(TensorExpr::ScalarMul(rw(s), rwt(p))),
         TensorExpr::Neg(p) => Rc::new(TensorExpr::Neg(rwt(p))),
     }
+}
+
+fn replace_scalar(
+    s: &Rc<ScalarExpr>,
+    target: &Rc<TensorExpr>,
+    replacement: &Rc<TensorExpr>,
+) -> Rc<ScalarExpr> {
+    let rs = |e: &Rc<ScalarExpr>| replace_scalar(e, target, replacement);
+    let rt = |t: &Rc<TensorExpr>| replace_tensor(t, target, replacement);
+    match &**s {
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+        ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(rs(a), rs(b))),
+        ScalarExpr::Sub(a, b) => Rc::new(ScalarExpr::Sub(rs(a), rs(b))),
+        ScalarExpr::Mul(a, b) => Rc::new(ScalarExpr::Mul(rs(a), rs(b))),
+        ScalarExpr::Div(a, b) => Rc::new(ScalarExpr::Div(rs(a), rs(b))),
+        ScalarExpr::Pow(a, b) => Rc::new(ScalarExpr::Pow(rs(a), rs(b))),
+        ScalarExpr::Neg(a) => Rc::new(ScalarExpr::Neg(rs(a))),
+        ScalarExpr::Log(a) => Rc::new(ScalarExpr::Log(rs(a))),
+        ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
+            name: name.clone(),
+            arg: rs(arg),
+        }),
+        ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(rt(t))),
+        ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(rt(t))),
+        ScalarExpr::Ddot(a, b) => Rc::new(ScalarExpr::Ddot(rt(a), rt(b))),
+        ScalarExpr::Eig {
+            base,
+            symbol,
+            index,
+        } => Rc::new(ScalarExpr::Eig {
+            base: rt(base),
+            symbol: symbol.clone(),
+            index: index.clone(),
+        }),
+        ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
+            body: rs(body),
+            index: index.clone(),
+            dim: *dim,
+        }),
+    }
+}
+
+fn replace_tensor(
+    t: &Rc<TensorExpr>,
+    target: &Rc<TensorExpr>,
+    replacement: &Rc<TensorExpr>,
+) -> Rc<TensorExpr> {
+    if t == target {
+        return replacement.clone();
+    }
+    let rs = |s: &Rc<ScalarExpr>| replace_scalar(s, target, replacement);
+    let rt = |e: &Rc<TensorExpr>| replace_tensor(e, target, replacement);
+    match &**t {
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Transpose(a) => Rc::new(TensorExpr::Transpose(rt(a))),
+        TensorExpr::Inverse(a) => Rc::new(TensorExpr::Inverse(rt(a))),
+        TensorExpr::InverseTranspose(a) => Rc::new(TensorExpr::InverseTranspose(rt(a))),
+        TensorExpr::Diff {
+            num,
+            den,
+            num_label,
+        } => Rc::new(TensorExpr::Diff {
+            num: rt(num),
+            den: rt(den),
+            num_label: num_label.clone(),
+        }),
+        TensorExpr::MatMul(a, b) => Rc::new(TensorExpr::MatMul(rt(a), rt(b))),
+        TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(rt(a), rt(b))),
+        TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
+        TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),
+        TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
+            base: rt(base),
+            base_latex: base_latex.clone(),
+        }),
+        TensorExpr::SpectralFn {
+            func,
+            base,
+            base_latex,
+        } => Rc::new(TensorExpr::SpectralFn {
+            func: func.clone(),
+            base: rt(base),
+            base_latex: base_latex.clone(),
+        }),
+        TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
+            base: rt(base),
+            scale: scale.clone(),
+            latex: latex.clone(),
+        }),
+        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor { strain: rt(strain) }),
+        TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
+            second: rt(second),
+            fourth: rt(fourth),
+        }),
+        TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(rs(s), rt(a))),
+        TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),
+    }
+}
+
+fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExpr>>, Error> {
+    if !t_contains(t, x) {
+        return Ok(None);
+    }
+    if t == x {
+        return Ok(Some(Rc::new(TensorExpr::Identity4 { dim: x.dim() })));
+    }
+    match &**t {
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => Ok(None),
+        TensorExpr::Add(a, b) => Ok(tadd(d_tensor(a, x)?, d_tensor(b, x)?)),
+        TensorExpr::Sub(a, b) => Ok(tsub(d_tensor(a, x)?, d_tensor(b, x)?)),
+        TensorExpr::Neg(a) => Ok(d_tensor(a, x)?.map(tneg)),
+        TensorExpr::ScalarMul(s, a) => {
+            let da = d_tensor(a, x)?.map(|dt| smul(s.clone(), dt));
+            let ds = if s_contains(s, x) {
+                Some(outer_scaled(a.clone(), diff_scalar_by_tensor(s, x)?)?)
+            } else {
+                None
+            };
+            Ok(tadd(da, ds))
+        }
+        TensorExpr::Transpose(_)
+        | TensorExpr::Inverse(_)
+        | TensorExpr::InverseTranspose(_)
+        | TensorExpr::Diff { .. }
+        | TensorExpr::MatMul(..)
+        | TensorExpr::Outer(..)
+        | TensorExpr::Spectral { .. }
+        | TensorExpr::SpectralFn { .. }
+        | TensorExpr::GenStrain { .. }
+        | TensorExpr::QTensor { .. }
+        | TensorExpr::DdotTQ { .. } => Err(Error::msg(
+            "this tensor-by-tensor derivative form is not supported yet",
+        )),
+    }
+}
+
+fn outer_scaled(a: Rc<TensorExpr>, b: Rc<TensorExpr>) -> Result<Rc<TensorExpr>, Error> {
+    if let TensorExpr::ScalarMul(s, inner) = &*a {
+        return Ok(smul(
+            s.clone(),
+            Rc::new(TensorExpr::outer(inner.clone(), b)?),
+        ));
+    }
+    if let TensorExpr::ScalarMul(s, inner) = &*b {
+        return Ok(smul(
+            s.clone(),
+            Rc::new(TensorExpr::outer(a, inner.clone())?),
+        ));
+    }
+    Ok(Rc::new(TensorExpr::outer(a, b)?))
 }
 
 /// `f'(arg)` for the named univariate functions.
@@ -222,10 +440,7 @@ fn func_derivative(name: &str, arg: &Rc<ScalarExpr>) -> Result<Rc<ScalarExpr>, E
 
 /// Find the (unique) generalized strain `E(x)` inside `s`, if any.
 /// Multiple distinct strains of the same tensor are rejected.
-fn find_gen_strain_of(
-    s: &ScalarExpr,
-    x: &Rc<TensorExpr>,
-) -> Result<Option<Rc<TensorExpr>>, Error> {
+fn find_gen_strain_of(s: &ScalarExpr, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExpr>>, Error> {
     let mut found: Vec<Rc<TensorExpr>> = Vec::new();
     collect_strains_scalar(s, x, &mut found);
     found.dedup();
@@ -276,7 +491,7 @@ fn collect_strains_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>, out: &mut Vec<
         }
     }
     match &**t {
-        TensorExpr::Var { .. } => {}
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => {}
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -309,41 +524,33 @@ fn collect_strains_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>, out: &mut Vec<
 
 /// `∂s/∂a` for a declared scalar symbol `a` (matched by name).
 /// Returns `None`-as-zero folded into `Num(0)`.
-pub fn diff_scalar_by_scalar(
-    s: &Rc<ScalarExpr>,
-    name: &str,
-) -> Result<Rc<ScalarExpr>, Error> {
+pub fn diff_scalar_by_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Rc<ScalarExpr>, Error> {
     Ok(d_scalar_scalar(s, name)?.unwrap_or_else(|| Rc::new(ScalarExpr::Num(0.0))))
 }
 
 /// `None` means the derivative is identically zero.
-fn d_scalar_scalar(
-    s: &Rc<ScalarExpr>,
-    name: &str,
-) -> Result<Option<Rc<ScalarExpr>>, Error> {
+fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExpr>>, Error> {
     use crate::symbolic::{fold_add, fold_sub};
     let one = || Rc::new(ScalarExpr::Num(1.0));
     match &**s {
         ScalarExpr::Sym { name: n, .. } => Ok((n == name).then(one)),
         ScalarExpr::Num(_) => Ok(None),
-        ScalarExpr::Add(a, b) => {
-            Ok(match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
+        ScalarExpr::Add(a, b) => Ok(
+            match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
                 (None, None) => None,
                 (Some(x), None) | (None, Some(x)) => Some(x),
                 (Some(x), Some(y)) => Some(fold_add(x, y)),
-            })
-        }
-        ScalarExpr::Sub(a, b) => {
-            Ok(match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
+            },
+        ),
+        ScalarExpr::Sub(a, b) => Ok(
+            match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
                 (None, None) => None,
                 (Some(x), None) => Some(x),
                 (None, Some(y)) => Some(with_coeff(-1.0, Some(y))),
                 (Some(x), Some(y)) => Some(fold_sub(x, y)),
-            })
-        }
-        ScalarExpr::Neg(a) => {
-            Ok(d_scalar_scalar(a, name)?.map(|d| with_coeff(-1.0, Some(d))))
-        }
+            },
+        ),
+        ScalarExpr::Neg(a) => Ok(d_scalar_scalar(a, name)?.map(|d| with_coeff(-1.0, Some(d)))),
         ScalarExpr::Mul(a, b) => {
             let da = d_scalar_scalar(a, name)?.map(|d| fold_mul(&d, b));
             let db = d_scalar_scalar(b, name)?.map(|d| fold_mul(a, &d));
@@ -355,8 +562,7 @@ fn d_scalar_scalar(
         }
         ScalarExpr::Div(a, b) => {
             // d(a/b) = da/b − a db / b²
-            let da = d_scalar_scalar(a, name)?
-                .map(|d| Rc::new(ScalarExpr::Div(d, b.clone())));
+            let da = d_scalar_scalar(a, name)?.map(|d| Rc::new(ScalarExpr::Div(d, b.clone())));
             let db = d_scalar_scalar(b, name)?.map(|d| {
                 with_coeff(
                     -1.0,
@@ -409,15 +615,13 @@ fn d_scalar_scalar(
             Ok(Some(fold_mul(&func_derivative(f, arg)?, &da)))
         }
         ScalarExpr::Eig { .. } => Ok(None),
-        ScalarExpr::SpecSum { body, index, dim } => {
-            Ok(d_scalar_scalar(body, name)?.map(|d| {
-                Rc::new(ScalarExpr::SpecSum {
-                    body: d,
-                    index: index.clone(),
-                    dim: *dim,
-                })
-            }))
-        }
+        ScalarExpr::SpecSum { body, index, dim } => Ok(d_scalar_scalar(body, name)?.map(|d| {
+            Rc::new(ScalarExpr::SpecSum {
+                body: d,
+                index: index.clone(),
+                dim: *dim,
+            })
+        })),
         // det/tr/ddot of tensors: zero unless the scalar hides inside a
         // tensor (ScalarMul coefficient), which is not supported yet.
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => {
@@ -446,7 +650,7 @@ fn d_scalar_scalar(
 /// Does a scalar symbol (by name) occur anywhere inside a tensor expression?
 fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
     match t {
-        TensorExpr::Var { .. } => false,
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => false,
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -518,6 +722,7 @@ fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
                 out.push(name.clone());
             }
         }
+        TensorExpr::Identity4 { .. } => {}
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -554,6 +759,12 @@ fn check_independence_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>) -> Result<(), E
     walk_scalar(s, x, &vars)
 }
 
+fn check_independence_tensor(t: &TensorExpr, x: &Rc<TensorExpr>) -> Result<(), Error> {
+    let mut vars = Vec::new();
+    tensor_var_names(x, &mut vars);
+    walk_tensor(t, x, &vars)
+}
+
 fn walk_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<(), Error> {
     match s {
         ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => Ok(()),
@@ -582,6 +793,7 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
         return Ok(()); // an occurrence of X itself: opaque, don't descend
     }
     match t {
+        TensorExpr::Identity4 { .. } => Ok(()),
         TensorExpr::Var { name, .. } => {
             if vars.contains(name) {
                 Err(Error::msg(format!(
@@ -626,10 +838,7 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
 }
 
 /// `None` means the derivative is identically zero.
-fn d_scalar(
-    s: &Rc<ScalarExpr>,
-    x: &Rc<TensorExpr>,
-) -> Result<Option<Rc<TensorExpr>>, Error> {
+fn d_scalar(s: &Rc<ScalarExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExpr>>, Error> {
     if !s_contains(s, x) {
         return Ok(None);
     }
@@ -662,9 +871,9 @@ fn d_scalar(
             Ok(tsub_opt(da, db))
         }
         ScalarExpr::Pow(base, exp) => {
-            let n = match &**exp {
-                ScalarExpr::Num(n) => *n,
-                _ if !s_contains(exp, x) => {
+            let n = match numeric_value(exp) {
+                Some(n) => n,
+                None if !s_contains(exp, x) => {
                     return Err(Error::msg(
                         "d(a^b)/dX with a non-numeric exponent is not supported yet",
                     ))
@@ -675,6 +884,16 @@ fn d_scalar(
                     ))
                 }
             };
+            if let ScalarExpr::Det(t) = &**base {
+                if t == x {
+                    let coeff =
+                        with_coeff(n, Some(Rc::new(ScalarExpr::Pow(base.clone(), exp.clone()))));
+                    return Ok(Some(smul(
+                        coeff,
+                        Rc::new(TensorExpr::InverseTranspose(x.clone())),
+                    )));
+                }
+            }
             // d(a^n) = n a^{n-1} da
             let coeff = with_coeff(n, Some(fold_pow(base.clone(), n - 1.0)));
             Ok(d_scalar(base, x)?.map(|t| smul(coeff.clone(), t)))
@@ -735,10 +954,7 @@ fn d_scalar(
 }
 
 /// `∂ tr(T)/∂X` using linearity of the trace.
-fn d_trace(
-    t: &Rc<TensorExpr>,
-    x: &Rc<TensorExpr>,
-) -> Result<Option<Rc<TensorExpr>>, Error> {
+fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExpr>>, Error> {
     if !t_contains(t, x) {
         return Ok(None);
     }
@@ -771,8 +987,19 @@ fn d_trace(
         }
         TensorExpr::Add(a, b) => Ok(tadd(d_trace(a, x)?, d_trace(b, x)?)),
         TensorExpr::Sub(a, b) => Ok(tsub(d_trace(a, x)?, d_trace(b, x)?)),
-        TensorExpr::ScalarMul(s, inner) if !s_contains(s, x) => {
-            Ok(d_trace(inner, x)?.map(|t| smul(s.clone(), t)))
+        TensorExpr::ScalarMul(s, inner) => {
+            let d_inner = d_trace(inner, x)?.map(|t| smul(s.clone(), t));
+            let d_coeff = if s_contains(s, x) {
+                d_scalar(s, x)?.map(|t| {
+                    smul(
+                        Rc::new(ScalarExpr::Tr(inner.clone())),
+                        t,
+                    )
+                })
+            } else {
+                None
+            };
+            Ok(tadd(d_inner, d_coeff))
         }
         TensorExpr::Neg(inner) => Ok(d_trace(inner, x)?.map(tneg)),
         _ => Err(Error::msg(
@@ -859,10 +1086,7 @@ pub fn diff_block_components(
         for l in 1..=dim {
             // Fix the denominator indices (m, n) = (k, L); leave (i, j) free.
             let inst = instantiate(&general, &[(m.clone(), k), (n.clone(), l)], dim);
-            row.push(format!(
-                "\\left[ {} \\right]_{{ij}}",
-                render_terms(&inst)
-            ));
+            row.push(format!("\\left[ {} \\right]_{{ij}}", render_terms(&inst)));
         }
         blocks.push(row.join(" & "));
     }
@@ -882,7 +1106,7 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         return true;
     }
     match t {
-        TensorExpr::Var { .. } => false,
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => false,
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -896,9 +1120,7 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         | TensorExpr::SpectralFn { base, .. }
         | TensorExpr::GenStrain { base, .. } => t_contains(base, x),
         TensorExpr::QTensor { strain } => t_contains(strain, x),
-        TensorExpr::DdotTQ { second, fourth } => {
-            t_contains(second, x) || t_contains(fourth, x)
-        }
+        TensorExpr::DdotTQ { second, fourth } => t_contains(second, x) || t_contains(fourth, x),
         TensorExpr::ScalarMul(s, a) => s_contains(s, x) || t_contains(a, x),
     }
 }
@@ -946,10 +1168,7 @@ fn tneg(t: Rc<TensorExpr>) -> Rc<TensorExpr> {
     }
 }
 
-fn tadd(
-    a: Option<Rc<TensorExpr>>,
-    b: Option<Rc<TensorExpr>>,
-) -> Option<Rc<TensorExpr>> {
+fn tadd(a: Option<Rc<TensorExpr>>, b: Option<Rc<TensorExpr>>) -> Option<Rc<TensorExpr>> {
     match (a, b) {
         (None, None) => None,
         (Some(t), None) | (None, Some(t)) => Some(t),
@@ -957,10 +1176,7 @@ fn tadd(
     }
 }
 
-fn tsub(
-    a: Option<Rc<TensorExpr>>,
-    b: Option<Rc<TensorExpr>>,
-) -> Option<Rc<TensorExpr>> {
+fn tsub(a: Option<Rc<TensorExpr>>, b: Option<Rc<TensorExpr>>) -> Option<Rc<TensorExpr>> {
     match (a, b) {
         (None, None) => None,
         (Some(t), None) => Some(t),
@@ -971,10 +1187,7 @@ fn tsub(
 
 /// Like [`tsub`] but the second operand is already negated (used by the
 /// quotient rule where the db term carries its own minus sign).
-fn tsub_opt(
-    a: Option<Rc<TensorExpr>>,
-    neg_b: Option<Rc<TensorExpr>>,
-) -> Option<Rc<TensorExpr>> {
+fn tsub_opt(a: Option<Rc<TensorExpr>>, neg_b: Option<Rc<TensorExpr>>) -> Option<Rc<TensorExpr>> {
     tadd(a, neg_b)
 }
 
@@ -989,4 +1202,98 @@ fn identity_like(x: &TensorExpr) -> Rc<TensorExpr> {
             ..Default::default()
         },
     })
+}
+
+fn zero_fourth_like(x: &TensorExpr) -> Rc<TensorExpr> {
+    smul(
+        Rc::new(ScalarExpr::Num(0.0)),
+        Rc::new(TensorExpr::Identity4 { dim: x.dim() }),
+    )
+}
+
+fn numeric_value(s: &ScalarExpr) -> Option<f64> {
+    match s {
+        ScalarExpr::Num(n) => Some(*n),
+        ScalarExpr::Add(a, b) => Some(numeric_value(a)? + numeric_value(b)?),
+        ScalarExpr::Sub(a, b) => Some(numeric_value(a)? - numeric_value(b)?),
+        ScalarExpr::Mul(a, b) => Some(numeric_value(a)? * numeric_value(b)?),
+        ScalarExpr::Div(a, b) => Some(numeric_value(a)? / numeric_value(b)?),
+        ScalarExpr::Pow(a, b) => Some(numeric_value(a)?.powf(numeric_value(b)?)),
+        ScalarExpr::Neg(a) => Some(-numeric_value(a)?),
+        _ => None,
+    }
+}
+
+fn half_rational_expr(s: &ScalarExpr) -> Option<Rc<ScalarExpr>> {
+    let (num, den) = rational_value(s)?;
+    Some(rational_expr(num, den * 2))
+}
+
+fn rational_value(s: &ScalarExpr) -> Option<(i64, i64)> {
+    match s {
+        ScalarExpr::Num(n) if n.fract() == 0.0 && n.abs() < 1e12 => Some((*n as i64, 1)),
+        ScalarExpr::Add(a, b) => {
+            let (an, ad) = rational_value(a)?;
+            let (bn, bd) = rational_value(b)?;
+            Some(reduce(an * bd + bn * ad, ad * bd))
+        }
+        ScalarExpr::Sub(a, b) => {
+            let (an, ad) = rational_value(a)?;
+            let (bn, bd) = rational_value(b)?;
+            Some(reduce(an * bd - bn * ad, ad * bd))
+        }
+        ScalarExpr::Mul(a, b) => {
+            let (an, ad) = rational_value(a)?;
+            let (bn, bd) = rational_value(b)?;
+            Some(reduce(an * bn, ad * bd))
+        }
+        ScalarExpr::Div(a, b) => {
+            let (an, ad) = rational_value(a)?;
+            let (bn, bd) = rational_value(b)?;
+            if bn == 0 {
+                None
+            } else {
+                Some(reduce(an * bd, ad * bn))
+            }
+        }
+        ScalarExpr::Neg(a) => {
+            let (an, ad) = rational_value(a)?;
+            Some((-an, ad))
+        }
+        _ => None,
+    }
+}
+
+fn rational_expr(num: i64, den: i64) -> Rc<ScalarExpr> {
+    let (num, den) = reduce(num, den);
+    if den == 1 {
+        Rc::new(ScalarExpr::Num(num as f64))
+    } else if num < 0 {
+        Rc::new(ScalarExpr::Neg(Rc::new(ScalarExpr::Div(
+            Rc::new(ScalarExpr::Num((-num) as f64)),
+            Rc::new(ScalarExpr::Num(den as f64)),
+        ))))
+    } else {
+        Rc::new(ScalarExpr::Div(
+            Rc::new(ScalarExpr::Num(num as f64)),
+            Rc::new(ScalarExpr::Num(den as f64)),
+        ))
+    }
+}
+
+fn reduce(num: i64, den: i64) -> (i64, i64) {
+    let sign = if den < 0 { -1 } else { 1 };
+    let num = num * sign;
+    let den = den.abs();
+    let g = gcd(num.abs(), den);
+    (num / g, den / g)
+}
+
+fn gcd(mut a: i64, mut b: i64) -> i64 {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a.max(1)
 }

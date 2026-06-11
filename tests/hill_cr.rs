@@ -101,7 +101,7 @@ fn thermodynamic_force_from_quadratic_energy() {
     let latex = &outputs[0].latex;
     assert!(latex.contains("2 \\, \\mu \\, \\bm E"), "got: {latex}");
     assert!(
-        latex.contains("\\kappa \\, \\operatorname{tr} \\bm E \\, \\bm I"),
+        latex.contains("\\kappa \\, \\left( \\operatorname{tr} \\bm E \\right) \\, \\bm I"),
         "got: {latex}"
     );
 }

@@ -106,6 +106,7 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
         // Rejected by `expandable` before this point.
         TensorExpr::Inverse(_)
         | TensorExpr::InverseTranspose(_)
+        | TensorExpr::Identity4 { .. }
         | TensorExpr::Diff { .. }
         | TensorExpr::Outer(..)
         | TensorExpr::Spectral { .. }
@@ -128,6 +129,10 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
         TensorExpr::Diff { .. } => Err(Error::msg(
             "use display(diff(...), mode=components) on a derivative variable; \
              nested derivative nodes inside expressions cannot be expanded",
+        )),
+        TensorExpr::Identity4 { .. } => Err(Error::msg(
+            "component expansion of fourth-order identity tensors is not \
+             supported in matrix mode; use mode=symbol",
         )),
         TensorExpr::Outer(..) => Err(Error::msg(
             "component expansion of outer products is not supported yet; use mode=symbol",

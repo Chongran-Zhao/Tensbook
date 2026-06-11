@@ -10,7 +10,10 @@ use std::rc::Rc;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScalarExpr {
     /// A named symbolic scalar with its LaTeX display, e.g. `Sym("mu", "\mu")`.
-    Sym { name: String, latex: String },
+    Sym {
+        name: String,
+        latex: String,
+    },
     Num(f64),
     Add(Rc<ScalarExpr>, Rc<ScalarExpr>),
     Sub(Rc<ScalarExpr>, Rc<ScalarExpr>),
@@ -108,8 +111,16 @@ pub fn with_coeff(c: f64, rest: Option<Rc<ScalarExpr>>) -> Rc<ScalarExpr> {
                 Rc::new(ScalarExpr::Neg(r))
             } else if c.fract() == 0.0 {
                 Rc::new(ScalarExpr::Mul(Rc::new(ScalarExpr::Num(c)), r))
-            } else if (1.0 / c).fract() == 0.0 && c > 0.0 {
-                Rc::new(ScalarExpr::Div(r, Rc::new(ScalarExpr::Num(1.0 / c))))
+            } else if (1.0 / c).fract() == 0.0 {
+                let frac = Rc::new(ScalarExpr::Div(
+                    r,
+                    Rc::new(ScalarExpr::Num((1.0 / c).abs())),
+                ));
+                if c < 0.0 {
+                    Rc::new(ScalarExpr::Neg(frac))
+                } else {
+                    frac
+                }
             } else {
                 Rc::new(ScalarExpr::Mul(Rc::new(ScalarExpr::Num(c)), r))
             }
@@ -117,10 +128,7 @@ pub fn with_coeff(c: f64, rest: Option<Rc<ScalarExpr>>) -> Rc<ScalarExpr> {
     }
 }
 
-fn mul_opt(
-    a: Option<Rc<ScalarExpr>>,
-    b: Option<Rc<ScalarExpr>>,
-) -> Option<Rc<ScalarExpr>> {
+fn mul_opt(a: Option<Rc<ScalarExpr>>, b: Option<Rc<ScalarExpr>>) -> Option<Rc<ScalarExpr>> {
     match (a, b) {
         (None, None) => None,
         (Some(x), None) | (None, Some(x)) => Some(x),

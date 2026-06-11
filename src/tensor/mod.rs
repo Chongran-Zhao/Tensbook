@@ -4,7 +4,7 @@
 pub mod inference;
 
 use crate::error::Error;
-use crate::symbolic::ScalarExpr;
+use crate::symbolic::{fold_mul, ScalarExpr};
 use std::rc::Rc;
 
 /// Scale function of a generalized strain, mapping principal stretches to
@@ -50,16 +50,11 @@ impl Scale {
 
     /// `E'(λ)`, the derivative of the scale function.
     pub fn dapply(&self, lambda: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
-        let pow = |b: &Rc<ScalarExpr>, e: Rc<ScalarExpr>| {
-            Rc::new(ScalarExpr::Pow(b.clone(), e))
-        };
+        let pow = |b: &Rc<ScalarExpr>, e: Rc<ScalarExpr>| Rc::new(ScalarExpr::Pow(b.clone(), e));
         let num = |v: f64| Rc::new(ScalarExpr::Num(v));
         match self {
             // d/dλ (λ^m − 1)/m = λ^{m−1}
-            Scale::SethHill { m } => pow(
-                lambda,
-                Rc::new(ScalarExpr::Sub(m.clone(), num(1.0))),
-            ),
+            Scale::SethHill { m } => pow(lambda, Rc::new(ScalarExpr::Sub(m.clone(), num(1.0)))),
             // d/dλ (λ^m − λ^{−n})/(m+n) = (m λ^{m−1} + n λ^{−n−1})/(m+n)
             Scale::CR { m, n } => Rc::new(ScalarExpr::Div(
                 Rc::new(ScalarExpr::Add(
@@ -143,6 +138,10 @@ pub enum TensorExpr {
     MatMul(Rc<TensorExpr>, Rc<TensorExpr>),
     /// Tensor (outer) product `A ⊗ B`; order = a.order() + b.order().
     Outer(Rc<TensorExpr>, Rc<TensorExpr>),
+    /// Fourth-order identity tensor `I4`, with components δ_im δ_jn.
+    Identity4 {
+        dim: usize,
+    },
     /// Spectral decomposition of a provably symmetric second-order tensor:
     /// `T = Σ_a λ_a N_a ⊗ N_a`. `base_latex` names the decomposed tensor
     /// (used to derive eigenvalue/eigenvector symbols).
@@ -190,14 +189,13 @@ impl TensorExpr {
     pub fn order(&self) -> usize {
         match self {
             TensorExpr::Var { order, .. } => *order,
-            TensorExpr::Transpose(t)
-            | TensorExpr::Inverse(t)
-            | TensorExpr::InverseTranspose(t) => t.order(),
+            TensorExpr::Transpose(t) | TensorExpr::Inverse(t) | TensorExpr::InverseTranspose(t) => {
+                t.order()
+            }
             TensorExpr::Diff { num, den, .. } => num.order() + den.order(),
             TensorExpr::Outer(a, b) => a.order() + b.order(),
-            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
-                base.order()
-            }
+            TensorExpr::Identity4 { .. } => 4,
+            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => base.order(),
             TensorExpr::GenStrain { .. } => 2,
             TensorExpr::QTensor { .. } => 4,
             TensorExpr::DdotTQ { .. } => 2,
@@ -210,14 +208,13 @@ impl TensorExpr {
     pub fn dim(&self) -> usize {
         match self {
             TensorExpr::Var { dim, .. } => *dim,
-            TensorExpr::Transpose(t)
-            | TensorExpr::Inverse(t)
-            | TensorExpr::InverseTranspose(t) => t.dim(),
+            TensorExpr::Transpose(t) | TensorExpr::Inverse(t) | TensorExpr::InverseTranspose(t) => {
+                t.dim()
+            }
             TensorExpr::Diff { num, .. } => num.dim(),
             TensorExpr::Outer(a, _) => a.dim(),
-            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
-                base.dim()
-            }
+            TensorExpr::Identity4 { dim } => *dim,
+            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => base.dim(),
             TensorExpr::GenStrain { base, .. } => base.dim(),
             TensorExpr::QTensor { strain } => strain.dim(),
             TensorExpr::DdotTQ { second, .. } => second.dim(),
@@ -303,10 +300,7 @@ impl TensorExpr {
 
     /// `T : Q` — contract a second-order tensor with the first two indices
     /// of a fourth-order tensor.
-    pub fn ddot_tq(
-        second: Rc<TensorExpr>,
-        fourth: Rc<TensorExpr>,
-    ) -> Result<TensorExpr, Error> {
+    pub fn ddot_tq(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Result<TensorExpr, Error> {
         if second.order() != 2 || fourth.order() != 4 {
             return Err(Error::msg(format!(
                 "T : Q requires a second-order and a fourth-order tensor, got \
@@ -318,7 +312,7 @@ impl TensorExpr {
         if second.dim() != fourth.dim() {
             return Err(Error::msg("dimension mismatch in T : Q"));
         }
-        Ok(TensorExpr::DdotTQ { second, fourth })
+        Ok(contract_second_fourth(second, fourth))
     }
 
     /// `spectral(T)` requires symmetry to be strictly provable — the
@@ -407,5 +401,76 @@ impl TensorExpr {
             )));
         }
         Ok(())
+    }
+}
+
+fn contract_second_fourth(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> TensorExpr {
+    if let TensorExpr::ScalarMul(s, inner) = &*second {
+        return scale_tensor(
+            s.clone(),
+            Rc::new(contract_second_fourth(inner.clone(), fourth)),
+        );
+    }
+
+    match &*fourth {
+        TensorExpr::Identity4 { .. } => (*second).clone(),
+        TensorExpr::ScalarMul(s, inner) => scale_tensor(
+            s.clone(),
+            Rc::new(contract_second_fourth(second, inner.clone())),
+        ),
+        TensorExpr::Add(a, b) => TensorExpr::Add(
+            Rc::new(contract_second_fourth(second.clone(), a.clone())),
+            Rc::new(contract_second_fourth(second, b.clone())),
+        ),
+        TensorExpr::Sub(a, b) => TensorExpr::Sub(
+            Rc::new(contract_second_fourth(second.clone(), a.clone())),
+            Rc::new(contract_second_fourth(second, b.clone())),
+        ),
+        TensorExpr::Neg(inner) => Rc::new(contract_second_fourth(second, inner.clone()))
+            .as_ref()
+            .clone()
+            .negated(),
+        TensorExpr::Outer(a, b) if a.order() == 2 && b.order() == 2 => {
+            scale_tensor(contract_coeff(second, a.clone()), b.clone())
+        }
+        _ => TensorExpr::DdotTQ { second, fourth },
+    }
+}
+
+fn contract_coeff(second: Rc<TensorExpr>, first: Rc<TensorExpr>) -> Rc<ScalarExpr> {
+    if second.is_identity() {
+        Rc::new(ScalarExpr::Tr(first))
+    } else if first.is_identity() {
+        Rc::new(ScalarExpr::Tr(second))
+    } else {
+        Rc::new(ScalarExpr::Ddot(second, first))
+    }
+}
+
+fn scale_tensor(s: Rc<ScalarExpr>, t: Rc<TensorExpr>) -> TensorExpr {
+    if let TensorExpr::ScalarMul(s2, inner) = &*t {
+        return scale_tensor(fold_mul(&s, s2), inner.clone());
+    }
+    if let ScalarExpr::Num(n) = &*s {
+        if *n == 1.0 {
+            return (*t).clone();
+        }
+        if *n == -1.0 {
+            return TensorExpr::Neg(t);
+        }
+    }
+    TensorExpr::ScalarMul(s, t)
+}
+
+trait NegTensor {
+    fn negated(self) -> TensorExpr;
+}
+
+impl NegTensor for TensorExpr {
+    fn negated(self) -> TensorExpr {
+        match self {
+            TensorExpr::Neg(inner) => (*inner).clone(),
+            other => TensorExpr::Neg(Rc::new(other)),
+        }
     }
 }

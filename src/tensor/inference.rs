@@ -28,7 +28,7 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         TensorExpr::Inverse(t) | TensorExpr::InverseTranspose(t) => is_symmetric(t),
         // A derivative node is at least order 3; never reaches here (order
         // check above), but listed for exhaustiveness.
-        TensorExpr::Diff { .. } => false,
+        TensorExpr::Diff { .. } | TensorExpr::Identity4 { .. } => false,
         TensorExpr::MatMul(a, b) => {
             // (A^T A)^T = A^T A and (A A^T)^T = A A^T, by structural equality.
             match (&**a, &**b) {

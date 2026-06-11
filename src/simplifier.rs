@@ -12,7 +12,7 @@
 //!   `tr(I) → dim`, `det(I) → 1`
 
 use crate::error::Error;
-use crate::symbolic::ScalarExpr;
+use crate::symbolic::{extract_coeff, fold_mul, ScalarExpr};
 use crate::tensor::TensorExpr;
 use std::rc::Rc;
 
@@ -71,13 +71,17 @@ pub fn simplify_scalar(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
 fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
     // Rebuild children first, then rewrite this node.
     let rebuilt: Rc<TensorExpr> = match &**t {
-        TensorExpr::Var { .. } => t.clone(),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
         TensorExpr::Transpose(a) => Rc::new(TensorExpr::Transpose(tensor_pass(a, rules))),
         TensorExpr::Inverse(a) => Rc::new(TensorExpr::Inverse(tensor_pass(a, rules))),
         TensorExpr::InverseTranspose(a) => {
             Rc::new(TensorExpr::InverseTranspose(tensor_pass(a, rules)))
         }
-        TensorExpr::Diff { num, den, num_label } => Rc::new(TensorExpr::Diff {
+        TensorExpr::Diff {
+            num,
+            den,
+            num_label,
+        } => Rc::new(TensorExpr::Diff {
             num: tensor_pass(num, rules),
             den: tensor_pass(den, rules),
             num_label: num_label.clone(),
@@ -106,7 +110,11 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             base: tensor_pass(base, rules),
             base_latex: base_latex.clone(),
         }),
-        TensorExpr::SpectralFn { func, base, base_latex } => Rc::new(TensorExpr::SpectralFn {
+        TensorExpr::SpectralFn {
+            func,
+            base,
+            base_latex,
+        } => Rc::new(TensorExpr::SpectralFn {
             func: func.clone(),
             base: tensor_pass(base, rules),
             base_latex: base_latex.clone(),
@@ -138,9 +146,7 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             TensorExpr::Transpose(inner) => inner.clone(),
             _ if a.is_symmetric() => a.clone(),
             // (A⁻¹)ᵀ → A^{-T}
-            TensorExpr::Inverse(inner) => {
-                Rc::new(TensorExpr::InverseTranspose(inner.clone()))
-            }
+            TensorExpr::Inverse(inner) => Rc::new(TensorExpr::InverseTranspose(inner.clone())),
             _ => t,
         },
         TensorExpr::Inverse(a) => match &**a {
@@ -148,18 +154,13 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             TensorExpr::Inverse(inner) => inner.clone(),
             _ if a.is_identity() => a.clone(),
             // (Aᵀ)⁻¹ → A^{-T}
-            TensorExpr::Transpose(inner) => {
-                Rc::new(TensorExpr::InverseTranspose(inner.clone()))
-            }
+            TensorExpr::Transpose(inner) => Rc::new(TensorExpr::InverseTranspose(inner.clone())),
             // A⁻¹ → A^{-1}; for symmetric A, A^{-T} = A^{-1}: keep Inverse form
             _ => t,
         },
         TensorExpr::InverseTranspose(a) => {
             if a.is_identity() {
                 a.clone()
-            } else if a.is_symmetric() {
-                // A^{-T} = A^{-1} for symmetric A: canonicalize
-                Rc::new(TensorExpr::Inverse(a.clone()))
             } else {
                 t
             }
@@ -185,6 +186,8 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             }
             t
         }
+        TensorExpr::Add(a, b) => factor_common_tensor_scalar(a, b, false).unwrap_or(t),
+        TensorExpr::Sub(a, b) => factor_common_tensor_scalar(a, b, true).unwrap_or(t),
         // 0 · A handled at ScalarMul; -(-A) → A
         TensorExpr::Neg(a) => match &**a {
             TensorExpr::Neg(inner) => inner.clone(),
@@ -193,10 +196,166 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
         TensorExpr::ScalarMul(s, a) => match &**s {
             ScalarExpr::Num(n) if *n == 1.0 => a.clone(),
             ScalarExpr::Num(n) if *n == -1.0 => Rc::new(TensorExpr::Neg(a.clone())),
+            _ if matches!(&**a, TensorExpr::ScalarMul(..)) => {
+                if let TensorExpr::ScalarMul(s2, inner) = &**a {
+                    Rc::new(TensorExpr::ScalarMul(fold_mul(s, s2), inner.clone()))
+                } else {
+                    t
+                }
+            }
             _ => t,
         },
         _ => t,
     }
+}
+
+fn factor_common_tensor_scalar(
+    a: &Rc<TensorExpr>,
+    b: &Rc<TensorExpr>,
+    subtract: bool,
+) -> Option<Rc<TensorExpr>> {
+    let (sa, ta) = tensor_scalar_factor(a);
+    let (sb, tb) = tensor_scalar_factor(b);
+    let (common, rem_a, rem_b) = common_scalar_factor(&sa, &sb)?;
+
+    let left = scale_tensor_by_scalar(rem_a, ta);
+    let right = scale_tensor_by_scalar(rem_b, tb);
+    let inner = if subtract {
+        Rc::new(TensorExpr::Sub(left, right))
+    } else {
+        Rc::new(TensorExpr::Add(left, right))
+    };
+    Some(scale_tensor_by_scalar(common, inner))
+}
+
+fn common_scalar_factor(
+    a: &Rc<ScalarExpr>,
+    b: &Rc<ScalarExpr>,
+) -> Option<(Rc<ScalarExpr>, Rc<ScalarExpr>, Rc<ScalarExpr>)> {
+    let (ca, fa) = scalar_product_factors(a);
+    let (cb, fb) = scalar_product_factors(b);
+    let mut used_b = vec![false; fb.len()];
+    let mut common = Vec::new();
+    let mut rem_a = Vec::new();
+
+    for factor in fa {
+        if let Some(pos) = fb
+            .iter()
+            .enumerate()
+            .find_map(|(i, candidate)| (!used_b[i] && candidate == &factor).then_some(i))
+        {
+            used_b[pos] = true;
+            common.push(factor);
+        } else {
+            rem_a.push(factor);
+        }
+    }
+    let rem_b: Vec<Rc<ScalarExpr>> = fb
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, factor)| (!used_b[i]).then_some(factor))
+        .collect();
+
+    if common.is_empty() {
+        if same_nontrivial_numeric_coeff(ca, cb) {
+            return Some((
+                numeric_coeff_expr(ca),
+                Rc::new(ScalarExpr::Num(1.0)),
+                Rc::new(ScalarExpr::Num(1.0)),
+            ));
+        }
+        return None;
+    }
+
+    Some((
+        scalar_product(common),
+        scalar_from_coeff_and_factors(ca, rem_a),
+        scalar_from_coeff_and_factors(cb, rem_b),
+    ))
+}
+
+fn scalar_product_factors(s: &Rc<ScalarExpr>) -> (f64, Vec<Rc<ScalarExpr>>) {
+    let (coeff, rest) = extract_coeff(s);
+    let mut factors = Vec::new();
+    if let Some(rest) = rest {
+        flatten_scalar_product(&rest, &mut factors);
+    }
+    (coeff, factors)
+}
+
+fn flatten_scalar_product(s: &Rc<ScalarExpr>, out: &mut Vec<Rc<ScalarExpr>>) {
+    match &**s {
+        ScalarExpr::Mul(a, b) => {
+            flatten_scalar_product(a, out);
+            flatten_scalar_product(b, out);
+        }
+        _ => out.push(s.clone()),
+    }
+}
+
+fn scalar_from_coeff_and_factors(coeff: f64, factors: Vec<Rc<ScalarExpr>>) -> Rc<ScalarExpr> {
+    let body = scalar_product(factors);
+    if coeff == 1.0 {
+        body
+    } else if coeff == -1.0 {
+        Rc::new(ScalarExpr::Neg(body))
+    } else if matches!(&*body, ScalarExpr::Num(n) if *n == 1.0) {
+        numeric_coeff_expr(coeff)
+    } else {
+        Rc::new(ScalarExpr::Mul(numeric_coeff_expr(coeff), body))
+    }
+}
+
+fn scalar_product(factors: Vec<Rc<ScalarExpr>>) -> Rc<ScalarExpr> {
+    let mut iter = factors.into_iter();
+    let Some(first) = iter.next() else {
+        return Rc::new(ScalarExpr::Num(1.0));
+    };
+    iter.fold(first, |acc, factor| Rc::new(ScalarExpr::Mul(acc, factor)))
+}
+
+fn same_nontrivial_numeric_coeff(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-12 && (a - 1.0).abs() >= 1e-12 && (a + 1.0).abs() >= 1e-12
+}
+
+fn tensor_scalar_factor(t: &Rc<TensorExpr>) -> (Rc<ScalarExpr>, Rc<TensorExpr>) {
+    match &**t {
+        TensorExpr::ScalarMul(s, inner) => (s.clone(), inner.clone()),
+        TensorExpr::Neg(inner) => {
+            let (s, body) = tensor_scalar_factor(inner);
+            (Rc::new(ScalarExpr::Neg(s)), body)
+        }
+        _ => (Rc::new(ScalarExpr::Num(1.0)), t.clone()),
+    }
+}
+
+fn scale_tensor_by_scalar(s: Rc<ScalarExpr>, t: Rc<TensorExpr>) -> Rc<TensorExpr> {
+    match &*s {
+        ScalarExpr::Num(n) if *n == 1.0 => t,
+        ScalarExpr::Num(n) if *n == -1.0 => Rc::new(TensorExpr::Neg(t)),
+        _ => Rc::new(TensorExpr::ScalarMul(s, t)),
+    }
+}
+
+fn numeric_coeff_expr(coeff: f64) -> Rc<ScalarExpr> {
+    for den in 1..=12 {
+        let num = (coeff * den as f64).round();
+        if (coeff - num / den as f64).abs() < 1e-12 {
+            if den == 1 {
+                return Rc::new(ScalarExpr::Num(num));
+            }
+            let frac = Rc::new(ScalarExpr::Div(
+                Rc::new(ScalarExpr::Num(num.abs())),
+                Rc::new(ScalarExpr::Num(den as f64)),
+            ));
+            return if num < 0.0 {
+                Rc::new(ScalarExpr::Neg(frac))
+            } else {
+                frac
+            };
+        }
+    }
+    Rc::new(ScalarExpr::Num(coeff))
 }
 
 fn scalar_pass(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
@@ -303,12 +462,10 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             _ if t.is_identity() => Rc::new(ScalarExpr::Num(1.0)),
             // det(Aᵀ) → det A; det(A⁻¹) → 1/det A
             TensorExpr::Transpose(a) => Rc::new(ScalarExpr::Det(a.clone())),
-            TensorExpr::Inverse(a) | TensorExpr::InverseTranspose(a) => {
-                Rc::new(ScalarExpr::Div(
-                    Rc::new(ScalarExpr::Num(1.0)),
-                    Rc::new(ScalarExpr::Det(a.clone())),
-                ))
-            }
+            TensorExpr::Inverse(a) | TensorExpr::InverseTranspose(a) => Rc::new(ScalarExpr::Div(
+                Rc::new(ScalarExpr::Num(1.0)),
+                Rc::new(ScalarExpr::Det(a.clone())),
+            )),
             // det(AB) → det A · det B
             TensorExpr::MatMul(a, b) => Rc::new(ScalarExpr::Mul(
                 Rc::new(ScalarExpr::Det(a.clone())),
@@ -368,9 +525,7 @@ fn canonical_rotation(factors: &[Rc<TensorExpr>]) -> Vec<Rc<TensorExpr>> {
     let mut best: Vec<Rc<TensorExpr>> = factors.to_vec();
     let mut best_key = chain_key(&best);
     for r in 1..n {
-        let rotated: Vec<Rc<TensorExpr>> = (0..n)
-            .map(|i| factors[(i + r) % n].clone())
-            .collect();
+        let rotated: Vec<Rc<TensorExpr>> = (0..n).map(|i| factors[(i + r) % n].clone()).collect();
         let key = chain_key(&rotated);
         if key < best_key {
             best_key = key;

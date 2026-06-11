@@ -49,10 +49,9 @@ fn first_piola_stress_neo_hookean() {
     );
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
-    assert!(latex.contains("\\mu \\, \\bm F"), "missing mu F in: {latex}");
     assert!(
-        latex.contains("\\mu \\, \\bm F^{-\\mathsf{T}}"),
-        "missing mu F^-T in: {latex}"
+        latex.contains("\\mu \\, \\left( \\bm F - \\bm F^{-\\mathsf{T}} \\right)"),
+        "missing factored mu(F - F^-T) in: {latex}"
     );
     assert!(
         latex.contains("\\lambda \\, \\log J \\, \\bm F^{-\\mathsf{T}}"),

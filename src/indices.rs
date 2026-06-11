@@ -99,6 +99,10 @@ pub fn abstract_component(
             }
             Ok(vec![t])
         }
+        TensorExpr::Identity4 { .. } => Err(Error::msg(
+            "component expansion of fourth-order identity tensors is not \
+             supported in second-order component mode",
+        )),
         TensorExpr::Transpose(t) => abstract_component(t, j, i, counter),
         // (F^{-1})_{ij} and (F^{-T})_{ij} = (F^{-1})_{ji}: opaque inverse
         // components of a declared variable.
@@ -193,12 +197,7 @@ pub fn abstract_component(
 /// - inverse components: `∂(X⁻¹)_{ab}/∂X_{mn} = −(X⁻¹)_{am} (X⁻¹)_{nb}`;
 /// - scalar coefficients (det, log det, products, powers) via
 ///   [`d_scalar_comp`].
-pub fn differentiate(
-    terms: &[Term],
-    base: &str,
-    m: &Idx,
-    n: &Idx,
-) -> Result<Vec<Term>, Error> {
+pub fn differentiate(terms: &[Term], base: &str, m: &Idx, n: &Idx) -> Result<Vec<Term>, Error> {
     let mut out = Vec::new();
     for term in terms {
         // component factors
@@ -261,6 +260,7 @@ fn scalar_depends(s: &ScalarExpr, base: &str) -> bool {
 
 fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
     match t {
+        TensorExpr::Identity4 { .. } => false,
         TensorExpr::Var { latex, .. } => component_base(latex) == base,
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
@@ -285,12 +285,7 @@ fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
 }
 
 /// `∂s/∂X_{mn}` for a scalar coefficient, as index terms.
-fn d_scalar_comp(
-    s: &Rc<ScalarExpr>,
-    base: &str,
-    m: &Idx,
-    n: &Idx,
-) -> Result<Vec<Term>, Error> {
+fn d_scalar_comp(s: &Rc<ScalarExpr>, base: &str, m: &Idx, n: &Idx) -> Result<Vec<Term>, Error> {
     if !scalar_depends(s, base) {
         return Ok(vec![]);
     }
@@ -335,7 +330,7 @@ fn d_scalar_comp(
             Ok(out)
         }
         ScalarExpr::Pow(a, e) => {
-            let ScalarExpr::Num(p) = &**e else {
+            let Some(p) = numeric_value(e) else {
                 return Err(Error::msg(
                     "component derivative of a^b with symbolic exponent is unsupported",
                 ));
@@ -344,7 +339,8 @@ fn d_scalar_comp(
             let mut out = Vec::new();
             for mut t in d_scalar_comp(a, base, m, n)? {
                 t.coeff *= p;
-                t.scalars.push(crate::symbolic::fold_pow(a.clone(), p - 1.0));
+                t.scalars
+                    .push(crate::symbolic::fold_pow(a.clone(), p - 1.0));
                 out.push(t);
             }
             Ok(out)
@@ -372,8 +368,7 @@ fn d_scalar_comp(
         ScalarExpr::Log(a) => {
             // Exact form for log(det X): d = (X⁻¹)_{nm} (no det/det quotient).
             if let ScalarExpr::Det(t) = &**a {
-                if matches!(&**t, TensorExpr::Var { latex, .. } if component_base(latex) == base)
-                {
+                if matches!(&**t, TensorExpr::Var { latex, .. } if component_base(latex) == base) {
                     let mut term = Term::one();
                     term.comps.push(inv_comp(n, m));
                     return Ok(vec![term]);
@@ -514,8 +509,7 @@ pub fn instantiate(terms: &[Term], assign: &[(Idx, usize)], dim: usize) -> Vec<T
     out.retain_mut(|t| {
         let mut kept = Vec::new();
         for (p, q) in t.deltas.drain(..) {
-            let concrete =
-                p.parse::<usize>().is_ok() && q.parse::<usize>().is_ok();
+            let concrete = p.parse::<usize>().is_ok() && q.parse::<usize>().is_ok();
             if concrete {
                 if p != q {
                     return false; // δ with distinct concrete indices = 0
@@ -544,7 +538,6 @@ fn expand_bound(term: Term, dim: usize, out: &mut Vec<Term>) {
         }
     }
 }
-
 
 /// Render a term sum to LaTeX, e.g. `\delta_{in} F_{mj} + \delta_{jn} F_{mi}`.
 pub fn render_terms(terms: &[Term]) -> String {
@@ -597,5 +590,18 @@ fn render_term(term: &Term) -> String {
         body
     } else {
         format!("\\sum_{{{}}} {body}", term.bound.join(","))
+    }
+}
+
+fn numeric_value(s: &ScalarExpr) -> Option<f64> {
+    match s {
+        ScalarExpr::Num(n) => Some(*n),
+        ScalarExpr::Add(a, b) => Some(numeric_value(a)? + numeric_value(b)?),
+        ScalarExpr::Sub(a, b) => Some(numeric_value(a)? - numeric_value(b)?),
+        ScalarExpr::Mul(a, b) => Some(numeric_value(a)? * numeric_value(b)?),
+        ScalarExpr::Div(a, b) => Some(numeric_value(a)? / numeric_value(b)?),
+        ScalarExpr::Pow(a, b) => Some(numeric_value(a)?.powf(numeric_value(b)?)),
+        ScalarExpr::Neg(a) => Some(-numeric_value(a)?),
+        _ => None,
     }
 }
