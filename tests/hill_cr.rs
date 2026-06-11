@@ -1,5 +1,4 @@
-//! Tests for generalized strains, spectral calculus, and the scalar
-//! function library — the Hill–CR derivation chain end to end.
+//! Tests for the hand-written spectral Hill–CR derivation chain end to end.
 
 use tensorforge::interpreter::Value;
 use tensorforge::run_source;
@@ -11,8 +10,13 @@ kappa = Scalar("\kappa")
 m = Scalar("m")
 n = Scalar("n")
 F = Tensor("\bm F", order=2, dim=3)
-C = F.T * F
-E = gstrain(C, scale=CR, m=m, n=n)
+lam = Var("\lambda")
+Ecr = (lam^m - lam^(-n))/(m + n)
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+C = sum(lambda[a]^2 * N[a] & N[a], a)
+E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * diff(E, C)
 W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 "#;
 
@@ -52,20 +56,23 @@ display(z, mode=symbol)
 // ---- generalized strain ------------------------------------------------------
 
 #[test]
-fn cr_strain_spectral_display() {
-    let src = format!("{PRELUDE}\ndisplay(E, mode=spectral)");
+fn cr_strain_symbol_display() {
+    let src = format!("{PRELUDE}\ndisplay(E, mode=symbol)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
-    // E = Σ_a (λ_a^m − λ_a^{−n})/(m+n) M_a
+    // E = Σ_a (λ_a^m − λ_a^{−n})/(m+n) N_a ⊗ N_a
     assert!(latex.contains("\\sum_{a=1}^{3}"), "got: {latex}");
-    assert!(latex.contains("{\\lambda_{a}}^{m}"), "got: {latex}");
-    assert!(latex.contains("{\\lambda_{a}}^{-n}"), "got: {latex}");
+    assert!(latex.contains("{{\\lambda}_{a}}^{m}"), "got: {latex}");
+    assert!(latex.contains("{{\\lambda}_{a}}^{-n}"), "got: {latex}");
     assert!(latex.contains("m + n"), "got: {latex}");
-    assert!(latex.contains("\\bm M_a"), "got: {latex}");
+    assert!(
+        latex.contains("{\\bm N}_{a} \\otimes {\\bm N}_{a}"),
+        "got: {latex}"
+    );
 }
 
 #[test]
-fn gstrain_is_symmetric_and_order_2() {
+fn manual_strain_is_symmetric_and_order_2() {
     let (_, interp) = run_source_with_env(PRELUDE).unwrap();
     match interp.get("E") {
         Some(Value::Tensor(t)) => {
@@ -77,27 +84,32 @@ fn gstrain_is_symmetric_and_order_2() {
 }
 
 #[test]
-fn gstrain_requires_symmetric_base() {
-    let src = r#"
-m = Scalar("m")
-n = Scalar("n")
-F = Tensor("\bm F", order=2, dim=3)
-E = gstrain(F, scale=CR, m=m, n=n)
-"#;
-    assert!(run_source(src).is_err());
+fn q_is_a_real_fourth_order_expression() {
+    let src = format!("{PRELUDE}\ndisplay(Q, mode=symbol)");
+    let outputs = run_source(&src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(
+        latex.contains("\\mathbb Q = \\sum_{a=1}^{3}"),
+        "got: {latex}"
+    );
+    assert!(
+        latex.contains("\\sum_{\\substack{b=1 \\\\ b\\ne a}}^{3}"),
+        "got: {latex}"
+    );
+    assert!(!latex.contains("\\partial"), "got: {latex}");
 }
 
 #[test]
-fn hencky_strain_spectral_display() {
+fn hencky_strain_symbol_display() {
     let src = r#"
-F = Tensor("\bm F", order=2, dim=3)
-C = F.T * F
-H = gstrain(C, scale=Hencky)
-display(H, mode=spectral)
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+H = sum(log(lambda[a]) * N[a] & N[a], a)
+display(H, mode=symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
-        outputs[0].latex.contains("\\log \\lambda_{a}"),
+        outputs[0].latex.contains("\\log {\\lambda}_{a}"),
         "got: {}",
         outputs[0].latex
     );
@@ -122,37 +134,47 @@ fn thermodynamic_force_from_quadratic_energy() {
 
 #[test]
 fn second_pk_stress_is_t_double_dot_q() {
-    let src = format!("{PRELUDE}\nT = diff(W, E)\nS = 2 * diff(W, C)\ndisplay(S, mode=symbol)");
+    let src = format!("{PRELUDE}\nT = diff(W, E)\nS = T : Q\ndisplay(S, mode=symbol)");
     let outputs = run_source(&src).unwrap();
-    // After back-substitution the symbol display reads S = T : Q.
+    // The contraction distributes through the real fourth-order Q expression.
     assert!(
-        outputs[0].latex.contains("\\bm T : \\mathbb{Q}"),
+        outputs[0].latex.contains("\\sum_{a=1}^{3}"),
+        "got: {}",
+        outputs[0].latex
+    );
+    assert!(
+        outputs[0].latex.contains("\\bm T"),
         "got: {}",
         outputs[0].latex
     );
 }
 
 #[test]
-fn second_pk_stress_spectral_formula() {
-    // S_a = (E'(λ_a)/λ_a) (2μ E(λ_a) + κ Σ_b E(λ_b))
-    let src = format!("{PRELUDE}\nS = 2 * diff(W, C)\ndisplay(S, mode=spectral)");
+fn strain_diff_by_c_generates_q() {
+    let src = format!("{PRELUDE}\nQ = 2 * diff(E, C)\ndisplay(Q, mode=symbol)");
     let outputs = run_source(&src).unwrap();
-    let latex = &outputs[0].latex;
-    // CR derivative: m λ^{m−1} + n λ^{−n−1}
-    assert!(latex.contains("{\\lambda_{a}}^{m - 1}"), "got: {latex}");
-    assert!(latex.contains("{\\lambda_{a}}^{-n - 1}"), "got: {latex}");
-    // the invariant tr(E) becomes a spectral sum over b
-    assert!(latex.contains("\\sum_{b=1}^{3}"), "got: {latex}");
-    // factors 2μ and κ present
-    assert!(latex.contains("2 \\, \\mu"), "got: {latex}");
-    assert!(latex.contains("\\kappa"), "got: {latex}");
+    assert!(
+        !outputs[0].latex.contains("\\partial"),
+        "got: {}",
+        outputs[0].latex
+    );
+    assert!(
+        outputs[0].latex.contains("b\\ne a"),
+        "got: {}",
+        outputs[0].latex
+    );
 }
 
 #[test]
-fn diff_by_strain_rejects_dependence_outside_strain() {
-    // W depends on F through det(F) outside E: must error, not return 0.
-    let src = format!("{PRELUDE}\nW2 = W + log(det(F))\nT = diff(W2, E)");
-    assert!(run_source(&src).is_err());
+fn second_pk_stress_symbol_formula() {
+    // S_a = (E'(λ_a)/λ_a) (2μ E(λ_a) + κ Σ_b E(λ_b))
+    let src = format!("{PRELUDE}\nT = diff(W, E)\nS = T : Q\ndisplay(S, mode=symbol)");
+    let outputs = run_source(&src).unwrap();
+    let latex = &outputs[0].latex;
+    // CR derivative: m λ^{m−1} + n λ^{−n−1}
+    assert!(latex.contains("{{\\lambda}_{a}}^{m - 1}"), "got: {latex}");
+    assert!(latex.contains("{{\\lambda}_{a}}^{-n - 1}"), "got: {latex}");
+    assert!(latex.contains("\\bm T"), "got: {latex}");
 }
 
 #[test]

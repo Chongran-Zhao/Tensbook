@@ -178,7 +178,7 @@ TensorForge 的张量运算应支持以下运算：
 ```text
 *        标量乘法、二阶张量乘法
 :        双指标缩并的显示符号
-outer()  张量积
+&        张量积
 dot()    单指标缩并
 ddot()   双指标缩并
 contract(A, B, indices=...) 一般缩并
@@ -188,7 +188,7 @@ contract(A, B, indices=...) 一般缩并
 
 ```text
 C = F.T * F
-A = outer(F, F)
+A = F & F
 s = ddot(A, B)
 R = contract(A, B, indices=...)
 ```
@@ -207,7 +207,7 @@ R = contract(A, B, indices=...)
 \bm A \otimes \bm B
 ```
 
-其中 `outer(A, B)` 显示为：
+其中 `A & B` 显示为：
 
 ```latex
 \bm A \otimes \bm B

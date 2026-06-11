@@ -75,11 +75,23 @@ pub enum ScalarExpr {
     },
     /// Element of a user-declared scalar set: `lambda[a]` for
     /// `lambda = ScalarSet("\lambda", dim=3)`. `set_dim` is the family size.
+    /// When declared via `eigvals(C, ...)`, `eig` records the decomposed
+    /// tensor and the LaTeX of the partner eigenvector set, enabling
+    /// `∂λ_a/∂C = N_a ⊗ N_a`.
     SetElem {
         latex: String,
         index: SetIndex,
         set_dim: usize,
+        eig: Option<EigLink>,
     },
+}
+
+/// The eigen-binding of a scalar set element: `λ_a` is an eigenvalue of
+/// `base`, with eigenvectors displayed as `vec_latex`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EigLink {
+    pub base: Rc<TensorExpr>,
+    pub vec_latex: String,
 }
 
 impl ScalarExpr {

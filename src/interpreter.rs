@@ -64,6 +64,8 @@ struct SetDecl {
     /// `true` for VectorSet (order-1 elements), `false` for ScalarSet.
     vector: bool,
     dim: usize,
+    /// The decomposed tensor when declared via `eigvals(...)`/`eigvecs(...)`.
+    base: Option<Rc<TensorExpr>>,
 }
 
 impl Interpreter {
@@ -115,6 +117,9 @@ impl Interpreter {
                 {
                     if callee == "ScalarSet" || callee == "VectorSet" {
                         return self.declare_set(name, callee, args, kwargs);
+                    }
+                    if callee == "eigvals" || callee == "eigvecs" {
+                        return self.declare_eig_set(name, callee, args, kwargs);
                     }
                 }
                 let value = self.eval(expr)?;
@@ -241,6 +246,15 @@ impl Interpreter {
                 kind(&l),
                 kind(&r)
             ))),
+            // A & B — outer product.
+            (Outer, Value::Tensor(a), Value::Tensor(b)) => {
+                Ok(simplified_tensor_value(Rc::new(TensorExpr::outer(a, b)?)))
+            }
+            (Outer, l, r) => Err(Error::msg(format!(
+                "`&` is not defined between {} and {}",
+                kind(&l),
+                kind(&r)
+            ))),
             // scalar ∘ scalar
             (op, Value::Scalar(a), Value::Scalar(b)) => {
                 let node = match op {
@@ -249,7 +263,7 @@ impl Interpreter {
                     Mul => ScalarExpr::Mul(a, b),
                     Div => ScalarExpr::Div(a, b),
                     Pow => ScalarExpr::Pow(a, b),
-                    Ddot => unreachable!("handled above"),
+                    Outer | Ddot => unreachable!("handled above"),
                 };
                 Ok(Value::Scalar(Rc::new(node)))
             }
@@ -307,9 +321,9 @@ impl Interpreter {
             "Var" => self.builtin_var(args, kwargs),
             "Tensor" => self.builtin_tensor(args, kwargs),
             "sum" => self.builtin_sum(args, kwargs),
-            "ScalarSet" | "VectorSet" => Err(Error::msg(format!(
-                "`{callee}` declares a set and must be used in an assignment: \
-                 name = {callee}(\"<latex>\", dim=<n>)"
+            "ScalarSet" | "VectorSet" | "eigvals" | "eigvecs" => Err(Error::msg(format!(
+                "`{callee}` declares a set and must be used in an assignment, \
+                 e.g. lambda = {callee}(...)"
             ))),
             "det" | "tr" => {
                 let t = self.expect_tensor_arg(callee, args, kwargs)?;
@@ -718,9 +732,62 @@ impl Interpreter {
                 latex,
                 vector: callee == "VectorSet",
                 dim,
+                base: None,
             },
         );
         Ok(())
+    }
+
+    /// `lambda = eigvals(C, "\lambda")` / `N = eigvecs(C, "\bm N")` —
+    /// eigenvalue/eigenvector sets bound to a provably symmetric tensor.
+    fn declare_eig_set(
+        &mut self,
+        name: &str,
+        callee: &str,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<(), Error> {
+        if args.len() != 2 || !kwargs.is_empty() {
+            return Err(Error::msg(format!(
+                "`{callee}` expects a tensor and a LaTeX name: {callee}(C, \"<latex>\")"
+            )));
+        }
+        let base = match self.eval(&args[0])? {
+            Value::Tensor(t) => t,
+            Value::Scalar(_) => {
+                return Err(Error::msg(format!("`{callee}` requires a tensor argument")))
+            }
+        };
+        if base.order() != 2 || !base.is_symmetric() {
+            return Err(Error::msg(format!(
+                "`{callee}` requires a provably symmetric second-order tensor \
+                 (e.g. C = F.T * F)"
+            )));
+        }
+        let Expr::Str(latex) = &args[1] else {
+            return Err(Error::msg(format!(
+                "`{callee}` expects a string LaTeX name as its second argument"
+            )));
+        };
+        self.labels.insert(name.to_string(), latex.clone());
+        self.sets.insert(
+            name.to_string(),
+            SetDecl {
+                latex: latex.clone(),
+                vector: callee == "eigvecs",
+                dim: base.dim(),
+                base: Some(base),
+            },
+        );
+        Ok(())
+    }
+
+    /// The eigenvector-set LaTeX registered for `base`, if any.
+    fn eigvec_latex_for(&self, base: &Rc<TensorExpr>) -> Option<String> {
+        self.sets
+            .values()
+            .find(|d| d.vector && d.base.as_ref() == Some(base))
+            .map(|d| d.latex.clone())
     }
 
     /// `lambda[a]` / `N[1]` — a set element.
@@ -760,12 +827,22 @@ impl Interpreter {
                 dim: decl.dim,
                 index: idx,
                 set_dim: decl.dim,
+                base: decl.base.clone(),
             })))
         } else {
+            let eig = decl.base.clone().map(|base| {
+                let vec_latex = self.eigvec_latex_for(&base).unwrap_or_else(|| {
+                    // No eigenvector set declared (yet): derive a display
+                    // name; differentiation will still produce projectors.
+                    "\\bm N".to_string()
+                });
+                crate::symbolic::EigLink { base, vec_latex }
+            });
             Ok(Value::Scalar(Rc::new(ScalarExpr::SetElem {
                 latex: decl.latex.clone(),
                 index: idx,
                 set_dim: decl.dim,
+                eig,
             })))
         }
     }
@@ -790,6 +867,7 @@ impl Interpreter {
                 Ok(Value::Tensor(Rc::new(TensorExpr::SumIdx {
                     index: index.clone(),
                     range,
+                    exclude: None,
                     body: t,
                 })))
             }
@@ -938,6 +1016,62 @@ impl Interpreter {
             Expr::Ident(name) => Some(name.clone()),
             _ => None,
         };
+
+        if let Some(name) = subject.as_deref() {
+            if let Some(set) = self.sets.get(name) {
+                let mut mode = "symbol".to_string();
+                let mut format = "latex".to_string();
+                for (key, raw) in kwargs {
+                    let val = match raw {
+                        Expr::Ident(s) | Expr::Str(s) => s.clone(),
+                        other => {
+                            return Err(Error::msg(format!("invalid value for `{key}`: {other:?}")))
+                        }
+                    };
+                    match key.as_str() {
+                        "mode" if callee == "display" => mode = val,
+                        "format" if callee == "export" => format = val,
+                        other => {
+                            return Err(Error::msg(format!(
+                                "unknown keyword `{other}` for `{callee}`"
+                            )))
+                        }
+                    }
+                }
+
+                let latex = match callee {
+                    "display" => {
+                        if mode != "symbol" {
+                            return Err(Error::msg("set display only supports mode=symbol"));
+                        }
+                        render_set_decl(set)
+                    }
+                    "export" => match format.as_str() {
+                        "latex" => render_set_decl(set),
+                        "markdown" => format!("$$\n{}\n$$", render_set_decl(set)),
+                        other => {
+                            return Err(Error::msg(format!(
+                                "unknown export format `{other}` (supported: latex, markdown)"
+                            )))
+                        }
+                    },
+                    _ => unreachable!(),
+                };
+                let detail = if callee == "display" {
+                    format!("mode={mode}")
+                } else {
+                    format!("format={format}")
+                };
+                self.outputs.push(Output {
+                    header: format!("{callee} {name}, {detail}"),
+                    latex,
+                    line,
+                    error: None,
+                });
+                return Ok(());
+            }
+        }
+
         let value = self.eval(&args[0])?;
 
         let mut mode = "symbol".to_string();
@@ -1106,6 +1240,14 @@ fn default_tensor_label(name: &str, tensor: &Rc<TensorExpr>) -> String {
     }
 }
 
+fn render_set_decl(set: &SetDecl) -> String {
+    let values = (1..=set.dim)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{}}}_{{a}}\\quad \\text{{with }} a={values}", set.latex)
+}
+
 fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
     Value::Tensor(simplify_tensor(&t, RuleSet::Continuum))
 }
@@ -1202,6 +1344,7 @@ fn op_name(op: BinOp) -> &'static str {
         BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Pow => "^",
+        BinOp::Outer => "&",
         BinOp::Ddot => ":",
     }
 }

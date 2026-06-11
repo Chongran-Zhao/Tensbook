@@ -1,6 +1,5 @@
 //! User-defined scalar functions: `Var("\lambda")` declares a function
-//! argument; expressions mentioning it apply with call syntax and serve as
-//! `gstrain` scale functions.
+//! argument; expressions mentioning it apply with call syntax.
 
 use tensorforge::run_source;
 
@@ -35,9 +34,9 @@ fn function_application_substitutes_the_var() {
 }
 
 #[test]
-fn custom_scale_matches_builtin_cr() {
-    // The CR scale written as a user function must reproduce the builtin
-    // CR strain and stress displays exactly (derivative included).
+fn legacy_gstrain_custom_scale_matches_builtin_cr() {
+    // Legacy compatibility: the old gstrain shortcut still accepts a
+    // user-defined scale and matches the built-in CR scale.
     let src = format!(
         "{PRELUDE}\nEcr = (lam^m - lam^(-n))/(m + n)\n\
          E1 = gstrain(C, scale=Ecr)\nE2 = gstrain(C, scale=CR, m=m, n=n)\n\
@@ -60,7 +59,7 @@ fn custom_scale_matches_builtin_cr() {
 }
 
 #[test]
-fn custom_hencky_scale_matches_builtin() {
+fn legacy_gstrain_custom_hencky_scale_matches_builtin() {
     let src = format!(
         "{PRELUDE}\nEh = log(lam)\n\
          E1 = gstrain(C, scale=Eh)\nE2 = gstrain(C, scale=Hencky)\n\

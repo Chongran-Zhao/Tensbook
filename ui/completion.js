@@ -21,12 +21,13 @@ const BUILTINS = [
   { name: "exp", sig: "exp(x) | exp(C)", doc: "scalar exponential, or tensor exponential via spectral form (symmetric C)" },
   { name: "sinh", sig: "sinh(x)", doc: "hyperbolic sine (symbolic, with derivative rule)" },
   { name: "cosh", sig: "cosh(x)", doc: "hyperbolic cosine (symbolic, with derivative rule)" },
-  { name: "gstrain", sig: "gstrain(C, scale=CR, m=…, n=…)", doc: "generalized Lagrangian strain E(C) = Σ E(λ_a) M_a; scale = CR | SethHill | Hencky" },
+  { name: "Var", sig: 'Var("\\lambda")', doc: "declare a scalar function argument" },
+  { name: "ScalarSet", sig: 'ScalarSet("\\lambda", dim=3)', doc: "declare an indexed scalar family lambda[a]" },
+  { name: "VectorSet", sig: 'VectorSet("\\bm N", dim=3)', doc: "declare an indexed vector family N[a]" },
+  { name: "sum", sig: "sum(expr, a)", doc: "indexed symbolic sum over the set index a" },
   { name: "inv", sig: "inv(A)", doc: "symbolic tensor inverse" },
-  { name: "outer", sig: "outer(A, B)", doc: "tensor product A ⊗ B (orders add)" },
-  { name: "otimes", sig: "otimes(A, B)", doc: "tensor product A ⊗ B — alias of outer" },
   { name: "dot", sig: "dot(A, B)", doc: "single contraction AB" },
-  { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — a scalar; infix `A : B` also works" },
+  { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — infix `A : B` also works" },
   { name: "spectral", sig: "spectral(C)", doc: "spectral decomposition Σ c_a N_a ⊗ N_a (requires provably symmetric C)" },
   { name: "simplify", sig: "simplify(expr, rules=…)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
   { name: "display", sig: "display(expr, mode=…)", doc: "mode = symbol | components | matrix | block_components | spectral" },
@@ -39,7 +40,6 @@ const ENUM_VALUES = {
   mode: ["symbol", "components", "matrix", "block_components", "spectral"],
   format: ["latex", "markdown"],
   rules: ["algebra", "tensor", "continuum"],
-  scale: ["CR", "SethHill", "Hencky"],
 };
 
 const TENSOR_KWARGS = [

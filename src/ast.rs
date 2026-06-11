@@ -71,6 +71,8 @@ pub enum BinOp {
     Mul,
     Div,
     Pow,
+    /// Outer product `A & B`.
+    Outer,
     /// Double contraction `A : B`.
     Ddot,
 }

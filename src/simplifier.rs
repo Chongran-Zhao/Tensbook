@@ -137,9 +137,15 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             second: tensor_pass(second, rules),
             fourth: tensor_pass(fourth, rules),
         }),
-        TensorExpr::SumIdx { index, range, body } => Rc::new(TensorExpr::SumIdx {
+        TensorExpr::SumIdx {
+            index,
+            range,
+            exclude,
+            body,
+        } => Rc::new(TensorExpr::SumIdx {
             index: index.clone(),
             range: *range,
+            exclude: exclude.clone(),
             body: tensor_pass(body, rules),
         }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(tensor_pass(a, rules))),

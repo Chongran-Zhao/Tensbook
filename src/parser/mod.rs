@@ -128,7 +128,7 @@ impl Parser {
     }
 
     fn parse_multiplicative(&mut self) -> Result<Expr, Error> {
-        let mut lhs = self.parse_unary()?;
+        let mut lhs = self.parse_outer()?;
         loop {
             let op = match self.peek() {
                 Tok::Star => BinOp::Mul,
@@ -137,9 +137,23 @@ impl Parser {
                 _ => break,
             };
             self.next();
-            let rhs = self.parse_unary()?;
+            let rhs = self.parse_outer()?;
             lhs = Expr::Binary {
                 op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_outer(&mut self) -> Result<Expr, Error> {
+        let mut lhs = self.parse_unary()?;
+        while matches!(self.peek(), Tok::Amp) {
+            self.next();
+            let rhs = self.parse_unary()?;
+            lhs = Expr::Binary {
+                op: BinOp::Outer,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             };

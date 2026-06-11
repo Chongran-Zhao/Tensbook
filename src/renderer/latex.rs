@@ -314,8 +314,17 @@ fn render_tensor(expr: &TensorExpr) -> String {
         TensorExpr::SetElem { latex, index, .. } => {
             format!("{{{latex}}}_{{{}}}", index.latex())
         }
-        TensorExpr::SumIdx { index, range, body } => {
-            format!("\\sum_{{{index}=1}}^{{{range}}} {}", render_tensor(body))
+        TensorExpr::SumIdx {
+            index,
+            range,
+            exclude,
+            body,
+        } => {
+            let lower = match exclude {
+                Some(ex) => format!("\\substack{{{index}=1 \\\\ {index}\\ne {ex}}}"),
+                None => format!("{index}=1"),
+            };
+            format!("\\sum_{{{lower}}}^{{{range}}} {}", render_tensor(body))
         }
         TensorExpr::Transpose(t) => superscripted(t, "\\mathsf{T}"),
         TensorExpr::Inverse(t) => superscripted(t, "-1"),
@@ -366,12 +375,12 @@ fn render_tensor(expr: &TensorExpr) -> String {
             format!("{lhs} \\otimes {rhs}")
         }
         TensorExpr::BoxTimes(a, b) => {
-            let lhs = if tprec(a) < 2 {
+            let lhs = if tprec(a) <= 2 {
                 paren(render_tensor(a))
             } else {
                 render_tensor(a)
             };
-            let rhs = if tprec(b) < 2 {
+            let rhs = if tprec(b) <= 2 {
                 paren(render_tensor(b))
             } else {
                 render_tensor(b)
@@ -419,10 +428,10 @@ fn render_tensor(expr: &TensorExpr) -> String {
                 render_scalar(&scale.apply(&lam))
             )
         }
-        // Q = 2 ∂E/∂C, displayed by its defining derivative.
         TensorExpr::QTensor { strain } => {
             let e_tex = match &**strain {
                 TensorExpr::GenStrain { latex, .. } => latex.clone(),
+                TensorExpr::Var { latex, .. } => latex.clone(),
                 _ => paren(render_tensor(strain)),
             };
             let c_tex = match &**strain {

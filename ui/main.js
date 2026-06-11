@@ -6,30 +6,36 @@ import { setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-const DEFAULT_SOURCE = `# Hill's class hyperelasticity with the Curnier-Rakotomanana strain
+const DEFAULT_SOURCE = `# Hill's class hyperelasticity with a hand-written spectral strain
 mu = Scalar("\\mu")
 kappa = Scalar("\\kappa")
 m = Scalar("m")
 n = Scalar("n")
 
-F = Tensor("\\bm F", order=2, dim=3)
-C = F.T * F
+lambda = ScalarSet("\\lambda", dim=3)
+N = VectorSet("\\bm N", dim=3)
 
-# generalized strain E(C) = sum_a E(lambda_a) M_a,  E(l) = (l^m - l^-n)/(m+n)
-E = gstrain(C, scale=CR, m=m, n=n)
+lam = Var("\\lambda")
+Ecr = (lam^m - lam^(-n))/(m + n)
+
+# C = sum_a lambda_a^2 N_a ⊗ N_a, and E = sum_a Ecr(lambda_a) N_a ⊗ N_a
+C = sum(lambda[a]^2 * N[a] & N[a], a)
+E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * diff(E, C)
 
 # Hill's quadratic energy
 W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
 # thermodynamic force and second Piola-Kirchhoff stress S = T : Q
 T = diff(W, E)
-S = 2 * diff(W, C)
+S = T : Q
 
-display(E, mode=spectral)
+display(C, mode=symbol)
+display(E, mode=symbol)
+display(Q, mode=symbol)
 display(W, mode=symbol)
 display(T, mode=symbol)
 display(S, mode=symbol)
-display(S, mode=spectral)
 `;
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
@@ -95,9 +101,9 @@ function setCurrentPath(path) {
   filenameEl.title = path ?? "";
 }
 
-// v2 key: the bundled template changed to the Hill–CR derivation; older
-// cached sources under the v1 key are intentionally not migrated.
-editor.value = localStorage.getItem("tensorforge.source.v2") ?? DEFAULT_SOURCE;
+// v3 key: the bundled template changed to the hand-written spectral Hill
+// derivation; older cached sources are intentionally not migrated.
+editor.value = localStorage.getItem("tensorforge.source.v3") ?? DEFAULT_SOURCE;
 setupCompletion(editor);
 
 async function openFile() {
@@ -106,12 +112,14 @@ async function openFile() {
   if (!opened) return; // cancelled
   editor.value = opened.source;
   setCurrentPath(opened.path);
-  localStorage.setItem("tensorforge.source.v2", editor.value);
+  localStorage.setItem("tensorforge.source.v3", editor.value);
   scheduleLiveRun();
 }
 
 async function saveFile(forceDialog) {
   if (!invoke) return;
+  localStorage.setItem("tensorforge.source.v3", editor.value);
+  if (!forceDialog && !currentPath) return;
   const path = await invoke("save_tens", {
     source: editor.value,
     path: forceDialog ? null : currentPath,
@@ -194,7 +202,7 @@ function renderOutputs(outputs) {
 }
 
 async function run() {
-  localStorage.setItem("tensorforge.source.v2", editor.value);
+  localStorage.setItem("tensorforge.source.v3", editor.value);
   if (!invoke) {
     output.innerHTML =
       '<div class="error">Tauri bridge unavailable — open this UI through the desktop app.</div>';
@@ -218,7 +226,7 @@ let liveTimer = null;
 let lastGoodShown = false;
 
 async function liveRun() {
-  localStorage.setItem("tensorforge.source.v2", editor.value);
+  localStorage.setItem("tensorforge.source.v3", editor.value);
   if (!invoke) return;
   const result = await invoke("run_tens", { source: editor.value });
   if (!result.ok) {

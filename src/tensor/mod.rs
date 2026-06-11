@@ -207,18 +207,22 @@ pub enum TensorExpr {
     Neg(Rc<TensorExpr>),
     /// Element of a user-declared tensor set: `N[a]` for
     /// `N = VectorSet("\bm N", dim=3)`. `set_dim` is the family size.
+    /// When declared via `eigvecs(C, ...)`, `base` records the decomposed
+    /// tensor (so dependence on `C` is tracked).
     SetElem {
         latex: String,
         order: usize,
         dim: usize,
         index: crate::symbolic::SetIndex,
         set_dim: usize,
+        base: Option<Rc<TensorExpr>>,
     },
     /// Sum over an abstract set index: `Σ_{index=1}^{range} body`, written
     /// `sum(body, index)` in the DSL. Order/dim are the body's.
     SumIdx {
         index: String,
         range: usize,
+        exclude: Option<String>,
         body: Rc<TensorExpr>,
     },
 }
@@ -487,6 +491,17 @@ fn contract_second_fourth(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Ten
             Rc::new(contract_second_fourth(second.clone(), a.clone())),
             Rc::new(contract_second_fourth(second, b.clone())),
         ),
+        TensorExpr::SumIdx {
+            index,
+            range,
+            exclude,
+            body,
+        } => TensorExpr::SumIdx {
+            index: index.clone(),
+            range: *range,
+            exclude: exclude.clone(),
+            body: Rc::new(contract_second_fourth(second, body.clone())),
+        },
         TensorExpr::Neg(inner) => Rc::new(contract_second_fourth(second, inner.clone()))
             .as_ref()
             .clone()

@@ -29,17 +29,16 @@ brew upgrade tensorforge
 | `inv(A)` | Symbolic tensor inverse. |
 | `log(x)`, `sqrt(x)`, `exp(x)` | Scalar functions; also tensor spectral functions for provably symmetric tensors. |
 | `sinh(x)`, `cosh(x)`, `tanh(x)` | Symbolic scalar hyperbolic functions. |
-| `outer(A, B)`, `otimes(A, B)` | Tensor product `A \otimes B`. |
+| `A & B` | Tensor product `A \otimes B`. |
 | `dot(A, B)` | Single contraction / matrix product. |
 | `ddot(A, B)` | Double contraction `A : B`. |
 | `spectral(C)` | Spectral decomposition of a provably symmetric tensor. |
-| `gstrain(C, scale=...)` | Generalized strain. Scales: `CR` with `m`, `n`; `SethHill` with `m`; `Hencky`. |
 | `diff(expr, X)` | Symbolic derivative with respect to a scalar, tensor, compound tensor, or generalized strain. |
 | `simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
 | `display(expr, mode=...)` | Render in the app/CLI. Modes: `symbol`, `components`, `matrix`, `block_components`, `spectral`. |
 | `export(expr, format=...)` | Export `latex` or `markdown`. |
 
-Operators: `+`, `-`, `*`, `/`, `^`, `A : B`, and `A.T`.
+Operators: `+`, `-`, `*`, `/`, `^`, `A & B`, `A : B`, and `A.T`.
 
 ## Example
 
@@ -50,16 +49,23 @@ m = Scalar("m")
 n = Scalar("n")
 
 F = Tensor("\bm F", order=2, dim=3)
-C = F.T * F
-E = gstrain(C, scale=CR, m=m, n=n)
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+
+lam = Var("\lambda")
+Ecr = (lam^m - lam^(-n))/(m + n)
+
+C = sum(lambda[a]^2 * N[a] & N[a], a)
+E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * diff(E, C)
 W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
 T = diff(W, E)
-S = 2 * diff(W, C)
+S = T : Q
 
-display(E, mode=spectral)
+display(E, mode=symbol)
+display(Q, mode=symbol)
 display(S, mode=symbol)
-display(S, mode=spectral)
 ```
 
 License: MIT.

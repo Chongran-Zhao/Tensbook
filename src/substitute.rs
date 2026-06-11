@@ -394,15 +394,26 @@ fn rebuild_tensor(
             scale: scale.clone(),
             latex: latex.clone(),
         }),
-        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor { strain: rt(strain) }),
+        // Keep the strain structure inside Q so symbol rendering can expand
+        // the actual spectral derivative instead of losing the scale
+        // function to display-time aliases such as `E`.
+        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor {
+            strain: strain.clone(),
+        }),
         TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
             second: rt(second),
             fourth: rt(fourth),
         }),
         TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(rs(s), rt(a))),
-        TensorExpr::SumIdx { index, range, body } => Rc::new(TensorExpr::SumIdx {
+        TensorExpr::SumIdx {
+            index,
+            range,
+            exclude,
+            body,
+        } => Rc::new(TensorExpr::SumIdx {
             index: index.clone(),
             range: *range,
+            exclude: exclude.clone(),
             body: rt(body),
         }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),

@@ -40,7 +40,7 @@ fn spectral_result_is_symmetric() {
 
 #[test]
 fn outer_product_order_and_display() {
-    let src = format!("{PRELUDE}\nO = outer(F, G)\ndisplay(O, mode=symbol)");
+    let src = format!("{PRELUDE}\nO = F & G\ndisplay(O, mode=symbol)");
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert!(
         outputs[0].latex.contains("\\bm F \\otimes \\bm G"),
@@ -54,8 +54,26 @@ fn outer_product_order_and_display() {
 }
 
 #[test]
+fn ampersand_operator_is_outer_product() {
+    let src = format!("{PRELUDE}\nO = F & G\nP = outer(F, G)\ndisplay(O, mode=symbol)");
+    let (outputs, interp) = run_source_with_env(&src).unwrap();
+    assert!(
+        outputs[0].latex.contains("\\bm F \\otimes \\bm G"),
+        "got: {}",
+        outputs[0].latex
+    );
+    match (interp.get("O"), interp.get("P")) {
+        (Some(Value::Tensor(o)), Some(Value::Tensor(p))) => {
+            assert_eq!(o, p);
+            assert_eq!(o.order(), 4);
+        }
+        other => panic!("expected Tensors, got {other:?}"),
+    }
+}
+
+#[test]
 fn outer_of_same_tensor_is_symmetric() {
-    let src = format!("{PRELUDE}\nO = outer(F, F)\nP = outer(F, G)");
+    let src = format!("{PRELUDE}\nO = F & F\nP = F & G");
     let (_, interp) = run_source_with_env(&src).unwrap();
     // Note: symmetry inference only applies to order-2; order-4 outer is
     // reported not-symmetric by the order check, which is the conservative
