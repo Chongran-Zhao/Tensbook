@@ -179,6 +179,9 @@ pub fn abstract_component(
         TensorExpr::Outer(..) => Err(Error::msg(
             "component expansion of outer products is not supported yet",
         )),
+        TensorExpr::BoxTimes(..) => Err(Error::msg(
+            "fourth-order ⊠ products have no second-order component form",
+        )),
         TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only and have no component expansion",
         )),
@@ -272,7 +275,8 @@ fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b) => tensor_mentions(a, base) || tensor_mentions(b, base),
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => tensor_mentions(a, base) || tensor_mentions(b, base),
         TensorExpr::Spectral { base: t, .. }
         | TensorExpr::SpectralFn { base: t, .. }
         | TensorExpr::GenStrain { base: t, .. } => tensor_mentions(t, base),

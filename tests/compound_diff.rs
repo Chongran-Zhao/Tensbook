@@ -82,10 +82,11 @@ fn full_neo_hookean_second_piola() {
          S = 2 * diff(W, C)\nexport(S, format=latex)"
     );
     let outputs = run_source(&src).unwrap();
-    // λ/2 (log J)² = λ/8 (log det C)² → 2·∂/∂C gives λ/4 log(det C) C^{-1}
+    // λ/2 (log J)² = λ/8 (log det C)² → S gets λ/2 log(det C) C^{-1},
+    // displayed through log(det C) = 2 log J as λ (log J) C^{-1}.
     assert!(
-        outputs[0].latex.contains("}{4}"),
-        "lambda term coefficient must be /4: {}",
+        outputs[0].latex.contains("\\lambda \\, \\log J"),
+        "lambda term must fold to lambda log J: {}",
         outputs[0].latex
     );
 }

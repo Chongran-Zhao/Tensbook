@@ -144,10 +144,19 @@ fn render_scalar(expr: &ScalarExpr) -> String {
 
 fn render_num(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
-        format!("{}", n as i64)
-    } else {
-        format!("{n}")
+        return format!("{}", n as i64);
     }
+    // Render simple rationals as fractions (e.g. -2/3 rather than
+    // -0.6666666666666666) — numeric folding loses the Div structure.
+    for den in 2..=12u32 {
+        let num = n * den as f64;
+        if (num - num.round()).abs() < 1e-9 && num.round().abs() < 1e6 {
+            let num = num.round() as i64;
+            let sign = if num < 0 { "-" } else { "" };
+            return format!("{sign}\\frac{{{}}}{{{den}}}", num.abs());
+        }
+    }
+    format!("{n}")
 }
 
 fn render_fraction(num: &ScalarExpr, den: &ScalarExpr) -> String {
@@ -198,10 +207,11 @@ fn render_abs_as_product_factor(expr: &ScalarExpr) -> (bool, String) {
 }
 
 fn render_product_factor(expr: &ScalarExpr) -> String {
-    if sprec(expr) < 2 {
-        paren(render_scalar(expr))
-    } else {
-        render_scalar(expr)
+    match expr {
+        // `(tr C) x` — same convention as tensor coefficients.
+        ScalarExpr::Tr(_) => paren(render_scalar(expr)),
+        _ if sprec(expr) < 2 => paren(render_scalar(expr)),
+        _ => render_scalar(expr),
     }
 }
 
@@ -256,7 +266,8 @@ fn tprec(expr: &TensorExpr) -> u8 {
         TensorExpr::MatMul(..)
         | TensorExpr::ScalarMul(..)
         | TensorExpr::Neg(..)
-        | TensorExpr::Outer(..) => 2,
+        | TensorExpr::Outer(..)
+        | TensorExpr::BoxTimes(..) => 2,
         TensorExpr::Var { .. }
         | TensorExpr::Transpose(..)
         | TensorExpr::Inverse(..)
@@ -339,6 +350,19 @@ fn render_tensor(expr: &TensorExpr) -> String {
                 render_tensor(b)
             };
             format!("{lhs} \\otimes {rhs}")
+        }
+        TensorExpr::BoxTimes(a, b) => {
+            let lhs = if tprec(a) < 2 {
+                paren(render_tensor(a))
+            } else {
+                render_tensor(a)
+            };
+            let rhs = if tprec(b) < 2 {
+                paren(render_tensor(b))
+            } else {
+                render_tensor(b)
+            };
+            format!("{lhs} \\boxtimes {rhs}")
         }
         // Σ_{a=1}^{dim} λ_a N_a ⊗ N_a — eigenvalue symbol derived from the
         // decomposed tensor's (lowercased) letter, e.g. C → c_a.

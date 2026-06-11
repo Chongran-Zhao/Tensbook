@@ -138,6 +138,12 @@ pub enum TensorExpr {
     MatMul(Rc<TensorExpr>, Rc<TensorExpr>),
     /// Tensor (outer) product `A ⊗ B`; order = a.order() + b.order().
     Outer(Rc<TensorExpr>, Rc<TensorExpr>),
+    /// Non-standard fourth-order product `A ⊠ B` of two second-order
+    /// tensors, with components `(A ⊠ B)_{ijmn} = A_{im} B_{jn}`
+    /// (Itskov's `⊗̄`). Produced by the derivative of the tensor inverse:
+    /// `∂(X⁻¹)/∂X = −X⁻¹ ⊠ X⁻ᵀ`, matching the component rule
+    /// `∂(X⁻¹)_{ij}/∂X_{mn} = −(X⁻¹)_{im} (X⁻¹)_{nj}`.
+    BoxTimes(Rc<TensorExpr>, Rc<TensorExpr>),
     /// Fourth-order identity tensor `I4`, with components δ_im δ_jn.
     Identity4 {
         dim: usize,
@@ -194,7 +200,7 @@ impl TensorExpr {
             }
             TensorExpr::Diff { num, den, .. } => num.order() + den.order(),
             TensorExpr::Outer(a, b) => a.order() + b.order(),
-            TensorExpr::Identity4 { .. } => 4,
+            TensorExpr::BoxTimes(..) | TensorExpr::Identity4 { .. } => 4,
             TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => base.order(),
             TensorExpr::GenStrain { .. } => 2,
             TensorExpr::QTensor { .. } => 4,
@@ -212,7 +218,7 @@ impl TensorExpr {
                 t.dim()
             }
             TensorExpr::Diff { num, .. } => num.dim(),
-            TensorExpr::Outer(a, _) => a.dim(),
+            TensorExpr::Outer(a, _) | TensorExpr::BoxTimes(a, _) => a.dim(),
             TensorExpr::Identity4 { dim } => *dim,
             TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => base.dim(),
             TensorExpr::GenStrain { base, .. } => base.dim(),
@@ -274,6 +280,25 @@ impl TensorExpr {
             )));
         }
         Ok(TensorExpr::Outer(a, b))
+    }
+
+    /// `A ⊠ B` — both factors must be second-order and of equal dimension.
+    pub fn box_times(a: Rc<TensorExpr>, b: Rc<TensorExpr>) -> Result<TensorExpr, Error> {
+        if a.order() != 2 || b.order() != 2 {
+            return Err(Error::msg(format!(
+                "`⊠` requires second-order tensors, got orders {} and {}",
+                a.order(),
+                b.order()
+            )));
+        }
+        if a.dim() != b.dim() {
+            return Err(Error::msg(format!(
+                "dimension mismatch in `⊠` product: {} vs {}",
+                a.dim(),
+                b.dim()
+            )));
+        }
+        Ok(TensorExpr::BoxTimes(a, b))
     }
 
     /// Generalized strain `E(C) = Σ E(λ_a) M_a` — requires a provably
@@ -432,6 +457,15 @@ fn contract_second_fourth(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Ten
             .negated(),
         TensorExpr::Outer(a, b) if a.order() == 2 && b.order() == 2 => {
             scale_tensor(contract_coeff(second, a.clone()), b.clone())
+        }
+        // T_{ij} (A ⊠ B)_{ijmn} = T_{ij} A_{im} B_{jn} = (Aᵀ T B)_{mn}
+        TensorExpr::BoxTimes(a, b) => {
+            let at = if a.is_symmetric() {
+                a.clone()
+            } else {
+                Rc::new(TensorExpr::Transpose(a.clone()))
+            };
+            TensorExpr::MatMul(Rc::new(TensorExpr::MatMul(at, second)), b.clone())
         }
         _ => TensorExpr::DdotTQ { second, fourth },
     }

@@ -116,7 +116,11 @@ pub fn diff_tensor_by_tensor(
         },
     });
     let rewritten = replace_tensor(&rewritten, x, &x_var);
-    Ok(d_tensor(&rewritten, &x_var)?.unwrap_or_else(|| zero_fourth_like(&x_var)))
+    let d = d_tensor(&rewritten, &x_var)?.unwrap_or_else(|| zero_fourth_like(&x_var));
+    // Map the synthetic variable back to the compound expression so the
+    // result composes structurally with other expressions (e.g. `C : ℂ`
+    // contractions can cancel C⁻¹ C); display still substitutes the label.
+    Ok(replace_tensor(&d, &x_var, x))
 }
 
 /// If `x` is structurally `AᵀA` or `A Aᵀ`, return `A`.
@@ -245,6 +249,7 @@ fn rewrite_tensor_for_compound(
         TensorExpr::Add(p, q) => Rc::new(TensorExpr::Add(rwt(p), rwt(q))),
         TensorExpr::Sub(p, q) => Rc::new(TensorExpr::Sub(rwt(p), rwt(q))),
         TensorExpr::Outer(p, q) => Rc::new(TensorExpr::Outer(rwt(p), rwt(q))),
+        TensorExpr::BoxTimes(p, q) => Rc::new(TensorExpr::BoxTimes(rwt(p), rwt(q))),
         TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
             base: rwt(base),
             base_latex: base_latex.clone(),
@@ -331,6 +336,7 @@ fn replace_tensor(
         TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(rt(a), rt(b))),
         TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
         TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),
+        TensorExpr::BoxTimes(a, b) => Rc::new(TensorExpr::BoxTimes(rt(a), rt(b))),
         TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
             base: rt(base),
             base_latex: base_latex.clone(),
@@ -380,12 +386,29 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
             };
             Ok(tadd(da, ds))
         }
+        // Aᵀ = A for symmetric A: differentiate through the transpose.
+        TensorExpr::Transpose(a) if a.is_symmetric() => d_tensor(a, x),
+        // ∂(X⁻¹)_{ij}/∂X_{mn} = −(X⁻¹)_{im}(X⁻¹)_{nj}, i.e. −X⁻¹ ⊠ X⁻ᵀ
+        // (matching the component rule in [`crate::indices`]). For symmetric
+        // X the second factor is displayed as X⁻¹.
+        TensorExpr::Inverse(a) if a == x => Ok(Some(tneg(Rc::new(TensorExpr::box_times(
+            Rc::new(TensorExpr::Inverse(x.clone())),
+            inverse_factor(x),
+        )?)))),
+        // X⁻ᵀ = X⁻¹ for symmetric X.
+        TensorExpr::InverseTranspose(a) if a == x && x.is_symmetric() => {
+            Ok(Some(tneg(Rc::new(TensorExpr::box_times(
+                Rc::new(TensorExpr::Inverse(x.clone())),
+                Rc::new(TensorExpr::Inverse(x.clone())),
+            )?))))
+        }
         TensorExpr::Transpose(_)
         | TensorExpr::Inverse(_)
         | TensorExpr::InverseTranspose(_)
         | TensorExpr::Diff { .. }
         | TensorExpr::MatMul(..)
         | TensorExpr::Outer(..)
+        | TensorExpr::BoxTimes(..)
         | TensorExpr::Spectral { .. }
         | TensorExpr::SpectralFn { .. }
         | TensorExpr::GenStrain { .. }
@@ -393,6 +416,16 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
         | TensorExpr::DdotTQ { .. } => Err(Error::msg(
             "this tensor-by-tensor derivative form is not supported yet",
         )),
+    }
+}
+
+/// The second `⊠` factor of `∂(X⁻¹)/∂X`: `X⁻ᵀ`, displayed as `X⁻¹` when
+/// `X` is provably symmetric.
+fn inverse_factor(x: &Rc<TensorExpr>) -> Rc<TensorExpr> {
+    if x.is_symmetric() {
+        Rc::new(TensorExpr::Inverse(x.clone()))
+    } else {
+        Rc::new(TensorExpr::InverseTranspose(x.clone()))
     }
 }
 
@@ -503,7 +536,8 @@ fn collect_strains_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>, out: &mut Vec<
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b) => {
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => {
             collect_strains_tensor(a, x, out);
             collect_strains_tensor(b, x, out);
         }
@@ -661,7 +695,8 @@ fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b) => {
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => {
             tensor_mentions_scalar(a, name) || tensor_mentions_scalar(b, name)
         }
         TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
@@ -734,7 +769,8 @@ fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b) => {
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => {
             tensor_var_names(a, out);
             tensor_var_names(b, out);
         }
@@ -818,7 +854,8 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b) => {
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => {
             walk_tensor(a, x, vars)?;
             walk_tensor(b, x, vars)
         }
@@ -1110,7 +1147,8 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b) => t_contains(a, x) || t_contains(b, x),
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => t_contains(a, x) || t_contains(b, x),
         TensorExpr::Spectral { base, .. }
         | TensorExpr::SpectralFn { base, .. }
         | TensorExpr::GenStrain { base, .. } => t_contains(base, x),

@@ -109,6 +109,7 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
         | TensorExpr::Identity4 { .. }
         | TensorExpr::Diff { .. }
         | TensorExpr::Outer(..)
+        | TensorExpr::BoxTimes(..)
         | TensorExpr::Spectral { .. }
         | TensorExpr::SpectralFn { .. }
         | TensorExpr::GenStrain { .. }
@@ -136,6 +137,10 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
         )),
         TensorExpr::Outer(..) => Err(Error::msg(
             "component expansion of outer products is not supported yet; use mode=symbol",
+        )),
+        TensorExpr::BoxTimes(..) => Err(Error::msg(
+            "component expansion of fourth-order ⊠ products is not supported \
+             in matrix mode; use mode=symbol",
         )),
         TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only; use mode=symbol",

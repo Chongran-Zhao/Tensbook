@@ -199,8 +199,8 @@ impl Interpreter {
                     }
                     Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
                 }
-                (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
-                (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                (2, 4) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(a, b)?))),
+                (4, 2) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(b, a)?))),
                 (oa, ob) => Err(Error::msg(format!(
                     "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
                          {oa} and {ob}"
@@ -405,8 +405,8 @@ impl Interpreter {
                         }
                         Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
                     }
-                    (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
-                    (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                    (2, 4) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(a, b)?))),
+                    (4, 2) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(b, a)?))),
                     (oa, ob) => Err(Error::msg(format!(
                         "`ddot` supports 2:2, 2:4 and 4:2 contractions, got orders \
                          {oa} and {ob}"

@@ -353,6 +353,7 @@ fn rebuild_tensor(
         TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(rt(a), rt(b))),
         TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
         TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),
+        TensorExpr::BoxTimes(a, b) => Rc::new(TensorExpr::BoxTimes(rt(a), rt(b))),
         TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
             base: rt(base),
             base_latex: base_latex.clone(),

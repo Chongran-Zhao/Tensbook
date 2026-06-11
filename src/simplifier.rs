@@ -12,7 +12,7 @@
 //!   `tr(I) → dim`, `det(I) → 1`
 
 use crate::error::Error;
-use crate::symbolic::{extract_coeff, fold_mul, ScalarExpr};
+use crate::symbolic::{extract_coeff, fold_add, fold_mul, with_coeff, ScalarExpr};
 use crate::tensor::TensorExpr;
 use std::rc::Rc;
 
@@ -106,6 +106,10 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             tensor_pass(a, rules),
             tensor_pass(b, rules),
         )),
+        TensorExpr::BoxTimes(a, b) => Rc::new(TensorExpr::BoxTimes(
+            tensor_pass(a, rules),
+            tensor_pass(b, rules),
+        )),
         TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
             base: tensor_pass(base, rules),
             base_latex: base_latex.clone(),
@@ -191,6 +195,13 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
         // 0 · A handled at ScalarMul; -(-A) → A
         TensorExpr::Neg(a) => match &**a {
             TensorExpr::Neg(inner) => inner.clone(),
+            // −(−x + y) → x − y
+            TensorExpr::Add(x, y) => match &**x {
+                TensorExpr::Neg(inner) => Rc::new(TensorExpr::Sub(inner.clone(), y.clone())),
+                _ => t,
+            },
+            // −(a − b) → b − a
+            TensorExpr::Sub(x, y) => Rc::new(TensorExpr::Sub(y.clone(), x.clone())),
             _ => t,
         },
         TensorExpr::ScalarMul(s, a) => match &**s {
@@ -203,7 +214,30 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
                     t
                 }
             }
-            _ => t,
+            // s · (−A) → −(s · A)
+            _ if matches!(&**a, TensorExpr::Neg(..)) => {
+                if let TensorExpr::Neg(inner) = &**a {
+                    Rc::new(TensorExpr::Neg(Rc::new(TensorExpr::ScalarMul(
+                        s.clone(),
+                        inner.clone(),
+                    ))))
+                } else {
+                    t
+                }
+            }
+            // (−c · x) A → −(c x A): hoist negative numeric coefficients so
+            // signs live on the tensor sum, not inside coefficients.
+            _ => {
+                let (c, rest) = extract_coeff(s);
+                if c < 0.0 {
+                    Rc::new(TensorExpr::Neg(Rc::new(TensorExpr::ScalarMul(
+                        with_coeff(-c, rest),
+                        a.clone(),
+                    ))))
+                } else {
+                    t
+                }
+            }
         },
         _ => t,
     }
@@ -260,8 +294,8 @@ fn common_scalar_factor(
         if same_nontrivial_numeric_coeff(ca, cb) {
             return Some((
                 numeric_coeff_expr(ca),
-                Rc::new(ScalarExpr::Num(1.0)),
-                Rc::new(ScalarExpr::Num(1.0)),
+                scalar_from_coeff_and_factors(1.0, rem_a),
+                scalar_from_coeff_and_factors(1.0, rem_b),
             ));
         }
         return None;
@@ -424,6 +458,12 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (ScalarExpr::Num(x), _) if *x == 1.0 => b.clone(),
             (_, ScalarExpr::Num(x)) if *x == 1.0 => a.clone(),
             (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x * y)),
+            // x · x → x²
+            _ if a == b => Rc::new(ScalarExpr::Pow(a.clone(), Rc::new(ScalarExpr::Num(2.0)))),
+            // x^p · x^q → x^{p+q}
+            (ScalarExpr::Pow(xa, p), ScalarExpr::Pow(xb, q)) if xa == xb => {
+                Rc::new(ScalarExpr::Pow(xa.clone(), fold_add(p.clone(), q.clone())))
+            }
             _ => s,
         },
         ScalarExpr::Div(a, b) => match (&**a, &**b) {
@@ -432,9 +472,12 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             _ if a == b => Rc::new(ScalarExpr::Num(1.0)),
             _ => s,
         },
-        ScalarExpr::Pow(a, b) => match &**b {
-            ScalarExpr::Num(n) if *n == 1.0 => a.clone(),
-            ScalarExpr::Num(n) if *n == 0.0 => Rc::new(ScalarExpr::Num(1.0)),
+        ScalarExpr::Pow(a, b) => match (&**a, &**b) {
+            (_, ScalarExpr::Num(n)) if *n == 1.0 => a.clone(),
+            (_, ScalarExpr::Num(n)) if *n == 0.0 => Rc::new(ScalarExpr::Num(1.0)),
+            // (x^p)^q → x^{pq} (exact for the positive bases — dets,
+            // stretches — that symbolic powers assume here)
+            (ScalarExpr::Pow(base, p), _) => Rc::new(ScalarExpr::Pow(base.clone(), fold_mul(p, b))),
             _ => s,
         },
         ScalarExpr::Neg(a) => match &**a {

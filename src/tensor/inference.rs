@@ -52,7 +52,7 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         // Q = 2∂E/∂C with E, C symmetric, so the result is symmetric.
         TensorExpr::DdotTQ { fourth, .. } => matches!(&**fourth, TensorExpr::QTensor { .. }),
         // Order-4: outside the scope of this order-2 predicate.
-        TensorExpr::QTensor { .. } => false,
+        TensorExpr::QTensor { .. } | TensorExpr::BoxTimes(..) => false,
     }
 }
 
