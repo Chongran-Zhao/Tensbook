@@ -106,6 +106,11 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             base: tensor_pass(base, rules),
             base_latex: base_latex.clone(),
         }),
+        TensorExpr::SpectralFn { func, base, base_latex } => Rc::new(TensorExpr::SpectralFn {
+            func: func.clone(),
+            base: tensor_pass(base, rules),
+            base_latex: base_latex.clone(),
+        }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(tensor_pass(a, rules))),
     };
     rewrite_tensor(rebuilt, rules)

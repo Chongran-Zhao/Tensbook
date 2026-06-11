@@ -44,8 +44,8 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => is_symmetric(t),
         // u ⊗ u is symmetric only for structurally identical factors.
         TensorExpr::Outer(a, b) => a == b,
-        // Σ λ_a N_a ⊗ N_a is symmetric by construction.
-        TensorExpr::Spectral { .. } => true,
+        // Σ λ_a N_a ⊗ N_a and Σ f(λ_a) N_a ⊗ N_a are symmetric by construction.
+        TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => true,
     }
 }
 

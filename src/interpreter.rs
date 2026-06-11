@@ -192,16 +192,30 @@ impl Interpreter {
                 };
                 Ok(Value::Scalar(Rc::new(node)))
             }
-            "log" => {
+            "log" | "sqrt" | "exp" => {
                 if args.len() != 1 || !kwargs.is_empty() {
-                    return Err(Error::msg("`log` takes exactly one argument"));
+                    return Err(Error::msg(format!("`{callee}` takes exactly one argument")));
                 }
                 match self.eval(&args[0])? {
-                    Value::Scalar(s) => Ok(Value::Scalar(Rc::new(ScalarExpr::Log(s)))),
-                    Value::Tensor(_) => Err(Error::msg(
-                        "`log` of a tensor requires spectral decomposition (not in MVP); \
-                         argument must be a scalar",
-                    )),
+                    Value::Scalar(s) => match callee {
+                        "log" => Ok(Value::Scalar(Rc::new(ScalarExpr::Log(s)))),
+                        // sqrt(x) = x^{1/2}; exp left as e^x via Pow on the
+                        // symbolic side is not in the MVP node set, so scalar
+                        // sqrt/exp are rejected for now with a clear message.
+                        other => Err(Error::msg(format!(
+                            "scalar `{other}` is not supported yet (only `log`)"
+                        ))),
+                    },
+                    Value::Tensor(t) => {
+                        // Isotropic tensor function through the spectral form.
+                        let label = match &args[0] {
+                            Expr::Ident(name) => format!("\\bm {name}"),
+                            _ => tensor_to_latex(&t),
+                        };
+                        Ok(Value::Tensor(Rc::new(TensorExpr::spectral_fn(
+                            callee, t, label,
+                        )?)))
+                    }
                 }
             }
             "diff" => self.builtin_diff(args, kwargs),

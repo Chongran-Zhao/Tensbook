@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>TensorForge</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<script defer src="vendor/katex/katex.min.js"></script>
 <style>
   :root {
     --bg: #1e1f24;
@@ -29,12 +29,24 @@
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
   header .hint { color: var(--muted); font-size: 12px; }
   header button {
-    margin-left: auto;
-    background: var(--accent); color: #11131a; border: 0;
-    padding: 6px 18px; border-radius: 6px; font-weight: 600;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 14px; border-radius: 6px; font-weight: 500;
     cursor: pointer; font-size: 13px;
   }
-  header button:hover { filter: brightness(1.1); }
+  header button:hover { border-color: var(--accent); }
+  header button#run {
+    margin-left: auto;
+    background: var(--accent); color: #11131a; border: 0;
+    padding: 6px 18px; font-weight: 600;
+  }
+  header button#run:hover { filter: brightness(1.1); }
+  header .filename {
+    color: var(--muted); font-size: 12px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 30%;
+  }
   main { display: flex; flex: 1; min-height: 0; }
   #editor {
     width: 44%; min-width: 280px; resize: none; border: 0; outline: none;
@@ -65,6 +77,10 @@
 <div id="app">
   <header>
     <h1>TensorForge</h1>
+    <button id="open">Open…</button>
+    <button id="save">Save</button>
+    <button id="saveas">Save As…</button>
+    <span class="filename" id="filename"></span>
     <span class="hint">⌘⏎ / Ctrl+Enter to run</span>
     <button id="run">Run</button>
   </header>

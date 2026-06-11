@@ -38,7 +38,8 @@ cargo tauri build  # produces TensorForge.app + .dmg under src-tauri/target
 ```
 
 The app shows a DSL editor on the left and KaTeX-rendered mathematics on the
-right; press ⌘⏎ (macOS) / Ctrl+Enter to run.
+right (KaTeX is bundled — no network needed); press ⌘⏎ / Ctrl+Enter to run,
+⌘O to open and ⌘S to save `.tens` files.
 
 ## Example
 
@@ -131,6 +132,9 @@ symmetric tensors is *not* assumed symmetric).
 - **Spectral decomposition**: `spectral(C)` →
   `Σ_{a=1}^{3} c_a N_a ⊗ N_a`, accepted only for *provably* symmetric
   tensors (declared `symmetric=true` or inferred, e.g. `C = F.T * F`)
+- **Isotropic tensor functions**: `sqrt(C)` / `log(C)` / `exp(C)` through
+  the spectral form, `f(C) = Σ f(c_a) N_a ⊗ N_a` — e.g. `U = sqrt(C)` is
+  the right stretch tensor; same strict symmetry requirement
 - `display(X, mode=symbol)` — bold symbolic LaTeX (`\bm C = ...`,
   `\frac{\partial \bm C}{\partial \bm F}`)
 - `display(X, mode=components)` — explicit `dim × dim` component matrix, or
@@ -169,10 +173,8 @@ semantic layer without touching the parser.
 
 ## Roadmap
 
-1. **Tensor functions** — `sqrt(C)`/`log(C)`/`exp(C)` via the spectral form
-2. **Richer simplification** — `det(F) F^{-T} → cof F`, user-declared
+1. **Richer simplification** — `det(F) F^{-T} → cof F`, user-declared
    identities entering the rule system as known facts
-3. **Desktop polish** — file open/save for `.tens`, bundled KaTeX assets
-   (currently loaded from CDN), app icon
-4. **Homebrew distribution** — publish the formula in `packaging/` once the
+2. **Desktop polish** — proper app icon (current one is a placeholder)
+3. **Homebrew distribution** — publish the formula in `packaging/` once the
    repo has a tagged release; add a cask for the app bundle

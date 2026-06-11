@@ -30,8 +30,47 @@ const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 const editor = document.getElementById("editor");
 const output = document.getElementById("output");
 const runBtn = document.getElementById("run");
+const openBtn = document.getElementById("open");
+const saveBtn = document.getElementById("save");
+const saveAsBtn = document.getElementById("saveas");
+const filenameEl = document.getElementById("filename");
+
+// Path of the currently open file; null = unsaved buffer.
+let currentPath = null;
+
+function setCurrentPath(path) {
+  currentPath = path;
+  filenameEl.textContent = path ? path.split("/").pop() : "";
+  filenameEl.title = path ?? "";
+}
 
 editor.value = localStorage.getItem("tensorforge.source") ?? DEFAULT_SOURCE;
+
+async function openFile() {
+  if (!invoke) return;
+  const opened = await invoke("open_tens").catch(showError);
+  if (!opened) return; // cancelled
+  editor.value = opened.source;
+  setCurrentPath(opened.path);
+  localStorage.setItem("tensorforge.source", editor.value);
+}
+
+async function saveFile(forceDialog) {
+  if (!invoke) return;
+  const path = await invoke("save_tens", {
+    source: editor.value,
+    path: forceDialog ? null : currentPath,
+  }).catch(showError);
+  if (path) setCurrentPath(path);
+}
+
+function showError(message) {
+  output.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "error";
+  div.textContent = String(message);
+  output.appendChild(div);
+}
 
 async function run() {
   localStorage.setItem("tensorforge.source", editor.value);
@@ -43,10 +82,7 @@ async function run() {
   const result = await invoke("run_tens", { source: editor.value });
   output.innerHTML = "";
   if (!result.ok) {
-    const div = document.createElement("div");
-    div.className = "error";
-    div.textContent = result.error;
-    output.appendChild(div);
+    showError(result.error);
     return;
   }
   if (result.outputs.length === 0) {
@@ -79,9 +115,19 @@ async function run() {
 }
 
 runBtn.addEventListener("click", run);
+openBtn.addEventListener("click", openFile);
+saveBtn.addEventListener("click", () => saveFile(false));
+saveAsBtn.addEventListener("click", () => saveFile(true));
 document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === "Enter") {
     e.preventDefault();
     run();
+  } else if (mod && e.key === "s") {
+    e.preventDefault();
+    saveFile(e.shiftKey);
+  } else if (mod && e.key === "o") {
+    e.preventDefault();
+    openFile();
   }
 });

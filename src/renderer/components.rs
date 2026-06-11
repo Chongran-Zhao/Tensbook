@@ -108,7 +108,8 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
         | TensorExpr::InverseTranspose(_)
         | TensorExpr::Diff { .. }
         | TensorExpr::Outer(..)
-        | TensorExpr::Spectral { .. } => {
+        | TensorExpr::Spectral { .. }
+        | TensorExpr::SpectralFn { .. } => {
             unreachable!("non-expandable node reached entry(); expandable() must screen first")
         }
     }
@@ -128,7 +129,7 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
         TensorExpr::Outer(..) => Err(Error::msg(
             "component expansion of outer products is not supported yet; use mode=symbol",
         )),
-        TensorExpr::Spectral { .. } => Err(Error::msg(
+        TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only; use mode=symbol",
         )),
         TensorExpr::Var { .. } => Ok(()),

@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(Serialize)]
 struct RunOutput {
@@ -17,6 +18,13 @@ struct RunResult {
     ok: bool,
     outputs: Vec<RunOutput>,
     error: Option<String>,
+}
+
+/// Result of an open dialog: `None` if the user cancelled.
+#[derive(Serialize)]
+struct OpenedFile {
+    path: String,
+    source: String,
 }
 
 /// Parse and execute a `.tens` program; never fails the IPC call itself —
@@ -43,9 +51,57 @@ fn run_tens(source: String) -> RunResult {
     }
 }
 
+/// Show a native open dialog and read the chosen `.tens` file.
+/// Returns `Ok(None)` if the user cancelled.
+#[tauri::command]
+fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("TensorForge", &["tens"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    Ok(Some(OpenedFile {
+        path: path.display().to_string(),
+        source,
+    }))
+}
+
+/// Save the source. `path: None` (or Save As) opens a native save dialog.
+/// Returns the path written, or `None` if the user cancelled.
+#[tauri::command]
+fn save_tens(
+    app: tauri::AppHandle,
+    source: String,
+    path: Option<String>,
+) -> Result<Option<String>, String> {
+    let target = match path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let Some(picked) = app
+                .dialog()
+                .file()
+                .add_filter("TensorForge", &["tens"])
+                .set_file_name("untitled.tens")
+                .blocking_save_file()
+            else {
+                return Ok(None);
+            };
+            picked.into_path().map_err(|e| e.to_string())?
+        }
+    };
+    std::fs::write(&target, source).map_err(|e| e.to_string())?;
+    Ok(Some(target.display().to_string()))
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![run_tens])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![run_tens, open_tens, save_tens])
         .run(tauri::generate_context!())
         .expect("error while running TensorForge");
 }

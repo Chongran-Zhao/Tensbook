@@ -175,7 +175,7 @@ pub fn abstract_component(
         TensorExpr::Outer(..) => Err(Error::msg(
             "component expansion of outer products is not supported yet",
         )),
-        TensorExpr::Spectral { .. } => Err(Error::msg(
+        TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only and have no component expansion",
         )),
     }
@@ -264,7 +264,9 @@ fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
         | TensorExpr::Outer(a, b) => tensor_mentions(a, base) || tensor_mentions(b, base),
-        TensorExpr::Spectral { base: t, .. } => tensor_mentions(t, base),
+        TensorExpr::Spectral { base: t, .. } | TensorExpr::SpectralFn { base: t, .. } => {
+            tensor_mentions(t, base)
+        }
         TensorExpr::ScalarMul(s, a) => scalar_depends(s, base) || tensor_mentions(a, base),
     }
 }

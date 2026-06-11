@@ -63,6 +63,14 @@ pub enum TensorExpr {
         base: Rc<TensorExpr>,
         base_latex: String,
     },
+    /// An isotropic tensor function applied through the spectral form:
+    /// `f(T) = Σ_a f(λ_a) N_a ⊗ N_a` for symmetric `T`.
+    /// `func` is the scalar function name: "sqrt" | "log" | "exp".
+    SpectralFn {
+        func: String,
+        base: Rc<TensorExpr>,
+        base_latex: String,
+    },
     Add(Rc<TensorExpr>, Rc<TensorExpr>),
     Sub(Rc<TensorExpr>, Rc<TensorExpr>),
     /// Scalar times tensor.
@@ -79,7 +87,9 @@ impl TensorExpr {
             | TensorExpr::InverseTranspose(t) => t.order(),
             TensorExpr::Diff { num, den, .. } => num.order() + den.order(),
             TensorExpr::Outer(a, b) => a.order() + b.order(),
-            TensorExpr::Spectral { base, .. } => base.order(),
+            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
+                base.order()
+            }
             TensorExpr::MatMul(a, _) => a.order(), // 2 in MVP
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.order(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.order(),
@@ -94,7 +104,9 @@ impl TensorExpr {
             | TensorExpr::InverseTranspose(t) => t.dim(),
             TensorExpr::Diff { num, .. } => num.dim(),
             TensorExpr::Outer(a, _) => a.dim(),
-            TensorExpr::Spectral { base, .. } => base.dim(),
+            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
+                base.dim()
+            }
             TensorExpr::MatMul(a, _) => a.dim(),
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.dim(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.dim(),
@@ -169,6 +181,32 @@ impl TensorExpr {
             ));
         }
         Ok(TensorExpr::Spectral { base, base_latex })
+    }
+
+    /// Isotropic tensor function `f(T) = Σ f(λ_a) N_a ⊗ N_a` — same
+    /// symmetry requirement as [`Self::spectral`].
+    pub fn spectral_fn(
+        func: &str,
+        base: Rc<TensorExpr>,
+        base_latex: String,
+    ) -> Result<TensorExpr, Error> {
+        if base.order() != 2 {
+            return Err(Error::msg(format!(
+                "`{func}` of a tensor requires a second-order tensor, got order {}",
+                base.order()
+            )));
+        }
+        if !base.is_symmetric() {
+            return Err(Error::msg(format!(
+                "`{func}` of a tensor is defined through the spectral decomposition \
+                 and requires a provably symmetric tensor",
+            )));
+        }
+        Ok(TensorExpr::SpectralFn {
+            func: func.to_string(),
+            base,
+            base_latex,
+        })
     }
 
     pub fn matmul(a: Rc<TensorExpr>, b: Rc<TensorExpr>) -> Result<TensorExpr, Error> {

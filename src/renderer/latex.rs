@@ -134,7 +134,8 @@ fn tprec(expr: &TensorExpr) -> u8 {
         | TensorExpr::Inverse(..)
         | TensorExpr::InverseTranspose(..)
         | TensorExpr::Diff { .. }
-        | TensorExpr::Spectral { .. } => 3,
+        | TensorExpr::Spectral { .. }
+        | TensorExpr::SpectralFn { .. } => 3,
     }
 }
 
@@ -144,6 +145,16 @@ fn superscripted(t: &TensorExpr, sup: &str) -> String {
         _ => paren(render_tensor(t)),
     };
     format!("{base}^{{{sup}}}")
+}
+
+/// Eigenvalue letter for spectral displays: `\bm C` → `c`.
+fn eigen_letter(base_latex: &str) -> String {
+    base_latex
+        .trim()
+        .rsplit(' ')
+        .next()
+        .unwrap_or("t")
+        .to_lowercase()
 }
 
 fn render_tensor(expr: &TensorExpr) -> String {
@@ -195,16 +206,24 @@ fn render_tensor(expr: &TensorExpr) -> String {
         // Σ_{a=1}^{dim} λ_a N_a ⊗ N_a — eigenvalue symbol derived from the
         // decomposed tensor's (lowercased) letter, e.g. C → c_a.
         TensorExpr::Spectral { base, base_latex } => {
-            let letter = base_latex
-                .trim()
-                .rsplit(' ')
-                .next()
-                .unwrap_or("t")
-                .to_lowercase();
             format!(
                 "\\sum_{{a=1}}^{{{}}} {}_a \\, \\bm N_a \\otimes \\bm N_a",
                 base.dim(),
-                letter
+                eigen_letter(base_latex)
+            )
+        }
+        // f(T) = Σ f(λ_a) N_a ⊗ N_a for isotropic f (sqrt, log, exp).
+        TensorExpr::SpectralFn { func, base, base_latex } => {
+            let letter = eigen_letter(base_latex);
+            let f_of = match func.as_str() {
+                "sqrt" => format!("\\sqrt{{{letter}_a}}"),
+                "log" => format!("\\log {letter}_a"),
+                "exp" => format!("e^{{{letter}_a}}"),
+                other => format!("\\operatorname{{{other}}}\\left( {letter}_a \\right)"),
+            };
+            format!(
+                "\\sum_{{a=1}}^{{{}}} {f_of} \\, \\bm N_a \\otimes \\bm N_a",
+                base.dim()
             )
         }
         TensorExpr::Add(a, b) => format!("{} + {}", render_tensor(a), render_tensor(b)),

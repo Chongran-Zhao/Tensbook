@@ -277,7 +277,9 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
         | TensorExpr::Outer(a, b) => t_contains(a, x) || t_contains(b, x),
-        TensorExpr::Spectral { base, .. } => t_contains(base, x),
+        TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
+            t_contains(base, x)
+        }
         TensorExpr::ScalarMul(s, a) => s_contains(s, x) || t_contains(a, x),
     }
 }
