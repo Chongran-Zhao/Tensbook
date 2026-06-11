@@ -18,6 +18,8 @@ pub enum Tok {
     Comma,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Newline,
     Eof,
 }
@@ -131,6 +133,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
                     ',' => Tok::Comma,
                     '(' => Tok::LParen,
                     ')' => Tok::RParen,
+                    '[' => Tok::LBracket,
+                    ']' => Tok::RBracket,
                     _ => {
                         return Err(Error::new(
                             format!("unexpected character `{c}`"),

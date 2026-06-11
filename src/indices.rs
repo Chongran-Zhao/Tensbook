@@ -182,6 +182,9 @@ pub fn abstract_component(
         TensorExpr::BoxTimes(..) => Err(Error::msg(
             "fourth-order ⊠ products have no second-order component form",
         )),
+        TensorExpr::SetElem { .. } | TensorExpr::SumIdx { .. } => Err(Error::msg(
+            "set elements and spectral sums have no component expansion in this phase",
+        )),
         TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only and have no component expansion",
         )),
@@ -246,7 +249,7 @@ pub fn differentiate(terms: &[Term], base: &str, m: &Idx, n: &Idx) -> Result<Vec
 /// Does a scalar expression depend on the tensor variable named `base`?
 fn scalar_depends(s: &ScalarExpr, base: &str) -> bool {
     match s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => false,
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -263,7 +266,8 @@ fn scalar_depends(s: &ScalarExpr, base: &str) -> bool {
 
 fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
     match t {
-        TensorExpr::Identity4 { .. } => false,
+        TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => false,
+        TensorExpr::SumIdx { body, .. } => tensor_mentions(body, base),
         TensorExpr::Var { latex, .. } => component_base(latex) == base,
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
@@ -299,7 +303,7 @@ fn d_scalar_comp(s: &Rc<ScalarExpr>, base: &str, m: &Idx, n: &Idx) -> Result<Vec
         indices: vec![a.clone(), b.clone()],
     };
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => Ok(vec![]),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => Ok(vec![]),
         ScalarExpr::Add(a, b) => {
             let mut out = d_scalar_comp(a, base, m, n)?;
             out.extend(d_scalar_comp(b, base, m, n)?);

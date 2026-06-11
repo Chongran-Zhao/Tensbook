@@ -71,7 +71,9 @@ pub fn simplify_scalar(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
 fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
     // Rebuild children first, then rewrite this node.
     let rebuilt: Rc<TensorExpr> = match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {
+            t.clone()
+        }
         TensorExpr::Transpose(a) => Rc::new(TensorExpr::Transpose(tensor_pass(a, rules))),
         TensorExpr::Inverse(a) => Rc::new(TensorExpr::Inverse(tensor_pass(a, rules))),
         TensorExpr::InverseTranspose(a) => {
@@ -134,6 +136,11 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
         TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
             second: tensor_pass(second, rules),
             fourth: tensor_pass(fourth, rules),
+        }),
+        TensorExpr::SumIdx { index, range, body } => Rc::new(TensorExpr::SumIdx {
+            index: index.clone(),
+            range: *range,
+            body: tensor_pass(body, rules),
         }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(tensor_pass(a, rules))),
     };
@@ -394,7 +401,7 @@ fn numeric_coeff_expr(coeff: f64) -> Rc<ScalarExpr> {
 
 fn scalar_pass(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
     let rebuilt: Rc<ScalarExpr> = match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => s.clone(),
         ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(
             scalar_pass(a, rules),
             scalar_pass(b, rules),

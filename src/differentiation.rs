@@ -151,7 +151,10 @@ fn rewrite_scalar_for_compound(
     let rw = |e: &Rc<ScalarExpr>| rewrite_scalar_for_compound(e, x, a);
     let rwt = |t: &Rc<TensorExpr>| rewrite_tensor_for_compound(t, x, a);
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => s.clone(),
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Eig { .. }
+        | ScalarExpr::SetElem { .. } => s.clone(),
         ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
             name: name.clone(),
             arg: rw(arg),
@@ -220,7 +223,9 @@ fn rewrite_tensor_for_compound(
     let rw = |e: &Rc<ScalarExpr>| rewrite_scalar_for_compound(e, x, a);
     let rwt = |e: &Rc<TensorExpr>| rewrite_tensor_for_compound(e, x, a);
     match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {
+            t.clone()
+        }
         TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
             base: rwt(base),
             scale: scale.clone(),
@@ -250,6 +255,11 @@ fn rewrite_tensor_for_compound(
         TensorExpr::Sub(p, q) => Rc::new(TensorExpr::Sub(rwt(p), rwt(q))),
         TensorExpr::Outer(p, q) => Rc::new(TensorExpr::Outer(rwt(p), rwt(q))),
         TensorExpr::BoxTimes(p, q) => Rc::new(TensorExpr::BoxTimes(rwt(p), rwt(q))),
+        TensorExpr::SumIdx { index, range, body } => Rc::new(TensorExpr::SumIdx {
+            index: index.clone(),
+            range: *range,
+            body: rwt(body),
+        }),
         TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
             base: rwt(base),
             base_latex: base_latex.clone(),
@@ -276,7 +286,7 @@ fn replace_scalar(
     let rs = |e: &Rc<ScalarExpr>| replace_scalar(e, target, replacement);
     let rt = |t: &Rc<TensorExpr>| replace_tensor(t, target, replacement);
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => s.clone(),
         ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(rs(a), rs(b))),
         ScalarExpr::Sub(a, b) => Rc::new(ScalarExpr::Sub(rs(a), rs(b))),
         ScalarExpr::Mul(a, b) => Rc::new(ScalarExpr::Mul(rs(a), rs(b))),
@@ -319,7 +329,9 @@ fn replace_tensor(
     let rs = |s: &Rc<ScalarExpr>| replace_scalar(s, target, replacement);
     let rt = |e: &Rc<TensorExpr>| replace_tensor(e, target, replacement);
     match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {
+            t.clone()
+        }
         TensorExpr::Transpose(a) => Rc::new(TensorExpr::Transpose(rt(a))),
         TensorExpr::Inverse(a) => Rc::new(TensorExpr::Inverse(rt(a))),
         TensorExpr::InverseTranspose(a) => Rc::new(TensorExpr::InverseTranspose(rt(a))),
@@ -337,6 +349,11 @@ fn replace_tensor(
         TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
         TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),
         TensorExpr::BoxTimes(a, b) => Rc::new(TensorExpr::BoxTimes(rt(a), rt(b))),
+        TensorExpr::SumIdx { index, range, body } => Rc::new(TensorExpr::SumIdx {
+            index: index.clone(),
+            range: *range,
+            body: rt(body),
+        }),
         TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
             base: rt(base),
             base_latex: base_latex.clone(),
@@ -373,7 +390,9 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
         return Ok(Some(Rc::new(TensorExpr::Identity4 { dim: x.dim() })));
     }
     match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => Ok(None),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {
+            Ok(None)
+        }
         TensorExpr::Add(a, b) => Ok(tadd(d_tensor(a, x)?, d_tensor(b, x)?)),
         TensorExpr::Sub(a, b) => Ok(tsub(d_tensor(a, x)?, d_tensor(b, x)?)),
         TensorExpr::Neg(a) => Ok(d_tensor(a, x)?.map(tneg)),
@@ -386,6 +405,14 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
             };
             Ok(tadd(da, ds))
         }
+        // ∂(Σ_a body)/∂X = Σ_a ∂body/∂X
+        TensorExpr::SumIdx { index, range, body } => Ok(d_tensor(body, x)?.map(|d| {
+            Rc::new(TensorExpr::SumIdx {
+                index: index.clone(),
+                range: *range,
+                body: d,
+            })
+        })),
         // Aᵀ = A for symmetric A: differentiate through the transpose.
         TensorExpr::Transpose(a) if a.is_symmetric() => d_tensor(a, x),
         // ∂(X⁻¹)_{ij}/∂X_{mn} = −(X⁻¹)_{im}(X⁻¹)_{nj}, i.e. −X⁻¹ ⊠ X⁻ᵀ
@@ -495,7 +522,10 @@ fn find_gen_strain_of(s: &ScalarExpr, x: &Rc<TensorExpr>) -> Result<Option<Rc<Te
 
 fn collect_strains_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, out: &mut Vec<Rc<TensorExpr>>) {
     match s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => {}
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Eig { .. }
+        | ScalarExpr::SetElem { .. } => {}
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -524,7 +554,8 @@ fn collect_strains_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>, out: &mut Vec<
         }
     }
     match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => {}
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {}
+        TensorExpr::SumIdx { body, .. } => collect_strains_tensor(body, x, out),
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -568,7 +599,7 @@ fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExp
     let one = || Rc::new(ScalarExpr::Num(1.0));
     match &**s {
         ScalarExpr::Sym { name: n, .. } => Ok((n == name).then(one)),
-        ScalarExpr::Num(_) => Ok(None),
+        ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => Ok(None),
         ScalarExpr::Add(a, b) => Ok(
             match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
                 (None, None) => None,
@@ -684,7 +715,8 @@ fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExp
 /// Does a scalar symbol (by name) occur anywhere inside a tensor expression?
 fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
     match t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => false,
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => false,
+        TensorExpr::SumIdx { body, .. } => tensor_mentions_scalar(body, name),
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -732,7 +764,7 @@ fn scale_mentions_scalar(scale: &crate::tensor::Scale, name: &str) -> bool {
 pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
     match s {
         ScalarExpr::Sym { name: n, .. } => n == name,
-        ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => false,
+        ScalarExpr::Num(_) | ScalarExpr::Eig { .. } | ScalarExpr::SetElem { .. } => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -756,6 +788,8 @@ pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
 /// Collect the names of tensor variables appearing in `x`.
 fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
     match t {
+        TensorExpr::SetElem { .. } => {}
+        TensorExpr::SumIdx { body, .. } => tensor_var_names(body, out),
         TensorExpr::Var { name, .. } => {
             if !out.contains(name) {
                 out.push(name.clone());
@@ -807,7 +841,10 @@ fn check_independence_tensor(t: &TensorExpr, x: &Rc<TensorExpr>) -> Result<(), E
 
 fn walk_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<(), Error> {
     match s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => Ok(()),
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Eig { .. }
+        | ScalarExpr::SetElem { .. } => Ok(()),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -833,7 +870,8 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
         return Ok(()); // an occurrence of X itself: opaque, don't descend
     }
     match t {
-        TensorExpr::Identity4 { .. } => Ok(()),
+        TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => Ok(()),
+        TensorExpr::SumIdx { body, .. } => walk_tensor(body, x, vars),
         TensorExpr::Var { name, .. } => {
             if vars.contains(name) {
                 Err(Error::msg(format!(
@@ -884,7 +922,7 @@ fn d_scalar(s: &Rc<ScalarExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
         return Ok(None);
     }
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => Ok(None),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => Ok(None),
         ScalarExpr::Add(a, b) => Ok(tadd(d_scalar(a, x)?, d_scalar(b, x)?)),
         ScalarExpr::Sub(a, b) => Ok(tsub(d_scalar(a, x)?, d_scalar(b, x)?)),
         ScalarExpr::Neg(a) => Ok(d_scalar(a, x)?.map(tneg)),
@@ -1142,7 +1180,8 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         return true;
     }
     match t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => false,
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => false,
+        TensorExpr::SumIdx { body, .. } => t_contains(body, x),
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
@@ -1164,7 +1203,7 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
 
 pub fn s_contains(s: &ScalarExpr, x: &TensorExpr) -> bool {
     match s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => false,
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)

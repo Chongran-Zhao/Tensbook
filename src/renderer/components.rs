@@ -114,7 +114,9 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
         | TensorExpr::SpectralFn { .. }
         | TensorExpr::GenStrain { .. }
         | TensorExpr::QTensor { .. }
-        | TensorExpr::DdotTQ { .. } => {
+        | TensorExpr::DdotTQ { .. }
+        | TensorExpr::SetElem { .. }
+        | TensorExpr::SumIdx { .. } => {
             unreachable!("non-expandable node reached entry(); expandable() must screen first")
         }
     }
@@ -141,6 +143,10 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
         TensorExpr::BoxTimes(..) => Err(Error::msg(
             "component expansion of fourth-order ⊠ products is not supported \
              in matrix mode; use mode=symbol",
+        )),
+        TensorExpr::SetElem { .. } | TensorExpr::SumIdx { .. } => Err(Error::msg(
+            "component expansion of set elements and spectral sums is not \
+             supported in matrix mode; use mode=symbol",
         )),
         TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only; use mode=symbol",

@@ -51,6 +51,12 @@ pub enum Expr {
         args: Vec<Expr>,
         kwargs: Vec<(String, Expr)>,
     },
+    /// Set element access, e.g. `lambda[a]` or `N[1]`. The index is an
+    /// abstract index name (Ident) or a concrete position (Num).
+    Index {
+        target: Box<Expr>,
+        index: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

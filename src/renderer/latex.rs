@@ -29,7 +29,8 @@ fn sprec(expr: &ScalarExpr) -> u8 {
         ScalarExpr::Sym { .. }
         | ScalarExpr::Num(_)
         | ScalarExpr::Div(..)
-        | ScalarExpr::Eig { .. } => 4,
+        | ScalarExpr::Eig { .. }
+        | ScalarExpr::SetElem { .. } => 4,
     }
 }
 
@@ -66,9 +67,10 @@ fn render_scalar(expr: &ScalarExpr) -> String {
         ScalarExpr::Div(a, b) => render_fraction(a, b),
         ScalarExpr::Pow(base, exp) => {
             let b = match &**base {
-                ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => {
-                    render_scalar(base)
-                }
+                ScalarExpr::Sym { .. }
+                | ScalarExpr::Num(_)
+                | ScalarExpr::Eig { .. }
+                | ScalarExpr::SetElem { .. } => render_scalar(base),
                 _ => paren(render_scalar(base)),
             };
             format!("{{{b}}}^{{{}}}", render_scalar(exp))
@@ -83,9 +85,10 @@ fn render_scalar(expr: &ScalarExpr) -> String {
         }
         ScalarExpr::Log(a) => {
             let inner = match &**a {
-                ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => {
-                    render_scalar(a)
-                }
+                ScalarExpr::Sym { .. }
+                | ScalarExpr::Num(_)
+                | ScalarExpr::Eig { .. }
+                | ScalarExpr::SetElem { .. } => render_scalar(a),
                 _ => paren(render_scalar(a)),
             };
             format!("\\log {inner}")
@@ -97,9 +100,10 @@ fn render_scalar(expr: &ScalarExpr) -> String {
                 "exp" => format!("e^{{{inner}}}"),
                 "sinh" | "cosh" | "tanh" | "sin" | "cos" | "tan" => {
                     let wrapped = match &**arg {
-                        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => {
-                            inner
-                        }
+                        ScalarExpr::Sym { .. }
+                        | ScalarExpr::Num(_)
+                        | ScalarExpr::Eig { .. }
+                        | ScalarExpr::SetElem { .. } => inner,
                         _ => paren(inner),
                     };
                     format!("\\{name} {wrapped}")
@@ -108,6 +112,9 @@ fn render_scalar(expr: &ScalarExpr) -> String {
             }
         }
         ScalarExpr::Eig { symbol, index, .. } => format!("{symbol}_{{{index}}}"),
+        ScalarExpr::SetElem { latex, index, .. } => {
+            format!("{{{latex}}}_{{{}}}", index.latex())
+        }
         ScalarExpr::SpecSum { body, index, dim } => {
             format!("\\sum_{{{index}=1}}^{{{dim}}} {}", render_scalar(body))
         }
@@ -277,8 +284,9 @@ fn tprec(expr: &TensorExpr) -> u8 {
         | TensorExpr::Spectral { .. }
         | TensorExpr::SpectralFn { .. }
         | TensorExpr::GenStrain { .. }
-        | TensorExpr::QTensor { .. } => 3,
-        TensorExpr::DdotTQ { .. } => 1,
+        | TensorExpr::QTensor { .. }
+        | TensorExpr::SetElem { .. } => 3,
+        TensorExpr::DdotTQ { .. } | TensorExpr::SumIdx { .. } => 1,
     }
 }
 
@@ -303,6 +311,12 @@ fn eigen_letter(base_latex: &str) -> String {
 fn render_tensor(expr: &TensorExpr) -> String {
     match expr {
         TensorExpr::Var { latex, .. } => latex.clone(),
+        TensorExpr::SetElem { latex, index, .. } => {
+            format!("{{{latex}}}_{{{}}}", index.latex())
+        }
+        TensorExpr::SumIdx { index, range, body } => {
+            format!("\\sum_{{{index}=1}}^{{{range}}} {}", render_tensor(body))
+        }
         TensorExpr::Transpose(t) => superscripted(t, "\\mathsf{T}"),
         TensorExpr::Inverse(t) => superscripted(t, "-1"),
         TensorExpr::InverseTranspose(t) => superscripted(t, "-\\mathsf{T}"),

@@ -165,7 +165,10 @@ fn principal_scalar(
     };
     let dim = g.dim();
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => Ok(s.clone()),
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Eig { .. }
+        | ScalarExpr::SetElem { .. } => Ok(s.clone()),
         ScalarExpr::Tr(t) if t == g => Ok(Rc::new(ScalarExpr::SpecSum {
             body: scale.apply(&lam_b(base)),
             index: "b".to_string(),

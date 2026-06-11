@@ -7,6 +7,31 @@
 use crate::tensor::TensorExpr;
 use std::rc::Rc;
 
+/// Index of a set element: an abstract index name (`lambda[a]`) or a
+/// concrete 1-based position (`lambda[1]`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetIndex {
+    Sym(String),
+    Num(usize),
+}
+
+impl SetIndex {
+    pub fn latex(&self) -> String {
+        match self {
+            SetIndex::Sym(s) => s.clone(),
+            SetIndex::Num(n) => n.to_string(),
+        }
+    }
+
+    /// The abstract index name, if any.
+    pub fn sym(&self) -> Option<&str> {
+        match self {
+            SetIndex::Sym(s) => Some(s),
+            SetIndex::Num(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScalarExpr {
     /// A named symbolic scalar with its LaTeX display, e.g. `Sym("mu", "\mu")`.
@@ -47,6 +72,13 @@ pub enum ScalarExpr {
         body: Rc<ScalarExpr>,
         index: String,
         dim: usize,
+    },
+    /// Element of a user-declared scalar set: `lambda[a]` for
+    /// `lambda = ScalarSet("\lambda", dim=3)`. `set_dim` is the family size.
+    SetElem {
+        latex: String,
+        index: SetIndex,
+        set_dim: usize,
     },
 }
 

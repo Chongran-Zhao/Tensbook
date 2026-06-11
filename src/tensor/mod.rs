@@ -205,6 +205,22 @@ pub enum TensorExpr {
     /// Scalar times tensor.
     ScalarMul(Rc<ScalarExpr>, Rc<TensorExpr>),
     Neg(Rc<TensorExpr>),
+    /// Element of a user-declared tensor set: `N[a]` for
+    /// `N = VectorSet("\bm N", dim=3)`. `set_dim` is the family size.
+    SetElem {
+        latex: String,
+        order: usize,
+        dim: usize,
+        index: crate::symbolic::SetIndex,
+        set_dim: usize,
+    },
+    /// Sum over an abstract set index: `Σ_{index=1}^{range} body`, written
+    /// `sum(body, index)` in the DSL. Order/dim are the body's.
+    SumIdx {
+        index: String,
+        range: usize,
+        body: Rc<TensorExpr>,
+    },
 }
 
 impl TensorExpr {
@@ -224,6 +240,8 @@ impl TensorExpr {
             TensorExpr::MatMul(a, _) => a.order(), // 2 in MVP
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.order(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.order(),
+            TensorExpr::SetElem { order, .. } => *order,
+            TensorExpr::SumIdx { body, .. } => body.order(),
         }
     }
 
@@ -243,6 +261,8 @@ impl TensorExpr {
             TensorExpr::MatMul(a, _) => a.dim(),
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.dim(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.dim(),
+            TensorExpr::SetElem { dim, .. } => *dim,
+            TensorExpr::SumIdx { body, .. } => body.dim(),
         }
     }
 

@@ -53,6 +53,10 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         TensorExpr::DdotTQ { fourth, .. } => matches!(&**fourth, TensorExpr::QTensor { .. }),
         // Order-4: outside the scope of this order-2 predicate.
         TensorExpr::QTensor { .. } | TensorExpr::BoxTimes(..) => false,
+        // Set elements are opaque symbols; nothing is provable about them.
+        TensorExpr::SetElem { .. } => false,
+        // A sum of symmetric terms is symmetric.
+        TensorExpr::SumIdx { body, .. } => is_symmetric(body),
     }
 }
 

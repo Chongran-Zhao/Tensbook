@@ -9,7 +9,7 @@
 //! multiplicative := unary (("*" | "/") unary)*
 //! unary     := "-" unary | power
 //! power     := postfix ("^" unary)?          # right associative
-//! postfix   := primary ("." IDENT)*
+//! postfix   := primary ("." IDENT | "[" expr "]")*
 //! primary   := NUM | STR | true | false | IDENT | IDENT "(" callargs ")" | "(" expr ")"
 //! callargs  := (expr | IDENT "=" expr) ("," ...)*
 //! ```
@@ -177,21 +177,35 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Result<Expr, Error> {
         let mut expr = self.parse_primary()?;
-        while matches!(self.peek(), Tok::Dot) {
-            self.next();
-            match self.next() {
-                Tok::Ident(name) => {
-                    expr = Expr::Field {
+        loop {
+            match self.peek() {
+                Tok::Dot => {
+                    self.next();
+                    match self.next() {
+                        Tok::Ident(name) => {
+                            expr = Expr::Field {
+                                target: Box::new(expr),
+                                name,
+                            };
+                        }
+                        tok => {
+                            return Err(Error::new(
+                                format!("expected property name after `.`, found {tok:?}"),
+                                Some(self.line()),
+                            ))
+                        }
+                    }
+                }
+                Tok::LBracket => {
+                    self.next();
+                    let index = self.parse_expr()?;
+                    self.expect(&Tok::RBracket, "`]`")?;
+                    expr = Expr::Index {
                         target: Box::new(expr),
-                        name,
+                        index: Box::new(index),
                     };
                 }
-                tok => {
-                    return Err(Error::new(
-                        format!("expected property name after `.`, found {tok:?}"),
-                        Some(self.line()),
-                    ))
-                }
+                _ => break,
             }
         }
         Ok(expr)

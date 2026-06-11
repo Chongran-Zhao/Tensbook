@@ -356,7 +356,9 @@ fn rebuild_tensor(
     rs: &impl Fn(&Rc<ScalarExpr>) -> Rc<ScalarExpr>,
 ) -> Rc<TensorExpr> {
     match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {
+            t.clone()
+        }
         TensorExpr::Transpose(a) => Rc::new(TensorExpr::Transpose(rt(a))),
         TensorExpr::Inverse(a) => Rc::new(TensorExpr::Inverse(rt(a))),
         TensorExpr::InverseTranspose(a) => Rc::new(TensorExpr::InverseTranspose(rt(a))),
@@ -398,6 +400,11 @@ fn rebuild_tensor(
             fourth: rt(fourth),
         }),
         TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(rs(s), rt(a))),
+        TensorExpr::SumIdx { index, range, body } => Rc::new(TensorExpr::SumIdx {
+            index: index.clone(),
+            range: *range,
+            body: rt(body),
+        }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),
     }
 }
@@ -408,7 +415,7 @@ fn rebuild_scalar(
     rs: &impl Fn(&Rc<ScalarExpr>) -> Rc<ScalarExpr>,
 ) -> Rc<ScalarExpr> {
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => s.clone(),
         ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(rs(a), rs(b))),
         ScalarExpr::Sub(a, b) => Rc::new(ScalarExpr::Sub(rs(a), rs(b))),
         ScalarExpr::Mul(a, b) => Rc::new(ScalarExpr::Mul(rs(a), rs(b))),

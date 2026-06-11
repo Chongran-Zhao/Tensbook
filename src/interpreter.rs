@@ -52,7 +52,18 @@ pub struct Interpreter {
     /// declaration order. A scalar expression mentioning exactly one of
     /// these is a function of it and can be applied with call syntax.
     fn_vars: Vec<String>,
+    /// Indexed families declared via `ScalarSet("...", dim=n)` /
+    /// `VectorSet("...", dim=n)`, keyed by variable name. Elements are
+    /// accessed as `name[a]` (abstract index) or `name[1]` (concrete).
+    sets: HashMap<String, SetDecl>,
     outputs: Vec<Output>,
+}
+
+struct SetDecl {
+    latex: String,
+    /// `true` for VectorSet (order-1 elements), `false` for ScalarSet.
+    vector: bool,
+    dim: usize,
 }
 
 impl Interpreter {
@@ -94,6 +105,18 @@ impl Interpreter {
     fn exec(&mut self, stmt: &Stmt) -> Result<(), Error> {
         match stmt {
             Stmt::Assign { name, expr, .. } => {
+                // Set declarations bind into the sets registry, not the
+                // value environment: only `name[index]` elements are values.
+                if let Expr::Call {
+                    callee,
+                    args,
+                    kwargs,
+                } = expr
+                {
+                    if callee == "ScalarSet" || callee == "VectorSet" {
+                        return self.declare_set(name, callee, args, kwargs);
+                    }
+                }
                 let value = self.eval(expr)?;
                 // A direct Scalar("...")/Tensor("...") declaration also
                 // registers the display label for this variable name.
@@ -182,6 +205,7 @@ impl Interpreter {
                 let r = self.eval(rhs)?;
                 self.eval_binary(*op, l, r)
             }
+            Expr::Index { target, index } => self.eval_index(target, index),
             Expr::Call {
                 callee,
                 args,
@@ -282,6 +306,11 @@ impl Interpreter {
             "Scalar" => self.builtin_scalar(args, kwargs),
             "Var" => self.builtin_var(args, kwargs),
             "Tensor" => self.builtin_tensor(args, kwargs),
+            "sum" => self.builtin_sum(args, kwargs),
+            "ScalarSet" | "VectorSet" => Err(Error::msg(format!(
+                "`{callee}` declares a set and must be used in an assignment: \
+                 name = {callee}(\"<latex>\", dim=<n>)"
+            ))),
             "det" | "tr" => {
                 let t = self.expect_tensor_arg(callee, args, kwargs)?;
                 if t.order() != 2 {
@@ -658,6 +687,127 @@ impl Interpreter {
         })))
     }
 
+    /// `lambda = ScalarSet("\lambda", dim=3)` / `N = VectorSet("\bm N", dim=3)`.
+    fn declare_set(
+        &mut self,
+        name: &str,
+        callee: &str,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<(), Error> {
+        let latex = match args {
+            [Expr::Str(s)] => s.clone(),
+            _ => {
+                return Err(Error::msg(format!(
+                    "`{callee}` expects a string LaTeX name: {callee}(\"<latex>\", dim=<n>)"
+                )))
+            }
+        };
+        let mut dim: Option<usize> = None;
+        for (key, value) in kwargs {
+            match key.as_str() {
+                "dim" => dim = Some(expect_usize(value, "dim")?),
+                other => return Err(Error::msg(format!("unknown {callee} keyword `{other}`"))),
+            }
+        }
+        let dim = dim.ok_or_else(|| Error::msg(format!("`{callee}` requires `dim=<n>`")))?;
+        self.labels.insert(name.to_string(), latex.clone());
+        self.sets.insert(
+            name.to_string(),
+            SetDecl {
+                latex,
+                vector: callee == "VectorSet",
+                dim,
+            },
+        );
+        Ok(())
+    }
+
+    /// `lambda[a]` / `N[1]` — a set element.
+    fn eval_index(&mut self, target: &Expr, index: &Expr) -> Result<Value, Error> {
+        let Expr::Ident(set_name) = target else {
+            return Err(Error::msg(
+                "only declared sets can be indexed (e.g. lambda[a])",
+            ));
+        };
+        let decl = self.sets.get(set_name).ok_or_else(|| {
+            Error::msg(format!(
+                "`{set_name}` is not a declared set; declare it with \
+                 ScalarSet(...)/VectorSet(...)"
+            ))
+        })?;
+        let idx = match index {
+            Expr::Ident(i) => crate::symbolic::SetIndex::Sym(i.clone()),
+            Expr::Num(n) if n.fract() == 0.0 && *n >= 1.0 && (*n as usize) <= decl.dim => {
+                crate::symbolic::SetIndex::Num(*n as usize)
+            }
+            Expr::Num(n) => {
+                return Err(Error::msg(format!(
+                    "index {n} is out of range for `{set_name}` (1..={})",
+                    decl.dim
+                )))
+            }
+            _ => {
+                return Err(Error::msg(
+                    "a set index must be an index name or an integer literal",
+                ))
+            }
+        };
+        if decl.vector {
+            Ok(Value::Tensor(Rc::new(TensorExpr::SetElem {
+                latex: decl.latex.clone(),
+                order: 1,
+                dim: decl.dim,
+                index: idx,
+                set_dim: decl.dim,
+            })))
+        } else {
+            Ok(Value::Scalar(Rc::new(ScalarExpr::SetElem {
+                latex: decl.latex.clone(),
+                index: idx,
+                set_dim: decl.dim,
+            })))
+        }
+    }
+
+    /// `sum(body, a)` — sum the body over the abstract set index `a`.
+    fn builtin_sum(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
+        if args.len() != 2 || !kwargs.is_empty() {
+            return Err(Error::msg(
+                "`sum` expects two arguments: sum(<expr>, <index>)",
+            ));
+        }
+        let Expr::Ident(index) = &args[1] else {
+            return Err(Error::msg("the second argument of `sum` is an index name"));
+        };
+        match self.eval(&args[0])? {
+            Value::Tensor(t) => {
+                let range = tensor_index_range(&t, index).ok_or_else(|| {
+                    Error::msg(format!(
+                        "the summand does not mention any set element with index `{index}`"
+                    ))
+                })?;
+                Ok(Value::Tensor(Rc::new(TensorExpr::SumIdx {
+                    index: index.clone(),
+                    range,
+                    body: t,
+                })))
+            }
+            Value::Scalar(s) => {
+                let range = scalar_index_range(&s, index).ok_or_else(|| {
+                    Error::msg(format!(
+                        "the summand does not mention any set element with index `{index}`"
+                    ))
+                })?;
+                Ok(Value::Scalar(Rc::new(ScalarExpr::SpecSum {
+                    body: s,
+                    index: index.clone(),
+                    dim: range,
+                })))
+            }
+        }
+    }
+
     /// The declared `Var` arguments that occur free in `body`.
     fn free_fn_vars(&self, body: &ScalarExpr) -> Vec<String> {
         self.fn_vars
@@ -958,6 +1108,84 @@ fn default_tensor_label(name: &str, tensor: &Rc<TensorExpr>) -> String {
 
 fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
     Value::Tensor(simplify_tensor(&t, RuleSet::Continuum))
+}
+
+/// The family size of the (first) set element carrying abstract index
+/// `idx` inside a tensor expression, if any.
+fn tensor_index_range(t: &TensorExpr, idx: &str) -> Option<usize> {
+    use crate::symbolic::SetIndex;
+    match t {
+        TensorExpr::SetElem {
+            index: SetIndex::Sym(i),
+            set_dim,
+            ..
+        } if i == idx => Some(*set_dim),
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => None,
+        TensorExpr::Transpose(a)
+        | TensorExpr::Inverse(a)
+        | TensorExpr::InverseTranspose(a)
+        | TensorExpr::Neg(a) => tensor_index_range(a, idx),
+        TensorExpr::Diff { num, den, .. } => {
+            tensor_index_range(num, idx).or_else(|| tensor_index_range(den, idx))
+        }
+        TensorExpr::MatMul(a, b)
+        | TensorExpr::Add(a, b)
+        | TensorExpr::Sub(a, b)
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => {
+            tensor_index_range(a, idx).or_else(|| tensor_index_range(b, idx))
+        }
+        TensorExpr::Spectral { base, .. }
+        | TensorExpr::SpectralFn { base, .. }
+        | TensorExpr::GenStrain { base, .. } => tensor_index_range(base, idx),
+        TensorExpr::QTensor { strain } => tensor_index_range(strain, idx),
+        TensorExpr::DdotTQ { second, fourth } => {
+            tensor_index_range(second, idx).or_else(|| tensor_index_range(fourth, idx))
+        }
+        TensorExpr::SumIdx { index, body, .. } => {
+            // An inner sum over the same index binds it.
+            if index == idx {
+                None
+            } else {
+                tensor_index_range(body, idx)
+            }
+        }
+        TensorExpr::ScalarMul(s, a) => {
+            scalar_index_range(s, idx).or_else(|| tensor_index_range(a, idx))
+        }
+    }
+}
+
+fn scalar_index_range(s: &ScalarExpr, idx: &str) -> Option<usize> {
+    use crate::symbolic::SetIndex;
+    match s {
+        ScalarExpr::SetElem {
+            index: SetIndex::Sym(i),
+            set_dim,
+            ..
+        } if i == idx => Some(*set_dim),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => None,
+        ScalarExpr::Eig { base, .. } => tensor_index_range(base, idx),
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Pow(a, b) => {
+            scalar_index_range(a, idx).or_else(|| scalar_index_range(b, idx))
+        }
+        ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
+            scalar_index_range(a, idx)
+        }
+        ScalarExpr::SpecSum { index, body, .. } => {
+            if index == idx {
+                None
+            } else {
+                scalar_index_range(body, idx)
+            }
+        }
+        ScalarExpr::Det(t) | ScalarExpr::Tr(t) => tensor_index_range(t, idx),
+        ScalarExpr::Ddot(a, b) => tensor_index_range(a, idx).or_else(|| tensor_index_range(b, idx)),
+    }
 }
 
 fn kind(v: &Value) -> &'static str {
