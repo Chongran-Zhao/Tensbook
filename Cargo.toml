@@ -1,0 +1,17 @@
+[workspace]
+members = [".", "src-tauri"]
+
+[package]
+name = "tensorforge"
+version = "0.1.0"
+edition = "2021"
+description = "A symbolic tensor algebra system for continuum mechanics (MVP: .tens DSL interpreter + LaTeX renderer)"
+license = "MIT"
+
+[[bin]]
+name = "tensorforge"
+path = "src/main.rs"
+
+[lib]
+name = "tensorforge"
+path = "src/lib.rs"
