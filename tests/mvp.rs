@@ -183,6 +183,41 @@ fn neo_hookean_example_runs_end_to_end() {
 }
 
 #[test]
+fn declared_label_survives_reassignment() {
+    // I1 = Scalar("I_1") declares the display label; the later
+    // I1 = tr(C) reassignment keeps using it on the display LHS.
+    let src = r#"
+I1 = Scalar("I_1")
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+I1 = tr(C)
+display(I1, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    assert!(
+        outputs[0].latex.starts_with("I_1 = "),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
+fn underived_single_char_tensor_gets_bold_lhs() {
+    // C was never declared with a label: the LHS is synthesized as \bm C.
+    let src = r#"
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+display(C, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    assert!(
+        outputs[0].latex.starts_with("\\bm C = "),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
 fn type_errors_are_reported() {
     // scalar has no transpose
     assert!(run_source(r#"mu = Scalar("\mu")"#).is_ok());

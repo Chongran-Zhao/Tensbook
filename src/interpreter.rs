@@ -35,8 +35,11 @@ pub struct Output {
 #[derive(Default)]
 pub struct Interpreter {
     env: HashMap<String, Value>,
-    /// The display name (`C`, `W`, ...) each value was last assigned to,
-    /// keyed by source variable name, used in display headers and `\bm C = ...`.
+    /// LaTeX display labels declared via `Scalar("...")` / `Tensor("...")`,
+    /// keyed by variable name. Labels survive reassignment, so
+    /// `I1 = Scalar("I_1")` followed by `I1 = tr(C)` still displays as
+    /// `I_1 = ...`.
+    labels: HashMap<String, String>,
     outputs: Vec<Output>,
 }
 
@@ -62,6 +65,15 @@ impl Interpreter {
         match stmt {
             Stmt::Assign { name, expr } => {
                 let value = self.eval(expr)?;
+                // A direct Scalar("...")/Tensor("...") declaration also
+                // registers the display label for this variable name.
+                if let Expr::Call { callee, args, .. } = expr {
+                    if (callee == "Scalar" || callee == "Tensor") && !args.is_empty() {
+                        if let Expr::Str(latex) = &args[0] {
+                            self.labels.insert(name.clone(), latex.clone());
+                        }
+                    }
+                }
                 self.env.insert(name.clone(), value);
                 Ok(())
             }
@@ -601,12 +613,20 @@ impl Interpreter {
         }
     }
 
-    /// LaTeX for the left-hand side of `display(X, ...)`: a bold symbol made
-    /// from the variable name for tensors (`C` -> `\bm C`), the plain name
-    /// otherwise. Multi-character tensor names (e.g. `dCdF`) stay plain —
-    /// `\bm dCdF` would bold only the `d`.
+    /// LaTeX for the left-hand side of `display(X, ...)`, in order of
+    /// preference:
+    /// 1. the label declared via `Scalar("...")`/`Tensor("...")` for this
+    ///    name (kept across reassignment);
+    /// 2. a bold symbol synthesized from a single-character tensor name
+    ///    (`C` -> `\bm C`);
+    /// 3. the plain variable name (multi-character names stay plain —
+    ///    `\bm dCdF` would bold only the `d`).
     fn display_lhs(&self, name: &str) -> Option<String> {
-        match self.env.get(name)? {
+        let value = self.env.get(name)?;
+        if let Some(label) = self.labels.get(name) {
+            return Some(label.clone());
+        }
+        match value {
             Value::Tensor(_) if name.chars().count() == 1 => Some(format!("\\bm {name}")),
             _ => Some(name.to_string()),
         }
