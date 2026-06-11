@@ -1,28 +1,30 @@
 # Homebrew formula for the TensorForge CLI.
 #
 # Not yet published — this is a template for when the repository has a
-# tagged release. To use locally:
+# tagged release (v0.1.0 exists locally; push tags first). To use locally:
 #   brew install --build-from-source ./packaging/tensorforge.rb
 class Tensorforge < Formula
   desc "Symbolic tensor algebra for continuum mechanics (.tens DSL)"
   homepage "https://github.com/Chongran-Zhao/TensorForge"
   url "https://github.com/Chongran-Zhao/TensorForge/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "" # fill in after tagging a release: shasum -a 256 <tarball>
+  sha256 "" # fill in after pushing the tag: curl -L <url> | shasum -a 256
   license "MIT"
 
   depends_on "rust" => :build
 
   def install
+    # The repo is a workspace; install the root (engine + CLI) package.
     system "cargo", "install", *std_cargo_args
   end
 
   test do
     (testpath/"t.tens").write <<~EOS
-      F = Tensor("\\bm F", order=2, dim=3)
+      F = Tensor("\\\\bm F", order=2, dim=3)
       C = F.T * F
       export(C, format=latex)
     EOS
     output = shell_output("#{bin}/tensorforge run #{testpath}/t.tens")
-    assert_match "\\bm F^{\\mathsf{T}} \\bm F", output
+    assert_match "\\\\bm F^{\\\\mathsf{T}} \\\\bm F", output
+    assert_match version.to_s, shell_output("#{bin}/tensorforge --version")
   end
 end

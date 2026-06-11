@@ -95,7 +95,9 @@ function setCurrentPath(path) {
   filenameEl.title = path ?? "";
 }
 
-editor.value = localStorage.getItem("tensorforge.source") ?? DEFAULT_SOURCE;
+// v2 key: the bundled template changed to the Hill–CR derivation; older
+// cached sources under the v1 key are intentionally not migrated.
+editor.value = localStorage.getItem("tensorforge.source.v2") ?? DEFAULT_SOURCE;
 setupCompletion(editor);
 
 async function openFile() {
@@ -104,7 +106,7 @@ async function openFile() {
   if (!opened) return; // cancelled
   editor.value = opened.source;
   setCurrentPath(opened.path);
-  localStorage.setItem("tensorforge.source", editor.value);
+  localStorage.setItem("tensorforge.source.v2", editor.value);
   scheduleLiveRun();
 }
 
@@ -192,7 +194,7 @@ function renderOutputs(outputs) {
 }
 
 async function run() {
-  localStorage.setItem("tensorforge.source", editor.value);
+  localStorage.setItem("tensorforge.source.v2", editor.value);
   if (!invoke) {
     output.innerHTML =
       '<div class="error">Tauri bridge unavailable — open this UI through the desktop app.</div>';
@@ -216,7 +218,7 @@ let liveTimer = null;
 let lastGoodShown = false;
 
 async function liveRun() {
-  localStorage.setItem("tensorforge.source", editor.value);
+  localStorage.setItem("tensorforge.source.v2", editor.value);
   if (!invoke) return;
   const result = await invoke("run_tens", { source: editor.value });
   if (!result.ok) {
