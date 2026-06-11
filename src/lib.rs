@@ -23,6 +23,7 @@ pub mod interpreter;
 pub mod parser;
 pub mod renderer;
 pub mod simplifier;
+pub mod substitute;
 pub mod symbolic;
 pub mod tensor;
 

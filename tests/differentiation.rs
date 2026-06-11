@@ -21,8 +21,9 @@ I1 = tr(C)
 fn djdf_is_j_f_inverse_transpose() {
     let src = format!("{PRELUDE}\ndJdF = diff(J, F)\ndisplay(dJdF, mode=symbol)");
     let outputs = run_source(&src).unwrap();
+    // det F is back-substituted to J in the display.
     assert!(
-        outputs[0].latex.contains("\\det \\bm F \\, \\bm F^{-\\mathsf{T}}"),
+        outputs[0].latex.contains("J \\, \\bm F^{-\\mathsf{T}}"),
         "expected J F^-T, got: {}",
         outputs[0].latex
     );
@@ -54,7 +55,7 @@ fn first_piola_stress_neo_hookean() {
         "missing mu F^-T in: {latex}"
     );
     assert!(
-        latex.contains("\\lambda \\, \\log \\left( \\det \\bm F \\right) \\, \\bm F^{-\\mathsf{T}}"),
+        latex.contains("\\lambda \\, \\log J \\, \\bm F^{-\\mathsf{T}}"),
         "missing lambda log(J) F^-T in: {latex}"
     );
 }

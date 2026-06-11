@@ -31,6 +31,10 @@ pub struct Output {
     pub header: String,
     /// LaTeX payload.
     pub latex: String,
+    /// 1-based source line of the display/export statement.
+    pub line: usize,
+    /// `Some(message)` if this statement failed (per-block error recovery).
+    pub error: Option<String>,
 }
 
 #[derive(Default)]
@@ -41,6 +45,9 @@ pub struct Interpreter {
     /// `I1 = Scalar("I_1")` followed by `I1 = tr(C)` still displays as
     /// `I_1 = ...`.
     labels: HashMap<String, String>,
+    /// Definitions for display-time back-substitution, in insertion order:
+    /// `C = F.T * F` lets later displays show `\bm C` instead of `FᵀF`.
+    defs: Vec<crate::substitute::Def>,
     outputs: Vec<Output>,
 }
 
@@ -49,12 +56,30 @@ impl Interpreter {
         Self::default()
     }
 
-    /// Run a whole program; returns the outputs of all display/export calls.
+    /// Run a whole program, stopping at the first error (CLI behavior).
     pub fn run(&mut self, stmts: &[Stmt]) -> Result<Vec<Output>, Error> {
         for stmt in stmts {
-            self.exec(stmt)?;
+            self.exec(stmt)
+                .map_err(|e| Error::new(e.message, e.line.or(Some(stmt.line()))))?;
         }
         Ok(std::mem::take(&mut self.outputs))
+    }
+
+    /// Run a whole program with per-statement error recovery (UI behavior):
+    /// a failing statement produces an error Output (tagged with its line)
+    /// and execution continues with the next statement.
+    pub fn run_lenient(&mut self, stmts: &[Stmt]) -> Vec<Output> {
+        for stmt in stmts {
+            if let Err(e) = self.exec(stmt) {
+                self.outputs.push(Output {
+                    header: format!("line {}", e.line.unwrap_or(stmt.line())),
+                    latex: String::new(),
+                    line: e.line.unwrap_or(stmt.line()),
+                    error: Some(e.message),
+                });
+            }
+        }
+        std::mem::take(&mut self.outputs)
     }
 
     /// Look up a variable's evaluated value.
@@ -64,7 +89,7 @@ impl Interpreter {
 
     fn exec(&mut self, stmt: &Stmt) -> Result<(), Error> {
         match stmt {
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, .. } => {
                 let value = self.eval(expr)?;
                 // A direct Scalar("...")/Tensor("...") declaration also
                 // registers the display label for this variable name.
@@ -75,17 +100,40 @@ impl Interpreter {
                         }
                     }
                 }
+                // Register compound definitions for display-time
+                // back-substitution (declared leaves substitute trivially
+                // and are skipped).
+                let is_leaf = matches!(
+                    &value,
+                    Value::Tensor(t) if matches!(&**t, TensorExpr::Var { .. })
+                ) || matches!(
+                    &value,
+                    Value::Scalar(s) if matches!(&**s, ScalarExpr::Sym { .. } | ScalarExpr::Num(_))
+                );
+                if !is_leaf {
+                    if let Some(latex) = self.display_label(name, &value) {
+                        // Re-registering a name drops its previous definition.
+                        self.defs.retain(|d| d.latex != latex);
+                        self.defs.push(crate::substitute::Def {
+                            latex,
+                            value: value.clone(),
+                        });
+                    }
+                }
                 self.env.insert(name.clone(), value);
                 Ok(())
             }
-            Stmt::Expr(Expr::Call {
-                callee,
-                args,
-                kwargs,
-            }) if callee == "display" || callee == "export" => {
-                self.exec_output(callee, args, kwargs)
+            Stmt::Expr(
+                Expr::Call {
+                    callee,
+                    args,
+                    kwargs,
+                },
+                line,
+            ) if callee == "display" || callee == "export" => {
+                self.exec_output(callee, args, kwargs, *line)
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 // Evaluate for the side effect of error checking.
                 self.eval(expr)?;
                 Ok(())
@@ -540,6 +588,7 @@ impl Interpreter {
         callee: &str,
         args: &[Expr],
         kwargs: &[(String, Expr)],
+        line: usize,
     ) -> Result<(), Error> {
         if args.len() != 1 {
             return Err(Error::msg(format!(
@@ -552,6 +601,16 @@ impl Interpreter {
             _ => None,
         };
         let value = self.eval(&args[0])?;
+        // Back-substitute registered definitions (most recent first) so the
+        // display shows \bm C rather than the expanded FᵀF. Internal values
+        // stay expanded; this is presentation only. Derivative nodes are
+        // exempt: their component formulas need the expanded form.
+        let value = if matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }))
+        {
+            value
+        } else {
+            crate::substitute::substitute(&value, &self.defs)
+        };
 
         let mut mode = "symbol".to_string();
         let mut format = "latex".to_string();
@@ -590,8 +649,23 @@ impl Interpreter {
         self.outputs.push(Output {
             header: format!("{callee} {label}, {detail}"),
             latex,
+            line,
+            error: None,
         });
         Ok(())
+    }
+
+    /// Display label for a variable about to be (re)assigned `value`:
+    /// declared label first, then synthesized \bm for single-char tensor
+    /// names, then the plain name.
+    fn display_label(&self, name: &str, value: &Value) -> Option<String> {
+        if let Some(label) = self.labels.get(name) {
+            return Some(label.clone());
+        }
+        match value {
+            Value::Tensor(_) if name.chars().count() == 1 => Some(format!("\\bm {name}")),
+            _ => Some(name.to_string()),
+        }
     }
 
     fn render_display(

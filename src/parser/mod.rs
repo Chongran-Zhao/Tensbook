@@ -90,6 +90,7 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, Error> {
+        let line = self.line();
         // Lookahead: IDENT "=" starts an assignment (but IDENT "==" would not;
         // the MVP grammar has no "==", so a single Eq is unambiguous).
         if let Tok::Ident(name) = self.peek().clone() {
@@ -97,10 +98,10 @@ impl Parser {
                 self.next(); // ident
                 self.next(); // =
                 let expr = self.parse_expr()?;
-                return Ok(Stmt::Assign { name, expr });
+                return Ok(Stmt::Assign { name, expr, line });
             }
         }
-        Ok(Stmt::Expr(self.parse_expr()?))
+        Ok(Stmt::Expr(self.parse_expr()?, line))
     }
 
     fn parse_expr(&mut self) -> Result<Expr, Error> {

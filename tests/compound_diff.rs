@@ -142,8 +142,9 @@ fn diff_by_scalar() {
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert!(matches!(interp.get("a"), Some(Value::Scalar(_))));
     let latex = &outputs[0].latex;
+    // Display back-substitutes I1 = tr(C): the result reads (I1 - 3)/2.
     assert!(
-        latex.contains("\\operatorname{tr}") && latex.contains("- 3"),
+        latex.contains("I1") && latex.contains("- 3"),
         "got: {latex}"
     );
     assert!(!latex.contains("\\mu"), "mu must not survive d/dmu: {latex}");
@@ -151,12 +152,12 @@ fn diff_by_scalar() {
 
 #[test]
 fn diff_by_scalar_log_term() {
-    // ∂(mu log J)/∂mu = log J
+    // ∂(mu log J)/∂mu = log J (J back-substituted in display)
     let src = format!(
         "{PRELUDE}\nJ = det(F)\nW = mu * log(J)\na = diff(W, mu)\nexport(a, format=latex)"
     );
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "\\log \\left( \\det \\bm F \\right)");
+    assert_eq!(outputs[0].latex, "\\log J");
 }
 
 #[test]

@@ -11,6 +11,8 @@ use tauri_plugin_dialog::DialogExt;
 struct RunOutput {
     header: String,
     latex: String,
+    line: usize,
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -27,27 +29,35 @@ struct OpenedFile {
     source: String,
 }
 
-/// Parse and execute a `.tens` program; never fails the IPC call itself —
-/// engine errors come back in `error` so the UI can show them inline.
+/// Parse and execute a `.tens` program with per-statement error recovery:
+/// each failing statement yields an error output (tagged with its source
+/// line) and execution continues. A parse error still fails the whole run
+/// (the rest of the file can't be tokenized reliably).
 #[tauri::command]
 fn run_tens(source: String) -> RunResult {
-    match tensorforge::run_source(&source) {
-        Ok(outputs) => RunResult {
-            ok: true,
-            outputs: outputs
-                .into_iter()
-                .map(|o| RunOutput {
-                    header: o.header,
-                    latex: o.latex,
-                })
-                .collect(),
-            error: None,
-        },
-        Err(e) => RunResult {
-            ok: false,
-            outputs: vec![],
-            error: Some(e.to_string()),
-        },
+    let stmts = match tensorforge::parser::parse(&source) {
+        Ok(stmts) => stmts,
+        Err(e) => {
+            return RunResult {
+                ok: false,
+                outputs: vec![],
+                error: Some(e.to_string()),
+            }
+        }
+    };
+    let outputs = tensorforge::interpreter::Interpreter::new().run_lenient(&stmts);
+    RunResult {
+        ok: true,
+        outputs: outputs
+            .into_iter()
+            .map(|o| RunOutput {
+                header: o.header,
+                latex: o.latex,
+                line: o.line,
+                error: o.error,
+            })
+            .collect(),
+        error: None,
     }
 }
 

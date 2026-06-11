@@ -1,0 +1,183 @@
+//! Definition substitution for display.
+//!
+//! When the user writes `C = F.T * F` and later displays an expression
+//! containing the subtree `FᵀF`, the display should read `\bm C`, not the
+//! expanded form. This module substitutes registered definitions (most
+//! recent first, so derived definitions like `I1 = tr(C)` win over their
+//! ingredients) into a value *at display time only* — internal values stay
+//! fully expanded so differentiation keeps working.
+
+use crate::interpreter::Value;
+use crate::symbolic::ScalarExpr;
+use crate::tensor::{TensorExpr, TensorProperties};
+use std::rc::Rc;
+
+/// One substitutable definition: replace structural occurrences of `value`
+/// by a symbolic leaf labeled `latex`.
+pub struct Def {
+    pub latex: String,
+    pub value: Value,
+}
+
+/// Substitute all definitions into `v`. `defs` is in insertion order; they
+/// are applied most-recent-first so derived definitions like `I1 = tr(C)`
+/// win over their ingredients. Definitions whose value equals the whole
+/// expression are skipped (so `display(C)` still shows `C = FᵀF`).
+pub fn substitute(v: &Value, defs: &[Def]) -> Value {
+    let mut cur = v.clone();
+    for def in defs.iter().rev() {
+        // Skip self: substituting the whole expression would display `C = C`.
+        let whole = match (&cur, &def.value) {
+            (Value::Tensor(t), Value::Tensor(d)) => t == d,
+            (Value::Scalar(s), Value::Scalar(d)) => s == d,
+            _ => false,
+        };
+        if whole {
+            continue;
+        }
+        cur = match &def.value {
+            Value::Tensor(target) => {
+                let replacement = Rc::new(TensorExpr::Var {
+                    name: def.latex.clone(),
+                    latex: def.latex.clone(),
+                    order: target.order(),
+                    dim: target.dim(),
+                    props: TensorProperties {
+                        symmetric: target.is_symmetric(),
+                        ..Default::default()
+                    },
+                });
+                match &cur {
+                    Value::Tensor(t) => {
+                        Value::Tensor(subst_t(t, target, &replacement))
+                    }
+                    Value::Scalar(s) => {
+                        Value::Scalar(subst_s_tensor(s, target, &replacement))
+                    }
+                }
+            }
+            Value::Scalar(target) => {
+                let replacement = Rc::new(ScalarExpr::Sym {
+                    name: def.latex.clone(),
+                    latex: def.latex.clone(),
+                });
+                match &cur {
+                    Value::Tensor(t) => {
+                        Value::Tensor(subst_t_scalar(t, target, &replacement))
+                    }
+                    Value::Scalar(s) => {
+                        Value::Scalar(subst_s(s, target, &replacement))
+                    }
+                }
+            }
+        };
+    }
+    cur
+}
+
+// ---- tensor-target substitution ---------------------------------------------
+
+fn subst_t(
+    t: &Rc<TensorExpr>,
+    target: &Rc<TensorExpr>,
+    rep: &Rc<TensorExpr>,
+) -> Rc<TensorExpr> {
+    if t == target {
+        return rep.clone();
+    }
+    let rt = |x: &Rc<TensorExpr>| subst_t(x, target, rep);
+    let rs = |x: &Rc<ScalarExpr>| subst_s_tensor(x, target, rep);
+    rebuild_tensor(t, &rt, &rs)
+}
+
+fn subst_s_tensor(
+    s: &Rc<ScalarExpr>,
+    target: &Rc<TensorExpr>,
+    rep: &Rc<TensorExpr>,
+) -> Rc<ScalarExpr> {
+    let rt = |x: &Rc<TensorExpr>| subst_t(x, target, rep);
+    let rs = |x: &Rc<ScalarExpr>| subst_s_tensor(x, target, rep);
+    rebuild_scalar(s, &rt, &rs)
+}
+
+// ---- scalar-target substitution ---------------------------------------------
+
+fn subst_s(
+    s: &Rc<ScalarExpr>,
+    target: &Rc<ScalarExpr>,
+    rep: &Rc<ScalarExpr>,
+) -> Rc<ScalarExpr> {
+    if s == target {
+        return rep.clone();
+    }
+    let rt = |x: &Rc<TensorExpr>| subst_t_scalar(x, target, rep);
+    let rs = |x: &Rc<ScalarExpr>| subst_s(x, target, rep);
+    rebuild_scalar(s, &rt, &rs)
+}
+
+fn subst_t_scalar(
+    t: &Rc<TensorExpr>,
+    target: &Rc<ScalarExpr>,
+    rep: &Rc<ScalarExpr>,
+) -> Rc<TensorExpr> {
+    let rt = |x: &Rc<TensorExpr>| subst_t_scalar(x, target, rep);
+    let rs = |x: &Rc<ScalarExpr>| subst_s(x, target, rep);
+    rebuild_tensor(t, &rt, &rs)
+}
+
+// ---- structural rebuilders ----------------------------------------------------
+
+fn rebuild_tensor(
+    t: &Rc<TensorExpr>,
+    rt: &impl Fn(&Rc<TensorExpr>) -> Rc<TensorExpr>,
+    rs: &impl Fn(&Rc<ScalarExpr>) -> Rc<ScalarExpr>,
+) -> Rc<TensorExpr> {
+    match &**t {
+        TensorExpr::Var { .. } => t.clone(),
+        TensorExpr::Transpose(a) => Rc::new(TensorExpr::Transpose(rt(a))),
+        TensorExpr::Inverse(a) => Rc::new(TensorExpr::Inverse(rt(a))),
+        TensorExpr::InverseTranspose(a) => Rc::new(TensorExpr::InverseTranspose(rt(a))),
+        TensorExpr::Diff { num, den, num_label } => Rc::new(TensorExpr::Diff {
+            num: rt(num),
+            den: rt(den),
+            num_label: num_label.clone(),
+        }),
+        TensorExpr::MatMul(a, b) => Rc::new(TensorExpr::MatMul(rt(a), rt(b))),
+        TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(rt(a), rt(b))),
+        TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
+        TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),
+        TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
+            base: rt(base),
+            base_latex: base_latex.clone(),
+        }),
+        TensorExpr::SpectralFn { func, base, base_latex } => {
+            Rc::new(TensorExpr::SpectralFn {
+                func: func.clone(),
+                base: rt(base),
+                base_latex: base_latex.clone(),
+            })
+        }
+        TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(rs(s), rt(a))),
+        TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),
+    }
+}
+
+fn rebuild_scalar(
+    s: &Rc<ScalarExpr>,
+    rt: &impl Fn(&Rc<TensorExpr>) -> Rc<TensorExpr>,
+    rs: &impl Fn(&Rc<ScalarExpr>) -> Rc<ScalarExpr>,
+) -> Rc<ScalarExpr> {
+    match &**s {
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+        ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(rs(a), rs(b))),
+        ScalarExpr::Sub(a, b) => Rc::new(ScalarExpr::Sub(rs(a), rs(b))),
+        ScalarExpr::Mul(a, b) => Rc::new(ScalarExpr::Mul(rs(a), rs(b))),
+        ScalarExpr::Div(a, b) => Rc::new(ScalarExpr::Div(rs(a), rs(b))),
+        ScalarExpr::Pow(a, b) => Rc::new(ScalarExpr::Pow(rs(a), rs(b))),
+        ScalarExpr::Neg(a) => Rc::new(ScalarExpr::Neg(rs(a))),
+        ScalarExpr::Log(a) => Rc::new(ScalarExpr::Log(rs(a))),
+        ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(rt(t))),
+        ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(rt(t))),
+        ScalarExpr::Ddot(a, b) => Rc::new(ScalarExpr::Ddot(rt(a), rt(b))),
+    }
+}

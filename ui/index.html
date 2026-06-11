@@ -118,9 +118,21 @@
   #output { flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg); }
   .block { margin-bottom: 18px; }
   .block .head {
+    display: flex; align-items: center; gap: 8px;
     color: var(--muted); font-size: 12px; margin-bottom: 6px;
     font-family: "SF Mono", Menlo, Consolas, monospace;
   }
+  .copy-bar { margin-left: auto; display: flex; gap: 6px; }
+  .copy-btn {
+    appearance: none; -webkit-appearance: none;
+    background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 5px;
+    font: 11px/1.4 -apple-system, "Segoe UI", sans-serif;
+    padding: 2px 9px; cursor: pointer; white-space: nowrap;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+  .copy-btn.copied { color: var(--accent); border-color: var(--accent); }
   .block .math {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 14px 16px; overflow-x: auto;

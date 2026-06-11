@@ -160,8 +160,9 @@ fn tensor_fn_result_is_symmetric() {
 fn scalar_log_still_works() {
     let src = format!("{PRELUDE}\nJ = det(F)\nx = log(J)\ndisplay(x, mode=symbol)");
     let outputs = run_source(&src).unwrap();
+    // det F is back-substituted to J in the display.
     assert!(
-        outputs[0].latex.contains("\\log \\left( \\det \\bm F \\right)"),
+        outputs[0].latex.contains("\\log J"),
         "got: {}",
         outputs[0].latex
     );

@@ -7,9 +7,18 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// `name = expr`
-    Assign { name: String, expr: Expr },
+    Assign { name: String, expr: Expr, line: usize },
     /// A bare expression statement, e.g. `display(C, mode=symbol)`.
-    Expr(Expr),
+    Expr(Expr, usize),
+}
+
+impl Stmt {
+    pub fn line(&self) -> usize {
+        match self {
+            Stmt::Assign { line, .. } => *line,
+            Stmt::Expr(_, line) => *line,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

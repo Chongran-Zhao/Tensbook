@@ -177,7 +177,8 @@ fn neo_hookean_example_runs_end_to_end() {
         .iter()
         .find(|o| o.header.starts_with("display W"))
         .unwrap();
-    for needle in ["\\mu", "\\lambda", "\\log", "\\det \\bm F"] {
+    // J = det F and I1 = tr C are back-substituted in the display.
+    for needle in ["\\mu", "\\lambda", "\\log J", "I1"] {
         assert!(w_out.latex.contains(needle), "missing {needle} in: {}", w_out.latex);
     }
 }

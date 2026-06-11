@@ -100,6 +100,7 @@ async function openFile() {
   editor.value = opened.source;
   setCurrentPath(opened.path);
   localStorage.setItem("tensorforge.source", editor.value);
+  scheduleLiveRun();
 }
 
 async function saveFile(forceDialog) {
@@ -119,34 +120,58 @@ function showError(message) {
   output.appendChild(div);
 }
 
-async function run() {
-  localStorage.setItem("tensorforge.source", editor.value);
-  if (!invoke) {
-    output.innerHTML =
-      '<div class="error">Tauri bridge unavailable — open this UI through the desktop app.</div>';
-    return;
-  }
-  const result = await invoke("run_tens", { source: editor.value });
+function copyButton(label, text) {
+  const btn = document.createElement("button");
+  btn.className = "copy-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "✓ copied";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = label;
+      btn.classList.remove("copied");
+    }, 1200);
+  });
+  return btn;
+}
+
+function renderOutputs(outputs) {
   output.innerHTML = "";
-  if (!result.ok) {
-    showError(result.error);
-    return;
-  }
-  if (result.outputs.length === 0) {
+  if (outputs.length === 0) {
     output.innerHTML =
-      '<div class="placeholder">Program ran, but produced no output — add display(...) or export(...) statements.</div>';
+      '<div class="placeholder">No output yet — add display(...) or export(...) statements.</div>';
     return;
   }
-  for (const { header, latex } of result.outputs) {
+  for (const { header, latex, line, error } of outputs) {
     const block = document.createElement("div");
     block.className = "block";
     const head = document.createElement("div");
     head.className = "head";
+
+    if (error) {
+      head.textContent = `[line ${line}]`;
+      const err = document.createElement("div");
+      err.className = "error";
+      err.textContent = error;
+      block.append(head, err);
+      output.appendChild(block);
+      continue;
+    }
+
     head.textContent = `[${header}]`;
-    const math = document.createElement("div");
-    math.className = "math";
+    const bar = document.createElement("span");
+    bar.className = "copy-bar";
     // export(..., format=markdown) wraps in $$...$$; strip for rendering.
     const tex = latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
+    bar.append(
+      copyButton("copy latex", tex),
+      copyButton("copy markdown", `$$\n${tex}\n$$`),
+    );
+    head.appendChild(bar);
+
+    const math = document.createElement("div");
+    math.className = "math";
     try {
       katex.render(tex, math, {
         displayMode: true,
@@ -160,6 +185,61 @@ async function run() {
     output.appendChild(block);
   }
 }
+
+async function run() {
+  localStorage.setItem("tensorforge.source", editor.value);
+  if (!invoke) {
+    output.innerHTML =
+      '<div class="error">Tauri bridge unavailable — open this UI through the desktop app.</div>';
+    return;
+  }
+  const result = await invoke("run_tens", { source: editor.value });
+  if (!result.ok) {
+    showError(result.error);
+    return;
+  }
+  renderOutputs(result.outputs);
+}
+
+// ---- live rendering ---------------------------------------------------------
+// Re-run automatically as the user types (debounced). The engine recovers
+// per statement, so a broken line shows one error block while everything
+// else keeps rendering. Parse errors (whole-file) keep the previous output
+// to avoid flickering away good results mid-edit.
+
+let liveTimer = null;
+let lastGoodShown = false;
+
+async function liveRun() {
+  localStorage.setItem("tensorforge.source", editor.value);
+  if (!invoke) return;
+  const result = await invoke("run_tens", { source: editor.value });
+  if (!result.ok) {
+    // Whole-file parse error: show it only if we have nothing better.
+    if (!lastGoodShown) showError(result.error);
+    else {
+      let banner = output.querySelector(".parse-banner");
+      if (!banner) {
+        banner = document.createElement("div");
+        banner.className = "error parse-banner";
+        output.prepend(banner);
+      }
+      banner.textContent = result.error;
+    }
+    return;
+  }
+  renderOutputs(result.outputs);
+  lastGoodShown = true;
+}
+
+function scheduleLiveRun() {
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(liveRun, 350);
+}
+
+editor.addEventListener("input", scheduleLiveRun);
+// initial render on startup
+scheduleLiveRun();
 
 runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
