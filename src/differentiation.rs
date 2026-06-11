@@ -23,25 +23,140 @@ use std::rc::Rc;
 /// `∂s/∂X` for a scalar `s` and a second-order tensor expression `X`.
 ///
 /// `X` may be a compound expression (e.g. `C = FᵀF`): it is then treated as
-/// an independent variable, matched *structurally* inside `s`. For this to
-/// be rigorous, `s` must not depend on `X`'s underlying variables outside
-/// occurrences of `X` itself — checked by [`check_independence`]; e.g.
-/// `diff(log(det(F)), C)` is rejected rather than silently returning 0.
+/// an independent variable, matched *structurally* inside `s`.
 ///
-/// Returns a second-order tensor expression (zero if `s` does not depend on `X`).
+/// When `X = AᵀA` (or `A Aᵀ`), occurrences of `det A` in `s` are first
+/// rewritten through the exact identity `det X = (det A)²`:
+/// `log(det A) → ½ log(det X)` and `det A → (det X)^{1/2}` (using the
+/// standard orientation-preserving assumption `det A > 0`). This makes the
+/// ubiquitous continuum-mechanics pattern `W(J)` with `J = det F`
+/// differentiable by `C`.
+///
+/// Any remaining dependence on `X`'s underlying variables outside
+/// occurrences of `X` itself is rejected by [`check_independence_scalar`] —
+/// e.g. `diff(tr(F), C)` errors rather than silently returning 0.
 pub fn diff_scalar_by_tensor(
     s: &Rc<ScalarExpr>,
     x: &Rc<TensorExpr>,
 ) -> Result<Rc<TensorExpr>, Error> {
-    if !matches!(&**x, TensorExpr::Var { .. }) {
-        check_independence_scalar(s, x)?;
-    }
-    match d_scalar(s, x)? {
+    let s_eff = if matches!(&**x, TensorExpr::Var { .. }) {
+        s.clone()
+    } else {
+        let rewritten = match cauchy_green_factor(x) {
+            Some(a) => rewrite_scalar_for_compound(s, x, &a),
+            None => s.clone(),
+        };
+        check_independence_scalar(&rewritten, x)?;
+        rewritten
+    };
+    match d_scalar(&s_eff, x)? {
         Some(t) => Ok(t),
         None => Ok(Rc::new(TensorExpr::ScalarMul(
             Rc::new(ScalarExpr::Num(0.0)),
             x.clone(),
         ))),
+    }
+}
+
+/// If `x` is structurally `AᵀA` or `A Aᵀ`, return `A`.
+fn cauchy_green_factor(x: &TensorExpr) -> Option<Rc<TensorExpr>> {
+    if let TensorExpr::MatMul(a, b) = x {
+        if let TensorExpr::Transpose(inner) = &**a {
+            if inner == b {
+                return Some(b.clone());
+            }
+        }
+        if let TensorExpr::Transpose(inner) = &**b {
+            if inner == a {
+                return Some(a.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Rewrite `det A` in terms of `X = AᵀA` (exact, assuming `det A > 0`):
+/// `log(det A) → log(det X)/2`, `det A → (det X)^{1/2}`. Occurrences of `X`
+/// itself are left opaque so structural matching still sees them.
+fn rewrite_scalar_for_compound(
+    s: &Rc<ScalarExpr>,
+    x: &Rc<TensorExpr>,
+    a: &Rc<TensorExpr>,
+) -> Rc<ScalarExpr> {
+    let rw = |e: &Rc<ScalarExpr>| rewrite_scalar_for_compound(e, x, a);
+    let rwt = |t: &Rc<TensorExpr>| rewrite_tensor_for_compound(t, x, a);
+    match &**s {
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+        // log(det A) → log(det X)/2 — cleaner than going through the
+        // power rule on (det X)^{1/2}.
+        ScalarExpr::Log(inner) => {
+            if let ScalarExpr::Det(t) = &**inner {
+                if t == a {
+                    return Rc::new(ScalarExpr::Div(
+                        Rc::new(ScalarExpr::Log(Rc::new(ScalarExpr::Det(x.clone())))),
+                        Rc::new(ScalarExpr::Num(2.0)),
+                    ));
+                }
+            }
+            Rc::new(ScalarExpr::Log(rw(inner)))
+        }
+        ScalarExpr::Det(t) => {
+            if t == a {
+                return Rc::new(ScalarExpr::Pow(
+                    Rc::new(ScalarExpr::Det(x.clone())),
+                    Rc::new(ScalarExpr::Num(0.5)),
+                ));
+            }
+            Rc::new(ScalarExpr::Det(rwt(t)))
+        }
+        ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(rwt(t))),
+        ScalarExpr::Ddot(p, q) => Rc::new(ScalarExpr::Ddot(rwt(p), rwt(q))),
+        ScalarExpr::Add(p, q) => Rc::new(ScalarExpr::Add(rw(p), rw(q))),
+        ScalarExpr::Sub(p, q) => Rc::new(ScalarExpr::Sub(rw(p), rw(q))),
+        ScalarExpr::Mul(p, q) => Rc::new(ScalarExpr::Mul(rw(p), rw(q))),
+        ScalarExpr::Div(p, q) => Rc::new(ScalarExpr::Div(rw(p), rw(q))),
+        ScalarExpr::Pow(p, q) => Rc::new(ScalarExpr::Pow(rw(p), rw(q))),
+        ScalarExpr::Neg(p) => Rc::new(ScalarExpr::Neg(rw(p))),
+    }
+}
+
+fn rewrite_tensor_for_compound(
+    t: &Rc<TensorExpr>,
+    x: &Rc<TensorExpr>,
+    a: &Rc<TensorExpr>,
+) -> Rc<TensorExpr> {
+    if t == x {
+        return t.clone(); // occurrence of X: opaque
+    }
+    let rw = |e: &Rc<ScalarExpr>| rewrite_scalar_for_compound(e, x, a);
+    let rwt = |e: &Rc<TensorExpr>| rewrite_tensor_for_compound(e, x, a);
+    match &**t {
+        TensorExpr::Var { .. } => t.clone(),
+        TensorExpr::Transpose(p) => Rc::new(TensorExpr::Transpose(rwt(p))),
+        TensorExpr::Inverse(p) => Rc::new(TensorExpr::Inverse(rwt(p))),
+        TensorExpr::InverseTranspose(p) => Rc::new(TensorExpr::InverseTranspose(rwt(p))),
+        TensorExpr::Diff { num, den, num_label } => Rc::new(TensorExpr::Diff {
+            num: rwt(num),
+            den: rwt(den),
+            num_label: num_label.clone(),
+        }),
+        TensorExpr::MatMul(p, q) => Rc::new(TensorExpr::MatMul(rwt(p), rwt(q))),
+        TensorExpr::Add(p, q) => Rc::new(TensorExpr::Add(rwt(p), rwt(q))),
+        TensorExpr::Sub(p, q) => Rc::new(TensorExpr::Sub(rwt(p), rwt(q))),
+        TensorExpr::Outer(p, q) => Rc::new(TensorExpr::Outer(rwt(p), rwt(q))),
+        TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
+            base: rwt(base),
+            base_latex: base_latex.clone(),
+        }),
+        TensorExpr::SpectralFn { func, base, base_latex } => {
+            Rc::new(TensorExpr::SpectralFn {
+                func: func.clone(),
+                base: rwt(base),
+                base_latex: base_latex.clone(),
+            })
+        }
+        TensorExpr::ScalarMul(s, p) => Rc::new(TensorExpr::ScalarMul(rw(s), rwt(p))),
+        TensorExpr::Neg(p) => Rc::new(TensorExpr::Neg(rwt(p))),
     }
 }
 

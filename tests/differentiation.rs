@@ -127,9 +127,18 @@ fn diff_of_independent_scalar_is_zero() {
 
 #[test]
 fn diff_errors_are_reported() {
-    // compound denominator with hidden dependence: J = det(F) depends on F
-    // outside of C = F.T * F, so diff(J, C) must be rejected, not 0.
-    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = diff(J, C2)");
+    // det F is rewritable through C2 = FᵀF (det C = (det F)²), so
+    // diff(J, C2) is now legal: ∂(det C)^{1/2}/∂C = J/2 C^{-T}.
+    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = diff(J, C2)\nexport(X, format=latex)");
+    let outputs = run_source(&src).unwrap();
+    assert!(
+        outputs[0].latex.contains("^{-\\mathsf{T}}"),
+        "got: {}",
+        outputs[0].latex
+    );
+
+    // but tr(F) has no rewriting through C: hidden dependence is an error
+    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = diff(tr(F), C2)");
     assert!(run_source(&src).is_err());
 
     // scalar denominator must be a declared symbol, not a compound scalar

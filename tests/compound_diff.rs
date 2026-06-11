@@ -42,14 +42,51 @@ fn diff_by_compound_log_det() {
 
 #[test]
 fn diff_by_compound_rejects_hidden_dependence() {
-    // W = log(det F) depends on F outside C: differentiating by C would
-    // silently be wrong, so it must be rejected.
-    let src = format!("{PRELUDE}\nW = log(det(F))\nS = diff(W, C)");
+    // W = tr(F) depends on F in a way not expressible through C: must be
+    // rejected rather than silently returning 0.
+    let src = format!("{PRELUDE}\nW = tr(F)\nS = diff(W, C)");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message.contains("compound"),
         "expected hidden-dependence error, got: {}",
         err.message
+    );
+}
+
+#[test]
+fn det_f_rewritten_through_c() {
+    // The ubiquitous pattern: W(J) with J = det F, differentiated by
+    // C = FᵀF. det F is rewritten via det C = (det F)²:
+    // ∂(-mu log J)/∂C = ∂(-mu/2 log det C)/∂C = -mu/2 C^{-T}.
+    let src = format!(
+        "{PRELUDE}\nJ = det(F)\nW = mu/2 * (I1 - 3) - mu * log(J)\n\
+         S = 2 * diff(W, C)\nexport(S, format=latex)"
+    );
+    let outputs = run_source(&src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(latex.contains("\\bm I"), "tr term must give I: {latex}");
+    assert!(
+        latex.contains("\\frac{\\mu}{2}") && latex.contains("^{-\\mathsf{T}}"),
+        "log J term must give mu/2 C^-T: {latex}"
+    );
+    // The original variable F must not appear bare via det(F):
+    assert!(!latex.contains("\\det \\bm F"), "det F must be rewritten: {latex}");
+}
+
+#[test]
+fn full_neo_hookean_second_piola() {
+    // S = 2 ∂W/∂C for the full neo-Hookean energy written with J = det F.
+    let src = format!(
+        "{PRELUDE}\nJ = det(F)\n\
+         W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2\n\
+         S = 2 * diff(W, C)\nexport(S, format=latex)"
+    );
+    let outputs = run_source(&src).unwrap();
+    // λ/2 (log J)² = λ/8 (log det C)² → 2·∂/∂C gives λ/4 log(det C) C^{-1}
+    assert!(
+        outputs[0].latex.contains("}{4}"),
+        "lambda term coefficient must be /4: {}",
+        outputs[0].latex
     );
 }
 
