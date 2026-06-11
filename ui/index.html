@@ -6,14 +6,25 @@
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
 <script defer src="vendor/katex/katex.min.js"></script>
 <style>
-  :root {
+  :root, html[data-theme="dark"] {
     --bg: #1e1f24;
     --panel: #26272e;
     --border: #3a3b44;
     --text: #e8e8ea;
     --muted: #9a9ba6;
     --accent: #6aa7ff;
+    --accent-text: #11131a;
     --error: #ff7b72;
+  }
+  html[data-theme="light"] {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --border: #d8d8de;
+    --text: #1d1d22;
+    --muted: #6b6c78;
+    --accent: #2f6fdb;
+    --accent-text: #ffffff;
+    --error: #c62828;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -23,7 +34,7 @@
   }
   #app { display: flex; flex-direction: column; height: 100%; }
   header {
-    display: flex; align-items: center; gap: 12px;
+    display: flex; align-items: center; gap: 10px;
     padding: 8px 14px; border-bottom: 1px solid var(--border);
   }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
@@ -33,19 +44,23 @@
     border: 1px solid var(--border);
     padding: 6px 14px; border-radius: 6px; font-weight: 500;
     cursor: pointer; font-size: 13px;
+    white-space: nowrap; flex-shrink: 0;
   }
   header button:hover { border-color: var(--accent); }
   header button#run {
-    margin-left: auto;
-    background: var(--accent); color: #11131a; border: 0;
+    background: var(--accent); color: var(--accent-text); border: 0;
     padding: 6px 18px; font-weight: 600;
   }
   header button#run:hover { filter: brightness(1.1); }
+  header .spacer { margin-left: auto; }
+  header button#theme {
+    padding: 6px 10px; font-size: 14px; line-height: 1;
+  }
   header .filename {
     color: var(--muted); font-size: 12px;
     font-family: "SF Mono", Menlo, Consolas, monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    max-width: 30%;
+    max-width: 25%;
   }
   main { display: flex; flex: 1; min-height: 0; }
   #editor {
@@ -79,9 +94,11 @@
     <h1>TensorForge</h1>
     <button id="open">Open…</button>
     <button id="save">Save</button>
-    <button id="saveas">Save As…</button>
+    <button id="saveas">Save&nbsp;As…</button>
     <span class="filename" id="filename"></span>
+    <span class="spacer"></span>
     <span class="hint">⌘⏎ / Ctrl+Enter to run</span>
+    <button id="theme" title="Toggle light/dark theme">◐</button>
     <button id="run">Run</button>
   </header>
   <main>

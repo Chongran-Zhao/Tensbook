@@ -33,7 +33,27 @@ const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
 const saveAsBtn = document.getElementById("saveas");
+const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
+
+// ---- theme ----------------------------------------------------------------
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("tensorforge.theme", theme);
+}
+
+applyTheme(
+  localStorage.getItem("tensorforge.theme") ??
+    (window.matchMedia?.("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark"),
+);
+
+function toggleTheme() {
+  const cur = document.documentElement.dataset.theme;
+  applyTheme(cur === "dark" ? "light" : "dark");
+}
 
 // Path of the currently open file; null = unsaved buffer.
 let currentPath = null;
@@ -118,6 +138,7 @@ runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
 saveBtn.addEventListener("click", () => saveFile(false));
 saveAsBtn.addEventListener("click", () => saveFile(true));
+themeBtn.addEventListener("click", toggleTheme);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === "Enter") {
