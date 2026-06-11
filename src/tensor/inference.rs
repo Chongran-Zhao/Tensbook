@@ -46,6 +46,13 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         TensorExpr::Outer(a, b) => a == b,
         // Σ λ_a N_a ⊗ N_a and Σ f(λ_a) N_a ⊗ N_a are symmetric by construction.
         TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => true,
+        // E(C) = Σ E(λ_a) M_a is symmetric by construction.
+        TensorExpr::GenStrain { .. } => true,
+        // (T : Q)_{kl} = T_{ij} Q_{ijkl} inherits Q's minor symmetry in (k,l):
+        // Q = 2∂E/∂C with E, C symmetric, so the result is symmetric.
+        TensorExpr::DdotTQ { fourth, .. } => matches!(&**fourth, TensorExpr::QTensor { .. }),
+        // Order-4: outside the scope of this order-2 predicate.
+        TensorExpr::QTensor { .. } => false,
     }
 }
 

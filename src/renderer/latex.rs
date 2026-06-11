@@ -2,6 +2,7 @@
 
 use crate::symbolic::ScalarExpr;
 use crate::tensor::TensorExpr;
+use std::rc::Rc;
 
 /// Render a scalar expression to LaTeX.
 pub fn scalar_to_latex(expr: &ScalarExpr) -> String {
@@ -19,9 +20,16 @@ pub fn tensor_to_latex(expr: &TensorExpr) -> String {
 fn sprec(expr: &ScalarExpr) -> u8 {
     match expr {
         ScalarExpr::Add(..) | ScalarExpr::Sub(..) | ScalarExpr::Ddot(..) => 1,
-        ScalarExpr::Mul(..) | ScalarExpr::Neg(..) => 2,
-        ScalarExpr::Pow(..) | ScalarExpr::Log(..) | ScalarExpr::Det(..) | ScalarExpr::Tr(..) => 3,
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Div(..) => 4,
+        ScalarExpr::Mul(..) | ScalarExpr::Neg(..) | ScalarExpr::SpecSum { .. } => 2,
+        ScalarExpr::Pow(..)
+        | ScalarExpr::Log(..)
+        | ScalarExpr::Det(..)
+        | ScalarExpr::Tr(..)
+        | ScalarExpr::Func { .. } => 3,
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Div(..)
+        | ScalarExpr::Eig { .. } => 4,
     }
 }
 
@@ -60,7 +68,9 @@ fn render_scalar(expr: &ScalarExpr) -> String {
         }
         ScalarExpr::Pow(base, exp) => {
             let b = match &**base {
-                ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => render_scalar(base),
+                ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => {
+                    render_scalar(base)
+                }
                 _ => paren(render_scalar(base)),
             };
             format!("{{{b}}}^{{{}}}", render_scalar(exp))
@@ -75,11 +85,35 @@ fn render_scalar(expr: &ScalarExpr) -> String {
         }
         ScalarExpr::Log(a) => {
             let inner = match &**a {
-                ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => render_scalar(a),
+                ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => {
+                    render_scalar(a)
+                }
                 _ => paren(render_scalar(a)),
             };
             format!("\\log {inner}")
         }
+        ScalarExpr::Func { name, arg } => {
+            let inner = render_scalar(arg);
+            match name.as_str() {
+                "sqrt" => format!("\\sqrt{{{inner}}}"),
+                "exp" => format!("e^{{{inner}}}"),
+                "sinh" | "cosh" | "tanh" | "sin" | "cos" | "tan" => {
+                    let wrapped = match &**arg {
+                        ScalarExpr::Sym { .. }
+                        | ScalarExpr::Num(_)
+                        | ScalarExpr::Eig { .. } => inner,
+                        _ => paren(inner),
+                    };
+                    format!("\\{name} {wrapped}")
+                }
+                other => format!("\\operatorname{{{other}}}\\left( {inner} \\right)"),
+            }
+        }
+        ScalarExpr::Eig { symbol, index, .. } => format!("{symbol}_{{{index}}}"),
+        ScalarExpr::SpecSum { body, index, dim } => format!(
+            "\\sum_{{{index}=1}}^{{{dim}}} {}",
+            render_scalar(body)
+        ),
         ScalarExpr::Det(t) => {
             let inner = match &**t {
                 TensorExpr::Var { .. } => render_tensor(t),
@@ -135,7 +169,10 @@ fn tprec(expr: &TensorExpr) -> u8 {
         | TensorExpr::InverseTranspose(..)
         | TensorExpr::Diff { .. }
         | TensorExpr::Spectral { .. }
-        | TensorExpr::SpectralFn { .. } => 3,
+        | TensorExpr::SpectralFn { .. }
+        | TensorExpr::GenStrain { .. }
+        | TensorExpr::QTensor { .. } => 3,
+        TensorExpr::DdotTQ { .. } => 1,
     }
 }
 
@@ -225,6 +262,49 @@ fn render_tensor(expr: &TensorExpr) -> String {
                 "\\sum_{{a=1}}^{{{}}} {f_of} \\, \\bm N_a \\otimes \\bm N_a",
                 base.dim()
             )
+        }
+        // Symbol-mode of a generalized strain: its defining spectral sum
+        // E(C) = Σ E(λ_a) M_a, with the concrete scale-function formula.
+        TensorExpr::GenStrain { base, scale, .. } => {
+            let lam = Rc::new(crate::symbolic::ScalarExpr::Eig {
+                base: base.clone(),
+                symbol: "\\lambda".to_string(),
+                index: "a".to_string(),
+            });
+            format!(
+                "\\sum_{{a=1}}^{{{}}} {} \\, \\bm M_a",
+                base.dim(),
+                render_scalar(&scale.apply(&lam))
+            )
+        }
+        // Q = 2 ∂E/∂C, displayed by its defining derivative.
+        TensorExpr::QTensor { strain } => {
+            let e_tex = match &**strain {
+                TensorExpr::GenStrain { latex, .. } => latex.clone(),
+                _ => paren(render_tensor(strain)),
+            };
+            let c_tex = match &**strain {
+                TensorExpr::GenStrain { base, .. } => match &**base {
+                    TensorExpr::Var { latex, .. } => latex.clone(),
+                    _ => "\\bm C".to_string(),
+                },
+                _ => "\\bm C".to_string(),
+            };
+            format!("2 \\, \\frac{{\\partial {e_tex}}}{{\\partial {c_tex}}}")
+        }
+        // (T : Q)_{kl} = T_{ij} Q_{ijkl}
+        TensorExpr::DdotTQ { second, fourth } => {
+            let lhs = if tprec(second) < 2 {
+                paren(render_tensor(second))
+            } else {
+                render_tensor(second)
+            };
+            let rhs = match &**fourth {
+                TensorExpr::QTensor { .. } => "\\mathbb{Q}".to_string(),
+                _ if tprec(fourth) < 2 => paren(render_tensor(fourth)),
+                _ => render_tensor(fourth),
+            };
+            format!("{lhs} : {rhs}")
         }
         TensorExpr::Add(a, b) => format!("{} + {}", render_tensor(a), render_tensor(b)),
         TensorExpr::Sub(a, b) => {

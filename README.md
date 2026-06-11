@@ -1,180 +1,236 @@
 # TensorForge
 
-A symbolic tensor algebra system for continuum mechanics, driven by a small
-declarative DSL (`.tens` files). The long-term goal is rigorous, verifiable
-symbolic derivation for finite-deformation mechanics — second/fourth-order
-tensors, tensor-by-tensor differentiation, index contraction checking, and
-LaTeX/Markdown output — packaged as a desktop app distributed via Homebrew.
+**Rigorous symbolic tensor algebra for finite-deformation continuum
+mechanics**, driven by a small declarative DSL (`.tens` files). TensorForge
+derives stresses and tangents from energy functions the way you would on
+paper — generalized strains, spectral representations, tensor-by-tensor
+derivatives with Kronecker-delta index formulas — and renders everything as
+LaTeX. It ships as a Rust library, a CLI, and a Tauri desktop app with live
+preview.
 
-**Current status: Phase 6** — the symbolic engine (library + CLI) is
-feature-complete for the core spec: `.tens` parsing, conservative property
-inference, symbolic differentiation up to the fourth-order material tangent,
-exact simplification rules, tensor products, spectral decomposition, and
-LaTeX/Markdown rendering including `block_components`. A Tauri desktop shell
-(DSL editor + KaTeX preview) lives in `src-tauri/` + `ui/`.
+The core principle is **strictness**: every rewrite and every inferred
+property is an exact mathematical fact. Symmetry is inferred only when
+provable (`C = FᵀF` ⇒ symmetric; a product of two symmetric tensors is
+*not* assumed symmetric). Derivatives that would silently drop a hidden
+dependence are rejected with an explanatory error instead of returning a
+wrong zero. There is no numerical guessing anywhere in the engine.
+
+---
 
 ## Quick start
 
 Requires a Rust toolchain (`brew install rustup && rustup default stable`).
 
-Run the CLI on a `.tens` file:
-
 ```sh
-cargo run -p tensorforge -- run examples/neo_hookean.tens
-```
+# run the flagship example
+cargo run -p tensorforge -- run examples/hill_cr.tens
 
-Run the test suite:
-
-```sh
+# run the test suite (74 tests)
 cargo test -p tensorforge
 ```
 
-Run the desktop app (requires the [Tauri CLI](https://v2.tauri.app/reference/cli/):
-`cargo install tauri-cli --version '^2'`):
+Desktop app (requires `cargo install tauri-cli --version '^2'` once):
 
 ```sh
-cargo tauri dev    # development window
-cargo tauri build  # produces TensorForge.app + .dmg under src-tauri/target
+cargo tauri dev      # development window
+cargo tauri build    # produces TensorForge.app + .dmg
 ```
 
-The app shows a DSL editor on the left and KaTeX-rendered mathematics on the
-right (KaTeX is bundled — no network needed); press ⌘⏎ / Ctrl+Enter to run,
-⌘O to open and ⌘S to save `.tens` files.
+The app shows a DSL editor on the left and KaTeX-rendered mathematics on
+the right. It renders **live as you type** (statement-level error recovery:
+a broken line shows one error card, everything else keeps rendering), has
+ghost-text autocompletion with function-signature hints, copy-as-LaTeX /
+copy-as-Markdown buttons on every output, light/dark themes, and native
+file open/save. KaTeX is bundled — no network needed.
 
-## Example
+---
 
-`examples/neo_hookean.tens`:
+## The flagship example: Hill's model with the CR strain
+
+`examples/hill_cr.tens` derives the constitutive law of Hill's class
+hyperelasticity with the coercive Curnier–Rakotomanana strain — the
+calibratable-strain-parameter setup used in finite-strain viscoelasticity
+research:
 
 ```text
-mu = Scalar("\mu")
-lambda = Scalar("\lambda")
+mu    = Scalar("\mu")
+kappa = Scalar("\kappa")
+m     = Scalar("m")
+n     = Scalar("n")
 
 F = Tensor("\bm F", order=2, dim=3)
-I = Tensor("\bm I", order=2, dim=3, identity=true)
-
 C = F.T * F
-J = det(F)
-I1 = tr(C)
 
-W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
+# generalized Lagrangian strain  E(C) = Σ_a E(λ_a) M_a,
+# CR scale function  E(λ) = (λ^m − λ^{−n})/(m + n)
+E = gstrain(C, scale=CR, m=m, n=n)
 
-dCdF = diff(C, F)
-dJdF = diff(J, F)
-P = diff(W, F)
-A = diff(P, F)
+# Hill's quadratic energy
+W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
-display(C, mode=symbol)
-display(C, mode=components)
-display(dCdF, mode=components)
-display(dJdF, mode=symbol)
-display(P, mode=symbol)
-display(A, mode=components)
-display(A, mode=block_components)
-export(C, format=latex)
+T = diff(W, E)        # thermodynamic force
+S = 2 * diff(W, C)    # second Piola–Kirchhoff stress
+
+display(E, mode=spectral)
+display(T, mode=symbol)
+display(S, mode=symbol)
+display(S, mode=spectral)
 ```
 
-Output (LaTeX, printed to stdout) includes:
+TensorForge derives, exactly:
 
-```text
-[display C, mode=symbol]
-\bm C = \bm F^{\mathsf{T}} \bm F
+```latex
+% E in its spectral form (CR scale function applied to the stretches)
+\bm E = \sum_{a=1}^{3} \frac{\lambda_a^m - \lambda_a^{-n}}{m + n} \, \bm M_a
 
-[display dCdF, mode=components]
-\frac{\partial C_{ij}}{\partial F_{mn}} = \delta_{in} F_{mj} + \delta_{jn} F_{mi}
+% the thermodynamic force from the quadratic energy
+\bm T = 2 \mu \, \bm E + \kappa \, \operatorname{tr}\bm E \, \bm I
 
-[display dJdF, mode=symbol]
-dJdF = \det \bm F \, \bm F^{-\mathsf{T}}
+% the stress in the T : Q structure (Q = 2 ∂E/∂C kept opaque)
+\bm S = \bm T : \mathbb{Q}
 
-[display P, mode=symbol]
-\bm P = \mu \, \bm F - \mu \, \bm F^{-\mathsf{T}} + \lambda \, \log \left( \det \bm F \right) \, \bm F^{-\mathsf{T}}
-
-[display A, mode=components]
-\frac{\partial P_{ij}}{\partial F_{mn}} = \mu \delta_{im} \delta_{jn} + \mu F^{-1}_{jm} F^{-1}_{ni} - \lambda \, \log \left( \det \bm F \right) F^{-1}_{jm} F^{-1}_{ni} + \lambda F^{-1}_{ji} F^{-1}_{nm}
+% and fully expanded along the principal axes
+\bm S = \sum_{a=1}^{3} \left[
+  \frac{ \frac{m \lambda_a^{m-1} + n \lambda_a^{-n-1}}{m+n} }{\lambda_a}
+  \left( 2\mu \frac{\lambda_a^m - \lambda_a^{-n}}{m+n}
+       + \kappa \sum_{b=1}^{3} \frac{\lambda_b^m - \lambda_b^{-n}}{m+n} \right)
+\right] \bm M_a
 ```
 
-plus a 3 × 3 `bmatrix` of second-order blocks for
-`display(A, mode=block_components)`.
+The chain rule `∂W/∂C = ∂W/∂E : ∂E/∂C` is applied automatically when the
+energy depends on `C` only through a generalized strain; the spectral
+expansion uses the coaxiality of `T` with `C` (guaranteed because `T` is an
+isotropic function of `E`), under which the off-diagonal part of `Q` drops
+out.
 
-`C = F.T * F` is automatically inferred to be a **symmetric** second-order
-tensor — inference is strictly conservative: only properties that are
-provable from the expression structure are inferred (e.g. the product of two
-symmetric tensors is *not* assumed symmetric).
+The classical material-frame derivation is also fully supported — see
+`examples/neo_hookean.tens` for `P = ∂W/∂F`, the material tangent
+`A = ∂P/∂F` with Kronecker-delta component formulas, and `block_components`
+display of fourth-order tensors.
 
-## Feature set
+---
 
-- `.tens` parsing: assignments, `Scalar(...)` / `Tensor(...)` declarations
-  with `order`, `dim`, `identity`, `symmetric`, ... properties
-- Expression evaluation with strict Scalar/Tensor typing and shape checking
-- `F.T` transpose, `*` (tensor product / scalar multiplication), `+`, `-`,
-  `/`, `^`
-- `det(F)`, `tr(C)`, `log(J)` as opaque symbolic nodes
-- Conservative symmetry inference (`F.T * F` ⇒ symmetric)
-- **Differentiation** (`diff`):
-  - scalar-by-tensor, evaluated to closed form: `∂(det F)/∂F = det(F) F^{-T}`
-    (Jacobi), `∂ log(det F)/∂F = F^{-T}`, `∂ tr(FᵀF)/∂F = 2F`,
-    `∂tr(AX)/∂X = Aᵀ`, sum/product/quotient/power/chain rules — so
-    `P = diff(W, F)` yields the first Piola–Kirchhoff stress directly;
-  - tensor-by-tensor: `diff(C, F)` is a fourth-order tensor (index
-    convention `A_{iJkL} = ∂P_{iJ}/∂F_{kL}`); component display generates
-    Kronecker-delta formulas via an abstract-index engine, including
-    inverse-component rules (`∂(F⁻¹)_{ab}/∂F_{mn} = −F⁻¹_{am} F⁻¹_{nb}`),
-    so the material tangent `A = diff(P, F)` works end to end
-- **Simplification** (`simplify(expr)` / `simplify(expr, rules=...)`):
-  cumulative rule sets `algebra ⊂ tensor ⊂ continuum`, every rule an exact
-  identity — `(Aᵀ)ᵀ → A`, `F⁻¹F → I`, `F^{-T}Fᵀ → I`, `A I → A`,
-  `Cᵀ → C` for provably symmetric `C`, `det(Fᵀ) → det F`,
-  `det(AB) → det A det B`, `tr(I) → dim`, `log(xⁿ) → n log x`, and cyclic
-  canonicalization so `tr(AB)` and `tr(BA)` compare equal
-- `inv(F)` — symbolic tensor inverse
-- **Tensor products**: `outer(A, B)` → `A ⊗ B` (order = sum of orders),
-  `dot(A, B)` → single contraction `AB`, `ddot(A, B)` → double contraction
-  `A : B` (a scalar)
-- **Spectral decomposition**: `spectral(C)` →
-  `Σ_{a=1}^{3} c_a N_a ⊗ N_a`, accepted only for *provably* symmetric
-  tensors (declared `symmetric=true` or inferred, e.g. `C = F.T * F`)
-- **Isotropic tensor functions**: `sqrt(C)` / `log(C)` / `exp(C)` through
-  the spectral form, `f(C) = Σ f(c_a) N_a ⊗ N_a` — e.g. `U = sqrt(C)` is
-  the right stretch tensor; same strict symmetry requirement
-- `display(X, mode=symbol)` — bold symbolic LaTeX (`\bm C = ...`,
-  `\frac{\partial \bm C}{\partial \bm F}`)
-- `display(X, mode=components)` — explicit `dim × dim` component matrix, or
-  the delta formula for derivative nodes
-- `display(A, mode=block_components)` — fourth-order derivative expanded
-  over its last two indices `(k, L)` into a `dim × dim` grid of
-  second-order blocks (no premature Voigt compression)
-- `export(X, format=latex)` and `export(X, format=markdown)` ($$-wrapped)
+## DSL reference
+
+### Declarations
+
+| Syntax | Meaning |
+|---|---|
+| `mu = Scalar("\mu")` | symbolic scalar with LaTeX display |
+| `F = Tensor("\bm F", order=2, dim=3)` | tensor variable; kwargs: `order`, `dim`, `identity`, `symmetric`, `antisymmetric`, `orthogonal`, `isotropic` |
+
+Derived quantities need no declaration — `C = F.T * F` defines `C` with
+inferred order, dimension, and (provable) symmetry. A label declared via
+`Scalar`/`Tensor` survives reassignment: `I1 = Scalar("I_1")` followed by
+`I1 = tr(C)` displays as `I_1 = …`.
+
+### Operators
+
+| Syntax | Meaning |
+|---|---|
+| `A * B` | tensor product (single contraction) / scalar multiplication |
+| `A : B` | double contraction — 2:2 gives a scalar, 2:4 / 4:2 give order 2 |
+| `A.T` | transpose |
+| `+  -  /  ^` | usual arithmetic (Pratt-parsed precedence, `^` right-assoc.) |
+
+### Functions
+
+| Function | Result |
+|---|---|
+| `det(A)`, `tr(A)` | symbolic invariants |
+| `inv(A)` | symbolic inverse (`A^{-1}`, `A^{-T}` canonicalized) |
+| `log/sqrt/exp/sinh/cosh(x)` | scalar functions with exact derivative rules |
+| `log/sqrt/exp(C)` | isotropic tensor functions via the spectral form (provably symmetric `C` only) |
+| `outer(A,B)` / `otimes(A,B)` | tensor product `A ⊗ B` (orders add) |
+| `dot(A,B)`, `ddot(A,B)` | single / double contraction |
+| `spectral(C)` | `Σ_a c_a N_a ⊗ N_a` (provably symmetric only) |
+| `gstrain(C, scale=…, …)` | generalized strain; `scale = CR (m,n) \| SethHill (m) \| Hencky` |
+| `diff(expr, X)` | symbolic derivative — see below |
+| `simplify(expr, rules=…)` | exact rewriting; `rules = algebra ⊂ tensor ⊂ continuum` |
+| `display(expr, mode=…)` | `symbol \| components \| matrix \| block_components \| spectral` |
+| `export(expr, format=…)` | `latex \| markdown` |
+
+### Differentiation
+
+`diff(expr, X)` accepts as denominator:
+
+- a **scalar symbol**: `diff(W, mu)` — full scalar calculus;
+- a **tensor variable**: `diff(W, F)` — e.g. the first Piola–Kirchhoff
+  stress `P = ∂W/∂F` in closed form (Jacobi `∂det F/∂F = det F F^{-T}`,
+  `∂log det F/∂F = F^{-T}`, `∂tr(FᵀF)/∂F = 2F`, chain/product/quotient
+  rules);
+- a **compound tensor**: `diff(W, C)` with `C = FᵀF` — `C` is treated as the
+  independent variable and matched structurally; `det F` is rewritten
+  exactly through `det C = (det F)²`; any dependence that cannot be
+  expressed through `C` is an **error**, never a silent zero;
+- a **generalized strain**: `diff(W, E)` — yields the thermodynamic force;
+  `diff(W, C)` with `W = W(E(C))` chains automatically into `½ T : Q`.
+
+Tensor-by-tensor derivatives (`diff(C, F)`, the tangent `A = diff(P, F)`)
+are order-4 objects with the index convention `A_{iJkL} = ∂P_{iJ}/∂F_{kL}`;
+`mode=components` prints the exact Kronecker-delta formula
+(`∂C_{ij}/∂F_{mn} = δ_{in}F_{mj} + δ_{jn}F_{mi}`, inverse-component rule
+`∂(F^{-1})_{ab}/∂F_{mn} = −F^{-1}_{am}F^{-1}_{nb}` included), and
+`mode=block_components` expands the last two indices into a 3×3 grid of
+second-order blocks — no premature Voigt compression.
+
+### Display
+
+`display` back-substitutes your definitions: once `C = F.T*F`, `J = det(F)`,
+`I1 = tr(C)` are defined, later results render as `\bm C`, `J`, `I_1`
+rather than expanded trees (presentation only — internals stay exact).
+`mode=spectral` renders principal-axis sums and is exempt from
+substitution.
+
+---
 
 ## Architecture
 
 ```text
 .tens source ──parser──▶ syntactic AST ──interpreter──▶ semantic values
                                             │
-                             display/export └──renderer──▶ LaTeX
+                             display/export └──renderer──▶ LaTeX / Markdown
 ```
 
-| Module            | Role                                                       |
-|-------------------|------------------------------------------------------------|
-| `src/parser/`     | Hand-written lexer + Pratt parser for the DSL              |
-| `src/ast.rs`      | Syntactic AST — no mathematical meaning                    |
-| `src/symbolic/`   | Symbolic scalar expressions (`Add`, `Log`, `Det`, `Tr`, …) |
-| `src/tensor/`     | Tensor object system + conservative property inference     |
-| `src/differentiation.rs` | Symbolic derivative rules (scalar/tensor, tensor/tensor) |
-| `src/indices.rs`  | Abstract-index engine: expansion, δ generation, contraction |
-| `src/simplifier.rs` | Exact rewrite rules: algebra / tensor / continuum sets   |
-| `src/interpreter.rs` | Evaluation, environment, Scalar/Tensor type checking    |
-| `src/renderer/`   | LaTeX symbol-mode and component-mode rendering             |
-| `src-tauri/`      | Tauri desktop shell (`run_tens` IPC command)               |
-| `ui/`             | Static frontend: editor + KaTeX rendering (no Node build)  |
-| `packaging/`      | Homebrew formula template                                  |
+| Module | Role |
+|---|---|
+| `src/parser/` | hand-written lexer + Pratt parser (zero dependencies) |
+| `src/ast.rs` | syntactic AST — carries no mathematical meaning |
+| `src/symbolic/` | scalar expressions: arithmetic, `det/tr/log/…`, named functions, eigenvalue symbols, spectral sums |
+| `src/tensor/` | tensor object system, scale functions, conservative property inference |
+| `src/differentiation.rs` | derivative rules: scalar/tensor, tensor/tensor, strain chain rule |
+| `src/indices.rs` | abstract-index engine: expansion, δ generation, contraction, concrete instantiation |
+| `src/simplifier.rs` | exact rewrite rules in cumulative sets algebra/tensor/continuum |
+| `src/substitute.rs` | display-time back-substitution of definitions |
+| `src/renderer/` | symbol / components / block / spectral LaTeX rendering |
+| `src/interpreter.rs` | evaluation, environment, strict Scalar/Tensor typing |
+| `src-tauri/` + `ui/` | Tauri desktop shell; static frontend, bundled KaTeX |
+| `packaging/` | Homebrew formula template |
 
-The two-layer design (syntactic AST vs. semantic `ScalarExpr`/`TensorExpr`)
-is deliberate: differentiation and simplification rules operate on the
-semantic layer without touching the parser.
+Two deliberate design choices: the syntactic and semantic layers are
+separate (new mathematics never touches the parser), and every expression
+node is a Rust enum variant — adding a node makes the compiler enumerate
+every site that must decide how to handle it. There are no silent fallback
+branches.
+
+## Scope and non-goals (current)
+
+Supported today: the full derivation pipeline above. Not yet in scope:
+time derivatives / evolution equations / hereditary integrals (rate-form
+viscoelasticity), curvilinear coordinates, FE code generation. The
+Miehe–Lambrecht closed-form components of `Q` and sixth-order `L` are
+represented opaquely, not expanded.
 
 ## Roadmap
 
-1. **Richer simplification** — `det(F) F^{-T} → cof F`, user-declared
-   identities entering the rule system as known facts
-2. **Desktop polish** — proper app icon (current one is a placeholder)
-3. **Homebrew distribution** — publish the formula in `packaging/` once the
-   repo has a tagged release; add a cask for the app bundle
+1. Rate forms: `Ė`, evolution equations, exponential integrator algebra
+2. Richer simplification: `det(F)F^{-T} → cof F`, user-declared identities
+3. Desktop polish: proper app icon
+4. Homebrew release: formula in `packaging/` once the repo is tagged
+
+---
+
+**Author**: Chongran Zhao ([chongran-zhao.site](https://chongran-zhao.site),
+[chongran_zhao@brown.edu](mailto:chongran_zhao@brown.edu)) — Ph.D. student
+in Engineering, Brown University; M.Eng. in Mechanics, SUSTech.
+License: MIT.

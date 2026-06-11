@@ -1,0 +1,35 @@
+# Hill's class hyperelasticity with the Curnier-Rakotomanana strain
+#
+# The generalized strain E(C) = sum_a E(lambda_a) M_a with the coercive
+# CR scale function E(lambda) = (lambda^m - lambda^-n)/(m + n), paired
+# with Hill's quadratic energy. The strain parameters m, n stay symbolic
+# and can be calibrated against experimental data.
+#
+# Run with: tensorforge run examples/hill_cr.tens
+
+mu = Scalar("\mu")
+kappa = Scalar("\kappa")
+m = Scalar("m")
+n = Scalar("n")
+
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+
+# Generalized Lagrangian strain (Hill's family, CR scale function)
+E = gstrain(C, scale=CR, m=m, n=n)
+
+# Hill's quadratic energy: W = mu E:E + kappa/2 (tr E)^2
+W = mu * ddot(E, E) + kappa/2 * tr(E)^2
+
+# Thermodynamic force T = dW/dE and second Piola-Kirchhoff stress
+# S = 2 dW/dC = T : Q, with the strain projection Q = 2 dE/dC
+T = diff(W, E)
+S = 2 * diff(W, C)
+
+display(C, mode=symbol)
+display(E, mode=spectral)
+display(W, mode=symbol)
+display(T, mode=symbol)
+display(S, mode=symbol)
+display(S, mode=spectral)
+export(S, format=latex)

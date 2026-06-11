@@ -111,6 +111,18 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             base: tensor_pass(base, rules),
             base_latex: base_latex.clone(),
         }),
+        TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
+            base: tensor_pass(base, rules),
+            scale: scale.clone(),
+            latex: latex.clone(),
+        }),
+        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor {
+            strain: tensor_pass(strain, rules),
+        }),
+        TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
+            second: tensor_pass(second, rules),
+            fourth: tensor_pass(fourth, rules),
+        }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(tensor_pass(a, rules))),
     };
     rewrite_tensor(rebuilt, rules)
@@ -218,6 +230,16 @@ fn scalar_pass(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             tensor_pass(a, rules),
             tensor_pass(b, rules),
         )),
+        ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
+            name: name.clone(),
+            arg: scalar_pass(arg, rules),
+        }),
+        ScalarExpr::Eig { .. } => s.clone(),
+        ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
+            body: scalar_pass(body, rules),
+            index: index.clone(),
+            dim: *dim,
+        }),
     };
     rewrite_scalar(rebuilt, rules)
 }

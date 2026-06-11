@@ -186,21 +186,26 @@ impl Interpreter {
     fn eval_binary(&self, op: BinOp, l: Value, r: Value) -> Result<Value, Error> {
         use BinOp::*;
         match (op, l, r) {
-            // A : B — double contraction, a scalar
+            // A : B — double contraction (2:2 scalar, 2:4 / 4:2 order 2)
             (Ddot, Value::Tensor(a), Value::Tensor(b)) => {
-                if a.order() != 2 || b.order() != 2 {
-                    return Err(Error::msg(
-                        "`:` (double contraction) requires two second-order tensors",
-                    ));
+                match (a.order(), b.order()) {
+                    (2, 2) => {
+                        if a.dim() != b.dim() {
+                            return Err(Error::msg(format!(
+                                "dimension mismatch in `:`: {} vs {}",
+                                a.dim(),
+                                b.dim()
+                            )));
+                        }
+                        Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
+                    }
+                    (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
+                    (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                    (oa, ob) => Err(Error::msg(format!(
+                        "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
+                         {oa} and {ob}"
+                    ))),
                 }
-                if a.dim() != b.dim() {
-                    return Err(Error::msg(format!(
-                        "dimension mismatch in `:`: {} vs {}",
-                        a.dim(),
-                        b.dim()
-                    )));
-                }
-                Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
             }
             (Ddot, l, r) => Err(Error::msg(format!(
                 "`:` is not defined between {} and {}",
@@ -229,9 +234,20 @@ impl Interpreter {
             (Sub, Value::Tensor(a), Value::Tensor(b)) => {
                 Ok(Value::Tensor(Rc::new(TensorExpr::sub(a, b)?)))
             }
-            // scalar * tensor (either side)
+            // scalar * tensor (either side), with coefficient folding so
+            // 2 * (½ T : Q) reads T : Q.
             (Mul, Value::Scalar(s), Value::Tensor(t))
             | (Mul, Value::Tensor(t), Value::Scalar(s)) => {
+                if let TensorExpr::ScalarMul(s2, inner) = &*t {
+                    let merged = crate::symbolic::fold_mul(&s, s2);
+                    if matches!(&*merged, ScalarExpr::Num(x) if *x == 1.0) {
+                        return Ok(Value::Tensor(inner.clone()));
+                    }
+                    return Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(
+                        merged,
+                        inner.clone(),
+                    ))));
+                }
                 Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(s, t))))
             }
             // tensor / scalar = (1/s) * tensor
@@ -275,19 +291,17 @@ impl Interpreter {
                 };
                 Ok(Value::Scalar(Rc::new(node)))
             }
-            "log" | "sqrt" | "exp" => {
+            "log" | "sqrt" | "exp" | "sinh" | "cosh" | "tanh" => {
                 if args.len() != 1 || !kwargs.is_empty() {
                     return Err(Error::msg(format!("`{callee}` takes exactly one argument")));
                 }
                 match self.eval(&args[0])? {
                     Value::Scalar(s) => match callee {
                         "log" => Ok(Value::Scalar(Rc::new(ScalarExpr::Log(s)))),
-                        // sqrt(x) = x^{1/2}; exp left as e^x via Pow on the
-                        // symbolic side is not in the MVP node set, so scalar
-                        // sqrt/exp are rejected for now with a clear message.
-                        other => Err(Error::msg(format!(
-                            "scalar `{other}` is not supported yet (only `log`)"
-                        ))),
+                        other => Ok(Value::Scalar(Rc::new(ScalarExpr::Func {
+                            name: other.to_string(),
+                            arg: s,
+                        }))),
                     },
                     Value::Tensor(t) => {
                         // Isotropic tensor function through the spectral form.
@@ -301,6 +315,74 @@ impl Interpreter {
                     }
                 }
             }
+            // gstrain(C, scale=CR, m=..., n=...): generalized Lagrangian
+            // strain E(C) = Σ E(λ_a) M_a (Hill's family).
+            "gstrain" => {
+                if args.len() != 1 {
+                    return Err(Error::msg(
+                        "`gstrain` expects one tensor argument: gstrain(C, scale=..., ...)",
+                    ));
+                }
+                let base = match self.eval(&args[0])? {
+                    Value::Tensor(t) => t,
+                    Value::Scalar(_) => {
+                        return Err(Error::msg("`gstrain` requires a tensor argument"))
+                    }
+                };
+                let mut kind: Option<String> = None;
+                let mut m: Option<Rc<ScalarExpr>> = None;
+                let mut n: Option<Rc<ScalarExpr>> = None;
+                for (key, raw) in kwargs {
+                    match key.as_str() {
+                        "scale" => match raw {
+                            Expr::Ident(s) | Expr::Str(s) => kind = Some(s.clone()),
+                            other => {
+                                return Err(Error::msg(format!(
+                                    "invalid scale: {other:?} (expected CR, SethHill, or Hencky)"
+                                )))
+                            }
+                        },
+                        "m" => match self.eval(raw)? {
+                            Value::Scalar(s) => m = Some(s),
+                            _ => return Err(Error::msg("`m` must be a scalar")),
+                        },
+                        "n" => match self.eval(raw)? {
+                            Value::Scalar(s) => n = Some(s),
+                            _ => return Err(Error::msg("`n` must be a scalar")),
+                        },
+                        other => {
+                            return Err(Error::msg(format!(
+                                "unknown gstrain keyword `{other}`"
+                            )))
+                        }
+                    }
+                }
+                let scale = match kind.as_deref() {
+                    Some("CR") => crate::tensor::Scale::CR {
+                        m: m.ok_or_else(|| Error::msg("CR strain requires m=..."))?,
+                        n: n.ok_or_else(|| Error::msg("CR strain requires n=..."))?,
+                    },
+                    Some("SethHill") => crate::tensor::Scale::SethHill {
+                        m: m.ok_or_else(|| Error::msg("Seth–Hill strain requires m=..."))?,
+                    },
+                    Some("Hencky") => crate::tensor::Scale::Hencky,
+                    Some(other) => {
+                        return Err(Error::msg(format!(
+                            "unknown scale `{other}` (supported: CR, SethHill, Hencky)"
+                        )))
+                    }
+                    None => {
+                        return Err(Error::msg(
+                            "`gstrain` requires scale=CR | SethHill | Hencky",
+                        ))
+                    }
+                };
+                Ok(Value::Tensor(Rc::new(TensorExpr::gen_strain(
+                    base,
+                    scale,
+                    "\\bm E".to_string(),
+                )?)))
+            }
             "diff" => self.builtin_diff(args, kwargs),
             "outer" | "otimes" => {
                 let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
@@ -312,22 +394,27 @@ impl Interpreter {
                 let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
                 Ok(Value::Tensor(Rc::new(TensorExpr::matmul(a, b)?)))
             }
-            // ddot(A, B): double contraction A : B, a scalar.
+            // ddot(A, B): double contraction. 2:2 → scalar; 2:4 / 4:2 → order 2.
             "ddot" => {
                 let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
-                if a.order() != 2 || b.order() != 2 {
-                    return Err(Error::msg(
-                        "`ddot` requires two second-order tensors in this phase",
-                    ));
+                match (a.order(), b.order()) {
+                    (2, 2) => {
+                        if a.dim() != b.dim() {
+                            return Err(Error::msg(format!(
+                                "dimension mismatch in ddot: {} vs {}",
+                                a.dim(),
+                                b.dim()
+                            )));
+                        }
+                        Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
+                    }
+                    (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
+                    (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                    (oa, ob) => Err(Error::msg(format!(
+                        "`ddot` supports 2:2, 2:4 and 4:2 contractions, got orders \
+                         {oa} and {ob}"
+                    ))),
                 }
-                if a.dim() != b.dim() {
-                    return Err(Error::msg(format!(
-                        "dimension mismatch in ddot: {} vs {}",
-                        a.dim(),
-                        b.dim()
-                    )));
-                }
-                Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
             }
             "spectral" => {
                 if args.len() != 1 || !kwargs.is_empty() {
@@ -601,16 +688,6 @@ impl Interpreter {
             _ => None,
         };
         let value = self.eval(&args[0])?;
-        // Back-substitute registered definitions (most recent first) so the
-        // display shows \bm C rather than the expanded FᵀF. Internal values
-        // stay expanded; this is presentation only. Derivative nodes are
-        // exempt: their component formulas need the expanded form.
-        let value = if matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }))
-        {
-            value
-        } else {
-            crate::substitute::substitute(&value, &self.defs)
-        };
 
         let mut mode = "symbol".to_string();
         let mut format = "latex".to_string();
@@ -634,6 +711,18 @@ impl Interpreter {
                 }
             }
         }
+
+        // Back-substitute registered definitions (most recent first) so the
+        // display shows \bm C rather than the expanded FᵀF. Internal values
+        // stay expanded; this is presentation only. Derivative nodes and
+        // spectral mode are exempt: they need the expanded structure.
+        let skip_subst = mode == "spectral"
+            || matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }));
+        let value = if skip_subst {
+            value
+        } else {
+            crate::substitute::substitute(&value, &self.defs)
+        };
 
         let latex = match callee {
             "display" => self.render_display(&value, &subject, &mode)?,
@@ -682,6 +771,14 @@ impl Interpreter {
         match (value, mode) {
             (Value::Scalar(s), "symbol") => Ok(format!("{lhs}{}", scalar_to_latex(s))),
             (Value::Tensor(t), "symbol") => Ok(format!("{lhs}{}", tensor_to_latex(t))),
+            // Principal-axis form: E, T(E), and S = T : Q expand to Σ_a ... M_a.
+            (Value::Tensor(t), "spectral") => Ok(format!(
+                "{lhs}{}",
+                crate::renderer::spectral::tensor_to_spectral(t)?
+            )),
+            (Value::Scalar(_), "spectral") => Err(Error::msg(
+                "spectral display is only defined for tensors",
+            )),
             // Derivative components use the abstract-index engine and carry
             // their own ∂C_ij/∂F_mn left-hand side.
             (Value::Tensor(t), "components" | "matrix" | "block_components")

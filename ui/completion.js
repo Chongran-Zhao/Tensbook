@@ -17,8 +17,11 @@ const BUILTINS = [
   { name: "det", sig: "det(A)", doc: "determinant, kept symbolic" },
   { name: "tr", sig: "tr(A)", doc: "trace, kept symbolic" },
   { name: "log", sig: "log(x)  |  log(C)", doc: "scalar log; tensor log via spectral form (requires symmetric C)" },
-  { name: "sqrt", sig: "sqrt(C)", doc: "tensor square root via spectral form (requires symmetric C)" },
-  { name: "exp", sig: "exp(C)", doc: "tensor exponential via spectral form (requires symmetric C)" },
+  { name: "sqrt", sig: "sqrt(x) | sqrt(C)", doc: "scalar square root, or tensor square root via spectral form (symmetric C)" },
+  { name: "exp", sig: "exp(x) | exp(C)", doc: "scalar exponential, or tensor exponential via spectral form (symmetric C)" },
+  { name: "sinh", sig: "sinh(x)", doc: "hyperbolic sine (symbolic, with derivative rule)" },
+  { name: "cosh", sig: "cosh(x)", doc: "hyperbolic cosine (symbolic, with derivative rule)" },
+  { name: "gstrain", sig: "gstrain(C, scale=CR, m=…, n=…)", doc: "generalized Lagrangian strain E(C) = Σ E(λ_a) M_a; scale = CR | SethHill | Hencky" },
   { name: "inv", sig: "inv(A)", doc: "symbolic tensor inverse" },
   { name: "outer", sig: "outer(A, B)", doc: "tensor product A ⊗ B (orders add)" },
   { name: "otimes", sig: "otimes(A, B)", doc: "tensor product A ⊗ B — alias of outer" },
@@ -26,16 +29,17 @@ const BUILTINS = [
   { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — a scalar; infix `A : B` also works" },
   { name: "spectral", sig: "spectral(C)", doc: "spectral decomposition Σ c_a N_a ⊗ N_a (requires provably symmetric C)" },
   { name: "simplify", sig: "simplify(expr, rules=…)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
-  { name: "display", sig: "display(expr, mode=…)", doc: "mode = symbol | components | matrix | block_components" },
+  { name: "display", sig: "display(expr, mode=…)", doc: "mode = symbol | components | matrix | block_components | spectral" },
   { name: "export", sig: "export(expr, format=…)", doc: "format = latex | markdown" },
 ];
 
 const BUILTIN_MAP = new Map(BUILTINS.map((b) => [b.name, b]));
 
 const ENUM_VALUES = {
-  mode: ["symbol", "components", "matrix", "block_components"],
+  mode: ["symbol", "components", "matrix", "block_components", "spectral"],
   format: ["latex", "markdown"],
   rules: ["algebra", "tensor", "continuum"],
+  scale: ["CR", "SethHill", "Hencky"],
 };
 
 const TENSOR_KWARGS = [

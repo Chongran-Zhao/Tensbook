@@ -157,6 +157,16 @@ fn rebuild_tensor(
                 base_latex: base_latex.clone(),
             })
         }
+        TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
+            base: rt(base),
+            scale: scale.clone(),
+            latex: latex.clone(),
+        }),
+        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor { strain: rt(strain) }),
+        TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
+            second: rt(second),
+            fourth: rt(fourth),
+        }),
         TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(rs(s), rt(a))),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),
     }
@@ -179,5 +189,19 @@ fn rebuild_scalar(
         ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(rt(t))),
         ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(rt(t))),
         ScalarExpr::Ddot(a, b) => Rc::new(ScalarExpr::Ddot(rt(a), rt(b))),
+        ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
+            name: name.clone(),
+            arg: rs(arg),
+        }),
+        ScalarExpr::Eig { base, symbol, index } => Rc::new(ScalarExpr::Eig {
+            base: rt(base),
+            symbol: symbol.clone(),
+            index: index.clone(),
+        }),
+        ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
+            body: rs(body),
+            index: index.clone(),
+            dim: *dim,
+        }),
     }
 }

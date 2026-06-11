@@ -6,25 +6,30 @@ import { setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-const DEFAULT_SOURCE = `# Neo-Hookean strain energy
+const DEFAULT_SOURCE = `# Hill's class hyperelasticity with the Curnier-Rakotomanana strain
 mu = Scalar("\\mu")
-lambda = Scalar("\\lambda")
+kappa = Scalar("\\kappa")
+m = Scalar("m")
+n = Scalar("n")
 
 F = Tensor("\\bm F", order=2, dim=3)
-
 C = F.T * F
-J = det(F)
-I1 = tr(C)
 
-W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
+# generalized strain E(C) = sum_a E(lambda_a) M_a,  E(l) = (l^m - l^-n)/(m+n)
+E = gstrain(C, scale=CR, m=m, n=n)
 
-P = diff(W, F)
-A = diff(P, F)
+# Hill's quadratic energy
+W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
-display(C, mode=symbol)
-display(C, mode=components)
-display(P, mode=symbol)
-display(A, mode=components)
+# thermodynamic force and second Piola-Kirchhoff stress S = T : Q
+T = diff(W, E)
+S = 2 * diff(W, C)
+
+display(E, mode=spectral)
+display(W, mode=symbol)
+display(T, mode=symbol)
+display(S, mode=symbol)
+display(S, mode=spectral)
 `;
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };

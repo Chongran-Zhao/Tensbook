@@ -109,7 +109,10 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
         | TensorExpr::Diff { .. }
         | TensorExpr::Outer(..)
         | TensorExpr::Spectral { .. }
-        | TensorExpr::SpectralFn { .. } => {
+        | TensorExpr::SpectralFn { .. }
+        | TensorExpr::GenStrain { .. }
+        | TensorExpr::QTensor { .. }
+        | TensorExpr::DdotTQ { .. } => {
             unreachable!("non-expandable node reached entry(); expandable() must screen first")
         }
     }
@@ -132,6 +135,12 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
         TensorExpr::Spectral { .. } | TensorExpr::SpectralFn { .. } => Err(Error::msg(
             "spectral decompositions are display-only; use mode=symbol",
         )),
+        TensorExpr::GenStrain { .. } | TensorExpr::QTensor { .. } | TensorExpr::DdotTQ { .. } => {
+            Err(Error::msg(
+                "generalized strains and Q tensors are spectral objects; use \
+                 mode=symbol or mode=spectral",
+            ))
+        }
         TensorExpr::Var { .. } => Ok(()),
         TensorExpr::Transpose(t) | TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => {
             expandable(t)
