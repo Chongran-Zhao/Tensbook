@@ -127,11 +127,17 @@ fn diff_of_independent_scalar_is_zero() {
 
 #[test]
 fn diff_errors_are_reported() {
-    // denominator must be a variable, not an expression
-    let src = format!("{PRELUDE}\nX = diff(J, F.T * F)");
+    // compound denominator with hidden dependence: J = det(F) depends on F
+    // outside of C = F.T * F, so diff(J, C) must be rejected, not 0.
+    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = diff(J, C2)");
     assert!(run_source(&src).is_err());
 
-    // denominator must be a tensor
-    let src = format!("{PRELUDE}\nX = diff(J, mu)");
+    // scalar denominator must be a declared symbol, not a compound scalar
+    let src = format!("{PRELUDE}\nX = diff(J, mu * mu)");
     assert!(run_source(&src).is_err());
+
+    // diff(J, mu) is now legal and is identically zero
+    let src = format!("{PRELUDE}\nX = diff(J, mu)\nexport(X, format=latex)");
+    let outputs = run_source(&src).unwrap();
+    assert_eq!(outputs[0].latex, "0");
 }

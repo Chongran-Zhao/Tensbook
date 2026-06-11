@@ -4,7 +4,8 @@
 
 use crate::ast::{BinOp, Expr, Stmt, UnOp};
 use crate::differentiation::{
-    diff_block_components, diff_component_equation, diff_scalar_by_tensor,
+    diff_block_components, diff_component_equation, diff_scalar_by_scalar,
+    diff_scalar_by_tensor,
 };
 use crate::error::Error;
 use crate::renderer::components::tensor_to_component_matrix;
@@ -137,6 +138,27 @@ impl Interpreter {
     fn eval_binary(&self, op: BinOp, l: Value, r: Value) -> Result<Value, Error> {
         use BinOp::*;
         match (op, l, r) {
+            // A : B — double contraction, a scalar
+            (Ddot, Value::Tensor(a), Value::Tensor(b)) => {
+                if a.order() != 2 || b.order() != 2 {
+                    return Err(Error::msg(
+                        "`:` (double contraction) requires two second-order tensors",
+                    ));
+                }
+                if a.dim() != b.dim() {
+                    return Err(Error::msg(format!(
+                        "dimension mismatch in `:`: {} vs {}",
+                        a.dim(),
+                        b.dim()
+                    )));
+                }
+                Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
+            }
+            (Ddot, l, r) => Err(Error::msg(format!(
+                "`:` is not defined between {} and {}",
+                kind(&l),
+                kind(&r)
+            ))),
             // scalar ∘ scalar
             (op, Value::Scalar(a), Value::Scalar(b)) => {
                 let node = match op {
@@ -145,6 +167,7 @@ impl Interpreter {
                     Mul => ScalarExpr::Mul(a, b),
                     Div => ScalarExpr::Div(a, b),
                     Pow => ScalarExpr::Pow(a, b),
+                    Ddot => unreachable!("handled above"),
                 };
                 Ok(Value::Scalar(Rc::new(node)))
             }
@@ -231,7 +254,7 @@ impl Interpreter {
                 }
             }
             "diff" => self.builtin_diff(args, kwargs),
-            "outer" => {
+            "outer" | "otimes" => {
                 let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
                 Ok(Value::Tensor(Rc::new(TensorExpr::outer(a, b)?)))
             }
@@ -358,12 +381,16 @@ impl Interpreter {
 
     // ---- builtins: declarations ------------------------------------------
 
-    /// `diff(expr, X)` — symbolic derivative with respect to a declared
-    /// second-order tensor variable.
+    /// `diff(expr, X)` — symbolic derivative.
     ///
-    /// - scalar / tensor  → evaluated immediately to a tensor expression;
-    /// - tensor / tensor  → an opaque order-4 `Diff` node (component
-    ///   formula rendered on demand via the index engine).
+    /// Denominator forms:
+    /// - declared scalar symbol (`diff(W, mu)`) → scalar derivative;
+    /// - tensor variable or compound tensor expression (`diff(W, F)`,
+    ///   `diff(W, C)` with `C = F.T * F`) → tensor-valued derivative; a
+    ///   compound denominator is treated as the independent variable and
+    ///   matched structurally, with a strict independence check rejecting
+    ///   hidden dependence (e.g. `det(F)` inside `diff(…, C)`).
+    /// - tensor / tensor → opaque order-4 `Diff` node.
     fn builtin_diff(
         &mut self,
         args: &[Expr],
@@ -373,21 +400,30 @@ impl Interpreter {
             return Err(Error::msg("`diff` takes exactly two arguments: diff(expr, X)"));
         }
         let num = self.eval(&args[0])?;
-        let den = match self.eval(&args[1])? {
-            Value::Tensor(t) => t,
-            Value::Scalar(_) => {
-                return Err(Error::msg(
-                    "diff with respect to a scalar is not supported yet; \
-                     the denominator must be a tensor variable",
-                ))
+        let den = self.eval(&args[1])?;
+
+        // --- scalar denominator: d/d mu -----------------------------------
+        let den = match den {
+            Value::Scalar(ds) => {
+                let ScalarExpr::Sym { name, .. } = &*ds else {
+                    return Err(Error::msg(
+                        "diff with respect to a scalar requires a declared scalar \
+                         symbol (e.g. mu), not a compound expression",
+                    ));
+                };
+                return match num {
+                    Value::Scalar(s) => {
+                        Ok(Value::Scalar(diff_scalar_by_scalar(&s, name)?))
+                    }
+                    Value::Tensor(_) => Err(Error::msg(
+                        "differentiating a tensor with respect to a scalar is not \
+                         supported yet",
+                    )),
+                };
             }
+            Value::Tensor(t) => t,
         };
-        if !matches!(&*den, TensorExpr::Var { .. }) {
-            return Err(Error::msg(
-                "diff is only supported with respect to a declared tensor variable \
-                 (e.g. F), not a compound expression",
-            ));
-        }
+
         if den.order() != 2 {
             return Err(Error::msg(format!(
                 "diff denominator must be a second-order tensor, got order {}",
@@ -403,6 +439,12 @@ impl Interpreter {
                          numerator, got order {}",
                         t.order()
                     )));
+                }
+                if !matches!(&*den, TensorExpr::Var { .. }) {
+                    return Err(Error::msg(
+                        "tensor-by-tensor diff requires a declared tensor variable \
+                         as the denominator (component formulas need a plain symbol)",
+                    ));
                 }
                 // Label the numerator with its source variable name (if any)
                 // so the symbol display reads ∂C/∂F rather than ∂(FᵀF)/∂F.
@@ -647,6 +689,7 @@ fn op_name(op: BinOp) -> &'static str {
         BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Pow => "^",
+        BinOp::Ddot => ":",
     }
 }
 

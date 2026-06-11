@@ -52,4 +52,6 @@ pub enum BinOp {
     Mul,
     Div,
     Pow,
+    /// Double contraction `A : B`.
+    Ddot,
 }

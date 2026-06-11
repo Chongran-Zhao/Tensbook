@@ -132,6 +132,7 @@ impl Parser {
             let op = match self.peek() {
                 Tok::Star => BinOp::Mul,
                 Tok::Slash => BinOp::Div,
+                Tok::Colon => BinOp::Ddot,
                 _ => break,
             };
             self.next();

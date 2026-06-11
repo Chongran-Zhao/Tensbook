@@ -20,18 +20,297 @@ use crate::symbolic::{fold_mul, fold_pow, with_coeff, ScalarExpr};
 use crate::tensor::{TensorExpr, TensorProperties};
 use std::rc::Rc;
 
-/// `∂s/∂X` for a scalar `s` and a declared second-order tensor variable `X`.
+/// `∂s/∂X` for a scalar `s` and a second-order tensor expression `X`.
+///
+/// `X` may be a compound expression (e.g. `C = FᵀF`): it is then treated as
+/// an independent variable, matched *structurally* inside `s`. For this to
+/// be rigorous, `s` must not depend on `X`'s underlying variables outside
+/// occurrences of `X` itself — checked by [`check_independence`]; e.g.
+/// `diff(log(det(F)), C)` is rejected rather than silently returning 0.
+///
 /// Returns a second-order tensor expression (zero if `s` does not depend on `X`).
 pub fn diff_scalar_by_tensor(
     s: &Rc<ScalarExpr>,
     x: &Rc<TensorExpr>,
 ) -> Result<Rc<TensorExpr>, Error> {
+    if !matches!(&**x, TensorExpr::Var { .. }) {
+        check_independence_scalar(s, x)?;
+    }
     match d_scalar(s, x)? {
         Some(t) => Ok(t),
         None => Ok(Rc::new(TensorExpr::ScalarMul(
             Rc::new(ScalarExpr::Num(0.0)),
             x.clone(),
         ))),
+    }
+}
+
+/// `∂s/∂a` for a declared scalar symbol `a` (matched by name).
+/// Returns `None`-as-zero folded into `Num(0)`.
+pub fn diff_scalar_by_scalar(
+    s: &Rc<ScalarExpr>,
+    name: &str,
+) -> Result<Rc<ScalarExpr>, Error> {
+    Ok(d_scalar_scalar(s, name)?.unwrap_or_else(|| Rc::new(ScalarExpr::Num(0.0))))
+}
+
+/// `None` means the derivative is identically zero.
+fn d_scalar_scalar(
+    s: &Rc<ScalarExpr>,
+    name: &str,
+) -> Result<Option<Rc<ScalarExpr>>, Error> {
+    use crate::symbolic::{fold_add, fold_sub};
+    let one = || Rc::new(ScalarExpr::Num(1.0));
+    match &**s {
+        ScalarExpr::Sym { name: n, .. } => Ok((n == name).then(one)),
+        ScalarExpr::Num(_) => Ok(None),
+        ScalarExpr::Add(a, b) => {
+            Ok(match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
+                (None, None) => None,
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (Some(x), Some(y)) => Some(fold_add(x, y)),
+            })
+        }
+        ScalarExpr::Sub(a, b) => {
+            Ok(match (d_scalar_scalar(a, name)?, d_scalar_scalar(b, name)?) {
+                (None, None) => None,
+                (Some(x), None) => Some(x),
+                (None, Some(y)) => Some(with_coeff(-1.0, Some(y))),
+                (Some(x), Some(y)) => Some(fold_sub(x, y)),
+            })
+        }
+        ScalarExpr::Neg(a) => {
+            Ok(d_scalar_scalar(a, name)?.map(|d| with_coeff(-1.0, Some(d))))
+        }
+        ScalarExpr::Mul(a, b) => {
+            let da = d_scalar_scalar(a, name)?.map(|d| fold_mul(&d, b));
+            let db = d_scalar_scalar(b, name)?.map(|d| fold_mul(a, &d));
+            Ok(match (da, db) {
+                (None, None) => None,
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (Some(x), Some(y)) => Some(crate::symbolic::fold_add(x, y)),
+            })
+        }
+        ScalarExpr::Div(a, b) => {
+            // d(a/b) = da/b − a db / b²
+            let da = d_scalar_scalar(a, name)?
+                .map(|d| Rc::new(ScalarExpr::Div(d, b.clone())));
+            let db = d_scalar_scalar(b, name)?.map(|d| {
+                with_coeff(
+                    -1.0,
+                    Some(Rc::new(ScalarExpr::Div(
+                        fold_mul(a, &d),
+                        Rc::new(ScalarExpr::Pow(b.clone(), Rc::new(ScalarExpr::Num(2.0)))),
+                    ))),
+                )
+            });
+            Ok(match (da, db) {
+                (None, None) => None,
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (Some(x), Some(y)) => Some(crate::symbolic::fold_add(x, y)),
+            })
+        }
+        ScalarExpr::Pow(base, exp) => {
+            let db = d_scalar_scalar(exp, name)?;
+            if db.is_some() {
+                return Err(Error::msg(
+                    "d(a^b) with the differentiation variable in the exponent \
+                     is not supported yet",
+                ));
+            }
+            let Some(da) = d_scalar_scalar(base, name)? else {
+                return Ok(None);
+            };
+            // d(a^n) = n a^{n-1} da for numeric n, else b a^{b-1} da
+            let coeff = match &**exp {
+                ScalarExpr::Num(n) => with_coeff(*n, Some(fold_pow(base.clone(), n - 1.0))),
+                _ => fold_mul(
+                    exp,
+                    &Rc::new(ScalarExpr::Pow(
+                        base.clone(),
+                        Rc::new(ScalarExpr::Sub(exp.clone(), Rc::new(ScalarExpr::Num(1.0)))),
+                    )),
+                ),
+            };
+            Ok(Some(fold_mul(&coeff, &da)))
+        }
+        ScalarExpr::Log(a) => {
+            let Some(da) = d_scalar_scalar(a, name)? else {
+                return Ok(None);
+            };
+            Ok(Some(Rc::new(ScalarExpr::Div(da, a.clone()))))
+        }
+        // det/tr/ddot of tensors: zero unless the scalar hides inside a
+        // tensor (ScalarMul coefficient), which is not supported yet.
+        ScalarExpr::Det(t) | ScalarExpr::Tr(t) => {
+            if tensor_mentions_scalar(t, name) {
+                Err(Error::msg(
+                    "differentiating det/tr of a tensor whose coefficients contain \
+                     the scalar variable is not supported yet",
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        ScalarExpr::Ddot(a, b) => {
+            if tensor_mentions_scalar(a, name) || tensor_mentions_scalar(b, name) {
+                Err(Error::msg(
+                    "differentiating a double contraction whose factors contain \
+                     the scalar variable is not supported yet",
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Does a scalar symbol (by name) occur anywhere inside a tensor expression?
+fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
+    match t {
+        TensorExpr::Var { .. } => false,
+        TensorExpr::Transpose(a)
+        | TensorExpr::Inverse(a)
+        | TensorExpr::InverseTranspose(a)
+        | TensorExpr::Neg(a) => tensor_mentions_scalar(a, name),
+        TensorExpr::Diff { num, den, .. } => {
+            tensor_mentions_scalar(num, name) || tensor_mentions_scalar(den, name)
+        }
+        TensorExpr::MatMul(a, b)
+        | TensorExpr::Add(a, b)
+        | TensorExpr::Sub(a, b)
+        | TensorExpr::Outer(a, b) => {
+            tensor_mentions_scalar(a, name) || tensor_mentions_scalar(b, name)
+        }
+        TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
+            tensor_mentions_scalar(base, name)
+        }
+        TensorExpr::ScalarMul(s, a) => {
+            scalar_mentions_scalar(s, name) || tensor_mentions_scalar(a, name)
+        }
+    }
+}
+
+fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
+    match s {
+        ScalarExpr::Sym { name: n, .. } => n == name,
+        ScalarExpr::Num(_) => false,
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Pow(a, b) => {
+            scalar_mentions_scalar(a, name) || scalar_mentions_scalar(b, name)
+        }
+        ScalarExpr::Neg(a) | ScalarExpr::Log(a) => scalar_mentions_scalar(a, name),
+        ScalarExpr::Det(t) | ScalarExpr::Tr(t) => tensor_mentions_scalar(t, name),
+        ScalarExpr::Ddot(a, b) => {
+            tensor_mentions_scalar(a, name) || tensor_mentions_scalar(b, name)
+        }
+    }
+}
+
+// ---- independence guard for compound denominators ---------------------------
+
+/// Collect the names of tensor variables appearing in `x`.
+fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
+    match t {
+        TensorExpr::Var { name, .. } => {
+            if !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        TensorExpr::Transpose(a)
+        | TensorExpr::Inverse(a)
+        | TensorExpr::InverseTranspose(a)
+        | TensorExpr::Neg(a) => tensor_var_names(a, out),
+        TensorExpr::Diff { num, den, .. } => {
+            tensor_var_names(num, out);
+            tensor_var_names(den, out);
+        }
+        TensorExpr::MatMul(a, b)
+        | TensorExpr::Add(a, b)
+        | TensorExpr::Sub(a, b)
+        | TensorExpr::Outer(a, b) => {
+            tensor_var_names(a, out);
+            tensor_var_names(b, out);
+        }
+        TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
+            tensor_var_names(base, out)
+        }
+        TensorExpr::ScalarMul(_, a) => tensor_var_names(a, out),
+    }
+}
+
+/// Reject `diff(s, X)` for compound `X` when `s` depends on `X`'s underlying
+/// variables outside occurrences of `X` itself: differentiating would then
+/// silently produce a wrong result (the hidden dependence would read as 0).
+fn check_independence_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>) -> Result<(), Error> {
+    let mut vars = Vec::new();
+    tensor_var_names(x, &mut vars);
+    walk_scalar(s, x, &vars)
+}
+
+fn walk_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<(), Error> {
+    match s {
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => Ok(()),
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Pow(a, b) => {
+            walk_scalar(a, x, vars)?;
+            walk_scalar(b, x, vars)
+        }
+        ScalarExpr::Neg(a) | ScalarExpr::Log(a) => walk_scalar(a, x, vars),
+        ScalarExpr::Det(t) | ScalarExpr::Tr(t) => walk_tensor(t, x, vars),
+        ScalarExpr::Ddot(a, b) => {
+            walk_tensor(a, x, vars)?;
+            walk_tensor(b, x, vars)
+        }
+    }
+}
+
+fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<(), Error> {
+    if *t == **x {
+        return Ok(()); // an occurrence of X itself: opaque, don't descend
+    }
+    match t {
+        TensorExpr::Var { name, .. } => {
+            if vars.contains(name) {
+                Err(Error::msg(format!(
+                    "cannot differentiate with respect to this compound expression: \
+                     the expression also depends on `{name}` outside of it; \
+                     rewrite the energy in terms of the new variable \
+                     (e.g. use det(C) instead of det(F)) or differentiate \
+                     with respect to `{name}` directly"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        TensorExpr::Transpose(a)
+        | TensorExpr::Inverse(a)
+        | TensorExpr::InverseTranspose(a)
+        | TensorExpr::Neg(a) => walk_tensor(a, x, vars),
+        TensorExpr::Diff { num, den, .. } => {
+            walk_tensor(num, x, vars)?;
+            walk_tensor(den, x, vars)
+        }
+        TensorExpr::MatMul(a, b)
+        | TensorExpr::Add(a, b)
+        | TensorExpr::Sub(a, b)
+        | TensorExpr::Outer(a, b) => {
+            walk_tensor(a, x, vars)?;
+            walk_tensor(b, x, vars)
+        }
+        TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
+            walk_tensor(base, x, vars)
+        }
+        TensorExpr::ScalarMul(s, a) => {
+            walk_scalar(s, x, vars)?;
+            walk_tensor(a, x, vars)
+        }
     }
 }
 
