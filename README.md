@@ -21,6 +21,14 @@ wrong zero. There is no numerical guessing anywhere in the engine.
 
 Requires a Rust toolchain (`brew install rustup && rustup default stable`).
 
+Install the CLI with Homebrew:
+
+```sh
+brew install Chongran-Zhao/tensorforge/tensorforge
+```
+
+Or run from source:
+
 ```sh
 # run the flagship example
 cargo run -p tensorforge -- run examples/hill_cr.tens

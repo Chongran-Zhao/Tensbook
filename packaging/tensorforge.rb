@@ -1,7 +1,7 @@
 # Homebrew formula for the TensorForge CLI.
 #
-# Install directly from the repo:
-#   brew install --build-from-source ./packaging/tensorforge.rb
+# Install from the tap:
+#   brew install Chongran-Zhao/tensorforge/tensorforge
 class Tensorforge < Formula
   desc "Symbolic tensor algebra for continuum mechanics (.tens DSL)"
   homepage "https://github.com/Chongran-Zhao/TensorForge"
