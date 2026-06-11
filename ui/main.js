@@ -55,6 +55,30 @@ function toggleTheme() {
   applyTheme(cur === "dark" ? "light" : "dark");
 }
 
+// ---- about dialog -----------------------------------------------------------
+
+const aboutOverlay = document.getElementById("about-overlay");
+document.getElementById("about-btn").addEventListener("click", () => {
+  aboutOverlay.classList.add("show");
+});
+document.getElementById("about-close").addEventListener("click", () => {
+  aboutOverlay.classList.remove("show");
+});
+aboutOverlay.addEventListener("click", (e) => {
+  if (e.target === aboutOverlay) aboutOverlay.classList.remove("show");
+});
+
+// External links: the Tauri webview blocks target=_blank popups, so route
+// them through the opener plugin (falls back to window.open in a browser).
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[href^='http'], a[href^='mailto:']");
+  if (!a) return;
+  e.preventDefault();
+  const openUrl = window.__TAURI__?.opener?.openUrl;
+  if (openUrl) openUrl(a.href);
+  else window.open(a.href, "_blank");
+});
+
 // Path of the currently open file; null = unsaved buffer.
 let currentPath = null;
 

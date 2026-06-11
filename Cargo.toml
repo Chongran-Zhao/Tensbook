@@ -7,6 +7,9 @@ version = "0.1.0"
 edition = "2021"
 description = "A symbolic tensor algebra system for continuum mechanics (MVP: .tens DSL interpreter + LaTeX renderer)"
 license = "MIT"
+authors = ["Chongran Zhao <chongran_zhao@brown.edu>"]
+homepage = "https://chongran-zhao.site"
+repository = "https://github.com/Chongran-Zhao/TensorForge"
 
 [[bin]]
 name = "tensorforge"

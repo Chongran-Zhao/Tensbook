@@ -106,6 +106,7 @@ async fn save_tens(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![run_tens, open_tens, save_tens])
         .run(tauri::generate_context!())
         .expect("error while running TensorForge");

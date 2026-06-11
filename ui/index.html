@@ -9,22 +9,26 @@
   :root, html[data-theme="dark"] {
     --bg: #1e1f24;
     --panel: #26272e;
+    --panel-2: #2c2d35;
     --border: #3a3b44;
     --text: #e8e8ea;
     --muted: #9a9ba6;
     --accent: #6aa7ff;
     --accent-text: #11131a;
     --error: #ff7b72;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   }
   html[data-theme="light"] {
-    --bg: #fafafa;
+    --bg: #f4f5f7;
     --panel: #ffffff;
+    --panel-2: #f0f1f4;
     --border: #d8d8de;
     --text: #1d1d22;
     --muted: #6b6c78;
     --accent: #2f6fdb;
     --accent-text: #ffffff;
     --error: #c62828;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -33,44 +37,54 @@
     font: 14px/1.5 -apple-system, "Segoe UI", sans-serif;
   }
   #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* ---- header ---- */
   header {
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 8px;
     padding: 8px 14px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
   }
-  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  header .hint { color: var(--muted); font-size: 12px; }
+  header h1 {
+    font-size: 15px; margin: 0 6px 0 0; font-weight: 650;
+    letter-spacing: 0.2px;
+  }
+  header h1 .accent { color: var(--accent); }
+  header .hint { color: var(--muted); font-size: 12px; white-space: nowrap; }
   header button {
+    appearance: none; -webkit-appearance: none;
     background: var(--panel); color: var(--text);
     border: 1px solid var(--border);
-    padding: 6px 14px; border-radius: 6px; font-weight: 500;
-    cursor: pointer; font-size: 13px;
-    white-space: nowrap; flex-shrink: 0;
+    padding: 5px 14px; border-radius: 7px; font-weight: 500;
+    cursor: pointer; font-size: 13px; line-height: 1.45;
+    white-space: nowrap; flex-shrink: 0; min-width: max-content;
+    transition: border-color 0.12s, background 0.12s;
   }
-  header button:hover { border-color: var(--accent); }
+  header button:hover { border-color: var(--accent); background: var(--panel-2); }
+  header button:active { transform: translateY(0.5px); }
   header button#run {
     background: var(--accent); color: var(--accent-text); border: 0;
-    padding: 6px 18px; font-weight: 600;
+    padding: 6px 20px; font-weight: 600;
   }
-  header button#run:hover { filter: brightness(1.1); }
+  header button#run:hover { filter: brightness(1.08); }
   header .spacer { margin-left: auto; }
-  header button#theme {
-    padding: 6px 10px; font-size: 14px; line-height: 1;
-  }
+  header button.icon { padding: 5px 10px; font-size: 14px; line-height: 1.3; }
   header .filename {
     color: var(--muted); font-size: 12px;
     font-family: "SF Mono", Menlo, Consolas, monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    max-width: 25%;
+    max-width: 22%;
   }
+
+  /* ---- main panes ---- */
   main { display: flex; flex: 1; min-height: 0; }
   #editor {
     width: 44%; min-width: 280px; resize: none; border: 0; outline: none;
     border-right: 1px solid var(--border);
     background: var(--panel); color: var(--text);
-    font: 13px/1.6 "SF Mono", Menlo, Consolas, monospace;
-    padding: 14px; tab-size: 4;
+    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
+    padding: 16px; tab-size: 4;
   }
-  #output { flex: 1; overflow: auto; padding: 14px 18px; }
+  #output { flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg); }
   .block { margin-bottom: 18px; }
   .block .head {
     color: var(--muted); font-size: 12px; margin-bottom: 6px;
@@ -78,34 +92,99 @@
   }
   .block .math {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+    border-radius: 10px; padding: 14px 16px; overflow-x: auto;
+    box-shadow: var(--shadow);
   }
   .block .math .katex { font-size: 1.15em; }
   .error {
     color: var(--error); white-space: pre-wrap;
     font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 3px solid var(--error);
+    border-radius: 8px; padding: 12px 14px;
   }
-  .placeholder { color: var(--muted); margin-top: 30px; text-align: center; }
+  .placeholder { color: var(--muted); margin-top: 36px; text-align: center; }
+
+  /* ---- footer ---- */
+  footer {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 14px; border-top: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted); font-size: 11.5px;
+  }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+  footer .sep { opacity: 0.5; }
+  footer .right { margin-left: auto; }
+
+  /* ---- about modal ---- */
+  #about-overlay {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.45); z-index: 10;
+  }
+  #about-overlay.show { display: flex; }
+  #about {
+    width: 420px; max-width: calc(100vw - 48px);
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 26px 30px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+  #about h2 { margin: 0 0 2px; font-size: 19px; }
+  #about h2 .accent { color: var(--accent); }
+  #about .tagline { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+  #about .row { display: flex; gap: 10px; margin: 7px 0; font-size: 13px; }
+  #about .row .key { color: var(--muted); width: 76px; flex-shrink: 0; }
+  #about a { color: var(--accent); text-decoration: none; }
+  #about a:hover { text-decoration: underline; }
+  #about .close-row { text-align: right; margin-top: 18px; }
+  #about button {
+    appearance: none; -webkit-appearance: none;
+    background: var(--accent); color: var(--accent-text); border: 0;
+    padding: 6px 22px; border-radius: 7px; font-weight: 600;
+    font-size: 13px; cursor: pointer;
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <h1>TensorForge</h1>
+    <h1>Tensor<span class="accent">Forge</span></h1>
     <button id="open">Open…</button>
     <button id="save">Save</button>
     <button id="saveas">Save&nbsp;As…</button>
     <span class="filename" id="filename"></span>
     <span class="spacer"></span>
-    <span class="hint">⌘⏎ / Ctrl+Enter to run</span>
-    <button id="theme" title="Toggle light/dark theme">◐</button>
+    <span class="hint">⌘⏎ to run</span>
+    <button id="theme" class="icon" title="Toggle light/dark theme">◐</button>
+    <button id="about-btn" class="icon" title="About TensorForge">ⓘ</button>
     <button id="run">Run</button>
   </header>
   <main>
     <textarea id="editor" spellcheck="false"></textarea>
     <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
   </main>
+  <footer>
+    <span>TensorForge v0.1.0</span>
+    <span class="sep">·</span>
+    <span>symbolic tensor algebra for continuum mechanics</span>
+    <span class="right">© 2026 <a href="https://chongran-zhao.site" target="_blank" rel="noopener">Chongran Zhao</a></span>
+  </footer>
 </div>
+
+<div id="about-overlay">
+  <div id="about">
+    <h2>Tensor<span class="accent">Forge</span></h2>
+    <div class="tagline">Rigorous symbolic tensor algebra for finite-deformation continuum mechanics — v0.1.0</div>
+    <div class="row"><span class="key">Author</span><span>Chongran Zhao</span></div>
+    <div class="row"><span class="key">Affiliation</span><span>Ph.D. student in Engineering, Brown University<br>M.Eng. in Mechanics, SUSTech</span></div>
+    <div class="row"><span class="key">Email</span><a href="mailto:chongran_zhao@brown.edu">chongran_zhao@brown.edu</a></div>
+    <div class="row"><span class="key">Website</span><a href="https://chongran-zhao.site" target="_blank" rel="noopener">chongran-zhao.site</a></div>
+    <div class="row"><span class="key">GitHub</span><a href="https://github.com/Chongran-Zhao" target="_blank" rel="noopener">github.com/Chongran-Zhao</a></div>
+    <div class="close-row"><button id="about-close">Close</button></div>
+  </div>
+</div>
+
 <script type="module" src="main.js"></script>
 </body>
 </html>
