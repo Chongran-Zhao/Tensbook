@@ -53,8 +53,12 @@ fn run_tens(source: String) -> RunResult {
 
 /// Show a native open dialog and read the chosen `.tens` file.
 /// Returns `Ok(None)` if the user cancelled.
+///
+/// `async` is required: sync commands run on the main thread, where
+/// `blocking_pick_file` would deadlock waiting for the dialog. Async
+/// commands run on a worker thread, making the blocking call safe.
 #[tauri::command]
-fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> {
+async fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> {
     let Some(path) = app
         .dialog()
         .file()
@@ -73,8 +77,9 @@ fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> {
 
 /// Save the source. `path: None` (or Save As) opens a native save dialog.
 /// Returns the path written, or `None` if the user cancelled.
+/// `async` for the same main-thread-deadlock reason as [`open_tens`].
 #[tauri::command]
-fn save_tens(
+async fn save_tens(
     app: tauri::AppHandle,
     source: String,
     path: Option<String>,
