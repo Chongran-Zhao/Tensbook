@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TensorForge</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+  :root {
+    --bg: #1e1f24;
+    --panel: #26272e;
+    --border: #3a3b44;
+    --text: #e8e8ea;
+    --muted: #9a9ba6;
+    --accent: #6aa7ff;
+    --error: #ff7b72;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", sans-serif;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 14px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .hint { color: var(--muted); font-size: 12px; }
+  header button {
+    margin-left: auto;
+    background: var(--accent); color: #11131a; border: 0;
+    padding: 6px 18px; border-radius: 6px; font-weight: 600;
+    cursor: pointer; font-size: 13px;
+  }
+  header button:hover { filter: brightness(1.1); }
+  main { display: flex; flex: 1; min-height: 0; }
+  #editor {
+    width: 44%; min-width: 280px; resize: none; border: 0; outline: none;
+    border-right: 1px solid var(--border);
+    background: var(--panel); color: var(--text);
+    font: 13px/1.6 "SF Mono", Menlo, Consolas, monospace;
+    padding: 14px; tab-size: 4;
+  }
+  #output { flex: 1; overflow: auto; padding: 14px 18px; }
+  .block { margin-bottom: 18px; }
+  .block .head {
+    color: var(--muted); font-size: 12px; margin-bottom: 6px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .block .math {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+  }
+  .block .math .katex { font-size: 1.15em; }
+  .error {
+    color: var(--error); white-space: pre-wrap;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .placeholder { color: var(--muted); margin-top: 30px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>TensorForge</h1>
+    <span class="hint">⌘⏎ / Ctrl+Enter to run</span>
+    <button id="run">Run</button>
+  </header>
+  <main>
+    <textarea id="editor" spellcheck="false"></textarea>
+    <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
+  </main>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
