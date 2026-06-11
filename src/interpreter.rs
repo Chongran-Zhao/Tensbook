@@ -48,6 +48,10 @@ pub struct Interpreter {
     /// Definitions for display-time back-substitution, in insertion order:
     /// `C = F.T * F` lets later displays show `\bm C` instead of `FᵀF`.
     defs: Vec<crate::substitute::Def>,
+    /// Symbol names declared as function arguments via `Var("...")`, in
+    /// declaration order. A scalar expression mentioning exactly one of
+    /// these is a function of it and can be applied with call syntax.
+    fn_vars: Vec<String>,
     outputs: Vec<Output>,
 }
 
@@ -94,7 +98,9 @@ impl Interpreter {
                 // A direct Scalar("...")/Tensor("...") declaration also
                 // registers the display label for this variable name.
                 if let Expr::Call { callee, args, .. } = expr {
-                    if (callee == "Scalar" || callee == "Tensor") && !args.is_empty() {
+                    if (callee == "Scalar" || callee == "Tensor" || callee == "Var")
+                        && !args.is_empty()
+                    {
                         if let Expr::Str(latex) = &args[0] {
                             self.labels.insert(name.clone(), latex.clone());
                         }
@@ -274,6 +280,7 @@ impl Interpreter {
     ) -> Result<Value, Error> {
         match callee {
             "Scalar" => self.builtin_scalar(args, kwargs),
+            "Var" => self.builtin_var(args, kwargs),
             "Tensor" => self.builtin_tensor(args, kwargs),
             "det" | "tr" => {
                 let t = self.expect_tensor_arg(callee, args, kwargs)?;
@@ -363,14 +370,43 @@ impl Interpreter {
                         m: m.ok_or_else(|| Error::msg("Seth–Hill strain requires m=..."))?,
                     },
                     Some("Hencky") => crate::tensor::Scale::Hencky,
-                    Some(other) => {
-                        return Err(Error::msg(format!(
-                            "unknown scale `{other}` (supported: CR, SethHill, Hencky)"
-                        )))
-                    }
+                    // A user-defined function of one `Var` argument.
+                    Some(other) => match self.env.get(other).cloned() {
+                        Some(Value::Scalar(body)) => {
+                            let vars = self.free_fn_vars(&body);
+                            let var = match vars.as_slice() {
+                                [v] => v.clone(),
+                                [] => {
+                                    return Err(Error::msg(format!(
+                                        "scale `{other}` is not a function: it mentions no \
+                                         `Var(...)` argument"
+                                    )))
+                                }
+                                _ => {
+                                    return Err(Error::msg(format!(
+                                        "scale `{other}` mentions several `Var(...)` arguments \
+                                         ({}); a scale function has one variable",
+                                        vars.join(", ")
+                                    )))
+                                }
+                            };
+                            let dbody = simplify_scalar(
+                                &diff_scalar_by_scalar(&body, &var)?,
+                                RuleSet::Continuum,
+                            );
+                            crate::tensor::Scale::Custom { var, body, dbody }
+                        }
+                        _ => {
+                            return Err(Error::msg(format!(
+                                "unknown scale `{other}` (supported: CR, SethHill, Hencky, \
+                                 or a function declared via Var)"
+                            )))
+                        }
+                    },
                     None => {
                         return Err(Error::msg(
-                            "`gstrain` requires scale=CR | SethHill | Hencky",
+                            "`gstrain` requires scale=CR | SethHill | Hencky or a \
+                             user function of a Var argument",
                         ))
                     }
                 };
@@ -460,7 +496,15 @@ impl Interpreter {
             "display" | "export" => Err(Error::msg(format!(
                 "`{callee}` is a statement and cannot be used inside an expression"
             ))),
-            other => Err(Error::msg(format!("unknown function `{other}`"))),
+            // A user-defined name bound to a scalar expression in a declared
+            // `Var` argument is a function: `E(x)` substitutes the argument.
+            other => match self.env.get(other).cloned() {
+                Some(Value::Scalar(body)) => self.apply_scalar_function(other, &body, args, kwargs),
+                Some(Value::Tensor(_)) => {
+                    Err(Error::msg(format!("`{other}` is a tensor, not a function")))
+                }
+                None => Err(Error::msg(format!("unknown function `{other}`"))),
+            },
         }
     }
 
@@ -589,6 +633,77 @@ impl Interpreter {
                     RuleSet::Continuum,
                 )))
             }
+        }
+    }
+
+    /// `Var("\lambda")` — declare a scalar *function argument*. Any scalar
+    /// expression mentioning it becomes a function of it (applicable with
+    /// call syntax, usable as a `gstrain` scale).
+    fn builtin_var(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
+        if args.len() != 1 || !kwargs.is_empty() {
+            return Err(Error::msg(
+                "`Var` takes exactly one argument: Var(\"<latex>\")",
+            ));
+        }
+        let latex = match &args[0] {
+            Expr::Str(s) => s.clone(),
+            _ => return Err(Error::msg("`Var` expects a string LaTeX name")),
+        };
+        if !self.fn_vars.contains(&latex) {
+            self.fn_vars.push(latex.clone());
+        }
+        Ok(Value::Scalar(Rc::new(ScalarExpr::Sym {
+            name: latex.clone(),
+            latex,
+        })))
+    }
+
+    /// The declared `Var` arguments that occur free in `body`.
+    fn free_fn_vars(&self, body: &ScalarExpr) -> Vec<String> {
+        self.fn_vars
+            .iter()
+            .filter(|v| crate::differentiation::scalar_mentions_scalar(body, v))
+            .cloned()
+            .collect()
+    }
+
+    /// Apply a user scalar function: substitute its single `Var` argument.
+    fn apply_scalar_function(
+        &mut self,
+        name: &str,
+        body: &Rc<ScalarExpr>,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() != 1 || !kwargs.is_empty() {
+            return Err(Error::msg(format!(
+                "`{name}` is a function of one variable and takes exactly one argument"
+            )));
+        }
+        let vars = self.free_fn_vars(body);
+        let var = match vars.as_slice() {
+            [v] => v.clone(),
+            [] => {
+                return Err(Error::msg(format!(
+                    "`{name}` is not a function: it mentions no `Var(...)` argument"
+                )))
+            }
+            _ => {
+                return Err(Error::msg(format!(
+                    "`{name}` mentions several `Var(...)` arguments ({}); functions of \
+                     one variable only are supported",
+                    vars.join(", ")
+                )))
+            }
+        };
+        match self.eval(&args[0])? {
+            Value::Scalar(x) => Ok(Value::Scalar(crate::substitute::subst_scalar_sym(
+                body, &var, &x,
+            ))),
+            Value::Tensor(_) => Err(Error::msg(format!(
+                "`{name}` is a scalar function; applying it to a tensor is not \
+                 supported yet (use gstrain for spectral application)"
+            ))),
         }
     }
 

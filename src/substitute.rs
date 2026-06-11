@@ -328,6 +328,26 @@ fn subst_t_scalar(
     rebuild_tensor(t, &rt, &rs)
 }
 
+/// Replace every occurrence of the scalar symbol named `var` by `rep`.
+/// This is function application for user-declared `Var` arguments:
+/// `E = (λ^m − λ^{−n})/(m+n)` applied at `λ = x` is `subst_scalar_sym(E, "λ", x)`.
+pub fn subst_scalar_sym(s: &Rc<ScalarExpr>, var: &str, rep: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
+    if let ScalarExpr::Sym { name, .. } = &**s {
+        if name == var {
+            return rep.clone();
+        }
+    }
+    let rs = |x: &Rc<ScalarExpr>| subst_scalar_sym(x, var, rep);
+    let rt = |t: &Rc<TensorExpr>| subst_tensor_sym(t, var, rep);
+    rebuild_scalar(s, &rt, &rs)
+}
+
+fn subst_tensor_sym(t: &Rc<TensorExpr>, var: &str, rep: &Rc<ScalarExpr>) -> Rc<TensorExpr> {
+    let rs = |x: &Rc<ScalarExpr>| subst_scalar_sym(x, var, rep);
+    let rt = |x: &Rc<TensorExpr>| subst_tensor_sym(x, var, rep);
+    rebuild_tensor(t, &rt, &rs)
+}
+
 // ---- structural rebuilders ----------------------------------------------------
 
 fn rebuild_tensor(

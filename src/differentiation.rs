@@ -722,10 +722,14 @@ fn scale_mentions_scalar(scale: &crate::tensor::Scale, name: &str) -> bool {
             scalar_mentions_scalar(m, name) || scalar_mentions_scalar(n, name)
         }
         crate::tensor::Scale::Hencky => false,
+        // The scale's own bound variable is not a free mention.
+        crate::tensor::Scale::Custom { var, body, .. } => {
+            name != var && scalar_mentions_scalar(body, name)
+        }
     }
 }
 
-fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
+pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
     match s {
         ScalarExpr::Sym { name: n, .. } => n == name,
         ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => false,

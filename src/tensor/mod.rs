@@ -21,6 +21,15 @@ pub enum Scale {
     },
     /// Hencky (logarithmic, coercive): `E(λ) = ln λ`.
     Hencky,
+    /// A user-defined scale function: `body` is an ordinary scalar
+    /// expression in the declared variable `var` (e.g. `lam = Var("\lambda")`
+    /// then `E = (lam^m - lam^(-n))/(m+n)`). `dbody` is `d body/d var`,
+    /// computed once at declaration by the scalar differentiation engine.
+    Custom {
+        var: String,
+        body: Rc<ScalarExpr>,
+        dbody: Rc<ScalarExpr>,
+    },
 }
 
 impl Scale {
@@ -45,6 +54,9 @@ impl Scale {
                 Rc::new(ScalarExpr::Add(m.clone(), n.clone())),
             )),
             Scale::Hencky => Rc::new(ScalarExpr::Log(lambda.clone())),
+            Scale::Custom { var, body, .. } => {
+                crate::substitute::subst_scalar_sym(body, var, lambda)
+            }
         }
     }
 
@@ -77,6 +89,9 @@ impl Scale {
             )),
             // d/dλ ln λ = 1/λ
             Scale::Hencky => Rc::new(ScalarExpr::Div(num(1.0), lambda.clone())),
+            Scale::Custom { var, dbody, .. } => {
+                crate::substitute::subst_scalar_sym(dbody, var, lambda)
+            }
         }
     }
 
@@ -85,6 +100,7 @@ impl Scale {
             Scale::SethHill { .. } => "SethHill",
             Scale::CR { .. } => "CR",
             Scale::Hencky => "Hencky",
+            Scale::Custom { .. } => "Custom",
         }
     }
 }

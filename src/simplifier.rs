@@ -444,12 +444,16 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (ScalarExpr::Num(x), _) if *x == 0.0 => b.clone(),
             (_, ScalarExpr::Num(x)) if *x == 0.0 => a.clone(),
             (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x + y)),
+            // a + (−b) → a − b
+            (_, ScalarExpr::Neg(y)) => Rc::new(ScalarExpr::Sub(a.clone(), y.clone())),
             _ => s,
         },
         ScalarExpr::Sub(a, b) => match (&**a, &**b) {
             (_, ScalarExpr::Num(x)) if *x == 0.0 => a.clone(),
             (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x - y)),
             _ if a == b => Rc::new(ScalarExpr::Num(0.0)),
+            // a − (−b) → a + b
+            (_, ScalarExpr::Neg(y)) => Rc::new(ScalarExpr::Add(a.clone(), y.clone())),
             _ => s,
         },
         ScalarExpr::Mul(a, b) => match (&**a, &**b) {
@@ -458,6 +462,15 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (ScalarExpr::Num(x), _) if *x == 1.0 => b.clone(),
             (_, ScalarExpr::Num(x)) if *x == 1.0 => a.clone(),
             (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x * y)),
+            // (−x) · y → −(x y), x · (−y) → −(x y)
+            (ScalarExpr::Neg(x), _) => Rc::new(ScalarExpr::Neg(Rc::new(ScalarExpr::Mul(
+                x.clone(),
+                b.clone(),
+            )))),
+            (_, ScalarExpr::Neg(y)) => Rc::new(ScalarExpr::Neg(Rc::new(ScalarExpr::Mul(
+                a.clone(),
+                y.clone(),
+            )))),
             // x · x → x²
             _ if a == b => Rc::new(ScalarExpr::Pow(a.clone(), Rc::new(ScalarExpr::Num(2.0)))),
             // x^p · x^q → x^{p+q}
