@@ -32,9 +32,21 @@ display(dy, mode=symbol)
 display(z, mode=symbol)
 "#;
     let outputs = run_source(src).unwrap();
-    assert!(outputs[0].latex.contains("\\cosh \\mu"), "got: {}", outputs[0].latex);
-    assert!(outputs[1].latex.contains("e^{\\mu}"), "got: {}", outputs[1].latex);
-    assert!(outputs[2].latex.contains("\\sqrt{\\mu}"), "got: {}", outputs[2].latex);
+    assert!(
+        outputs[0].latex.contains("\\cosh \\mu"),
+        "got: {}",
+        outputs[0].latex
+    );
+    assert!(
+        outputs[1].latex.contains("e^{\\mu}"),
+        "got: {}",
+        outputs[1].latex
+    );
+    assert!(
+        outputs[2].latex.contains("\\sqrt{\\mu}"),
+        "got: {}",
+        outputs[2].latex
+    );
 }
 
 // ---- generalized strain ------------------------------------------------------
@@ -110,9 +122,7 @@ fn thermodynamic_force_from_quadratic_energy() {
 
 #[test]
 fn second_pk_stress_is_t_double_dot_q() {
-    let src = format!(
-        "{PRELUDE}\nT = diff(W, E)\nS = 2 * diff(W, C)\ndisplay(S, mode=symbol)"
-    );
+    let src = format!("{PRELUDE}\nT = diff(W, E)\nS = 2 * diff(W, C)\ndisplay(S, mode=symbol)");
     let outputs = run_source(&src).unwrap();
     // After back-substitution the symbol display reads S = T : Q.
     assert!(
@@ -147,9 +157,10 @@ fn diff_by_strain_rejects_dependence_outside_strain() {
 
 #[test]
 fn hill_cr_example_runs_end_to_end() {
-    let src = std::fs::read_to_string(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/hill_cr.tens"),
-    )
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/hill_cr.tens"
+    ))
     .unwrap();
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs.len(), 7);

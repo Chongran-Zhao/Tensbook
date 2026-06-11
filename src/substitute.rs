@@ -202,10 +202,7 @@ fn det_target_alias<'a>(t: &Rc<TensorExpr>, aliases: &'a [DetAlias]) -> Option<&
     })
 }
 
-fn jacobian_square_alias<'a>(
-    s: &Rc<ScalarExpr>,
-    aliases: &'a [DetAlias],
-) -> Option<&'a DetAlias> {
+fn jacobian_square_alias<'a>(s: &Rc<ScalarExpr>, aliases: &'a [DetAlias]) -> Option<&'a DetAlias> {
     match &**s {
         ScalarExpr::Mul(a, b) => jacobian_pair_alias(a, b, aliases),
         _ => None,

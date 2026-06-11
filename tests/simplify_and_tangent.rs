@@ -18,11 +18,14 @@ W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
 #[test]
 fn simplify_inverse_cancellation() {
     // F^{-T} Fᵀ → I  (continuum rule from the spec)
-    let src = format!(
-        "{PRELUDE}\nX = simplify(inv(F.T) * F.T, rules=tensor)\ndisplay(X, mode=symbol)"
-    );
+    let src =
+        format!("{PRELUDE}\nX = simplify(inv(F.T) * F.T, rules=tensor)\ndisplay(X, mode=symbol)");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "\\bm X = \\bm I", "got: {}", outputs[0].latex);
+    assert_eq!(
+        outputs[0].latex, "\\bm X = \\bm I",
+        "got: {}",
+        outputs[0].latex
+    );
 }
 
 #[test]
@@ -73,9 +76,7 @@ fn simplify_trace_cyclic() {
 
 #[test]
 fn tangent_component_formula() {
-    let src = format!(
-        "{PRELUDE}\nP = diff(W, F)\nA = diff(P, F)\ndisplay(A, mode=components)"
-    );
+    let src = format!("{PRELUDE}\nP = diff(W, F)\nA = diff(P, F)\ndisplay(A, mode=components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -100,9 +101,7 @@ fn tangent_component_formula() {
 
 #[test]
 fn tangent_symbol_mode() {
-    let src = format!(
-        "{PRELUDE}\nP = diff(W, F)\nA = diff(P, F)\ndisplay(A, mode=symbol)"
-    );
+    let src = format!("{PRELUDE}\nP = diff(W, F)\nA = diff(P, F)\ndisplay(A, mode=symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0]
@@ -117,9 +116,7 @@ fn tangent_symbol_mode() {
 
 #[test]
 fn dcdf_block_components_is_3x3_of_blocks() {
-    let src = format!(
-        "{PRELUDE}\ndCdF = diff(C, F)\ndisplay(dCdF, mode=block_components)"
-    );
+    let src = format!("{PRELUDE}\ndCdF = diff(C, F)\ndisplay(dCdF, mode=block_components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(

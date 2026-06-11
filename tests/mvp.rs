@@ -19,10 +19,7 @@ fn scalar_parses() {
     let (_, interp) = run_source_with_env(r#"mu = Scalar("\mu")"#).unwrap();
     match interp.get("mu") {
         Some(Value::Scalar(s)) => {
-            assert_eq!(
-                **s,
-                tensorforge::symbolic::ScalarExpr::sym("\\mu", "\\mu")
-            );
+            assert_eq!(**s, tensorforge::symbolic::ScalarExpr::sym("\\mu", "\\mu"));
         }
         other => panic!("expected Scalar, got {other:?}"),
     }
@@ -30,8 +27,7 @@ fn scalar_parses() {
 
 #[test]
 fn tensor_parses_with_order_and_dim() {
-    let (_, interp) =
-        run_source_with_env(r#"F = Tensor("\bm F", order=2, dim=3)"#).unwrap();
+    let (_, interp) = run_source_with_env(r#"F = Tensor("\bm F", order=2, dim=3)"#).unwrap();
     match interp.get("F") {
         Some(Value::Tensor(t)) => {
             assert_eq!(t.order(), 2);
@@ -102,7 +98,11 @@ fn display_symbol_mode() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].header, "display C, mode=symbol");
     // Displayed as `\bm C = \bm F^{\mathsf{T}} \bm F`
-    assert!(outputs[0].latex.contains("\\bm C ="), "got: {}", outputs[0].latex);
+    assert!(
+        outputs[0].latex.contains("\\bm C ="),
+        "got: {}",
+        outputs[0].latex
+    );
     assert!(
         outputs[0].latex.contains("\\bm F^{\\mathsf{T}} \\bm F"),
         "got: {}",
@@ -151,7 +151,11 @@ display(J, mode=symbol)
 display(I1, mode=symbol)
 "#;
     let outputs = run_source(src).unwrap();
-    assert!(outputs[0].latex.contains("\\det \\bm F"), "got: {}", outputs[0].latex);
+    assert!(
+        outputs[0].latex.contains("\\det \\bm F"),
+        "got: {}",
+        outputs[0].latex
+    );
     assert!(
         outputs[1].latex.contains("\\operatorname{tr}"),
         "got: {}",
@@ -161,9 +165,10 @@ display(I1, mode=symbol)
 
 #[test]
 fn neo_hookean_example_runs_end_to_end() {
-    let src = std::fs::read_to_string(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/neo_hookean.tens"),
-    )
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/neo_hookean.tens"
+    ))
     .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert_eq!(outputs.len(), 13);
@@ -179,7 +184,11 @@ fn neo_hookean_example_runs_end_to_end() {
         .unwrap();
     // J = det F and I1 = tr C are back-substituted in the display.
     for needle in ["\\mu", "\\lambda", "\\log J", "I1"] {
-        assert!(w_out.latex.contains(needle), "missing {needle} in: {}", w_out.latex);
+        assert!(
+            w_out.latex.contains(needle),
+            "missing {needle} in: {}",
+            w_out.latex
+        );
     }
 }
 

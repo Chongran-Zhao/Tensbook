@@ -131,7 +131,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
                     ',' => Tok::Comma,
                     '(' => Tok::LParen,
                     ')' => Tok::RParen,
-                    _ => return Err(Error::new(format!("unexpected character `{c}`"), Some(line))),
+                    _ => {
+                        return Err(Error::new(
+                            format!("unexpected character `{c}`"),
+                            Some(line),
+                        ))
+                    }
                 };
                 tokens.push(Token { tok, line });
             }

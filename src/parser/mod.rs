@@ -222,10 +222,7 @@ impl Parser {
                 self.expect(&Tok::RParen, "`)`")?;
                 Ok(expr)
             }
-            tok => Err(Error::new(
-                format!("unexpected token {tok:?}"),
-                Some(line),
-            )),
+            tok => Err(Error::new(format!("unexpected token {tok:?}"), Some(line))),
         }
     }
 
@@ -238,8 +235,8 @@ impl Parser {
         }
         loop {
             // kwarg: IDENT "=" expr
-            let is_kwarg = matches!(self.peek(), Tok::Ident(_))
-                && self.tokens[self.pos + 1].tok == Tok::Eq;
+            let is_kwarg =
+                matches!(self.peek(), Tok::Ident(_)) && self.tokens[self.pos + 1].tok == Tok::Eq;
             if is_kwarg {
                 let name = match self.next() {
                     Tok::Ident(name) => name,

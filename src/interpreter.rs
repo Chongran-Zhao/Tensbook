@@ -224,9 +224,9 @@ impl Interpreter {
                 Ok(Value::Scalar(Rc::new(node)))
             }
             // tensor ∘ tensor
-            (Mul, Value::Tensor(a), Value::Tensor(b)) => Ok(simplified_tensor_value(Rc::new(
-                TensorExpr::matmul(a, b)?,
-            ))),
+            (Mul, Value::Tensor(a), Value::Tensor(b)) => {
+                Ok(simplified_tensor_value(Rc::new(TensorExpr::matmul(a, b)?)))
+            }
             (Add, Value::Tensor(a), Value::Tensor(b)) => {
                 Ok(simplified_tensor_value(Rc::new(TensorExpr::add(a, b)?)))
             }

@@ -20,17 +20,12 @@ use std::rc::Rc;
 pub fn tensor_to_spectral(t: &Rc<TensorExpr>) -> Result<String, Error> {
     match &**t {
         // pull numeric/scalar prefactors into the summand
-        TensorExpr::ScalarMul(c, inner) => {
-            spectral_sum_scaled(inner, Some(c.clone()))
-        }
+        TensorExpr::ScalarMul(c, inner) => spectral_sum_scaled(inner, Some(c.clone())),
         _ => spectral_sum_scaled(t, None),
     }
 }
 
-fn spectral_sum_scaled(
-    t: &Rc<TensorExpr>,
-    coeff: Option<Rc<ScalarExpr>>,
-) -> Result<String, Error> {
+fn spectral_sum_scaled(t: &Rc<TensorExpr>, coeff: Option<Rc<ScalarExpr>>) -> Result<String, Error> {
     let (body, dim) = spectral_summand(t)?;
     let body = match coeff {
         Some(c) => fold_mul(&c, &body),

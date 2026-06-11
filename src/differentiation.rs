@@ -990,12 +990,7 @@ fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExp
         TensorExpr::ScalarMul(s, inner) => {
             let d_inner = d_trace(inner, x)?.map(|t| smul(s.clone(), t));
             let d_coeff = if s_contains(s, x) {
-                d_scalar(s, x)?.map(|t| {
-                    smul(
-                        Rc::new(ScalarExpr::Tr(inner.clone())),
-                        t,
-                    )
-                })
+                d_scalar(s, x)?.map(|t| smul(Rc::new(ScalarExpr::Tr(inner.clone())), t))
             } else {
                 None
             };

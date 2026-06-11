@@ -7,7 +7,11 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// `name = expr`
-    Assign { name: String, expr: Expr, line: usize },
+    Assign {
+        name: String,
+        expr: Expr,
+        line: usize,
+    },
     /// A bare expression statement, e.g. `display(C, mode=symbol)`.
     Expr(Expr, usize),
 }

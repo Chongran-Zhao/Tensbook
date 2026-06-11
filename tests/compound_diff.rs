@@ -216,7 +216,11 @@ display(S, mode=symbol)
         latex.contains("\\left( \\operatorname{tr} \\bm C \\right) \\, \\bm C^{-\\mathsf{T}}"),
         "trace coefficient should be grouped before tensor factor: {latex}"
     );
-    assert_eq!(latex.matches("{J}^{-\\frac{2}{3}}").count(), 1, "got: {latex}");
+    assert_eq!(
+        latex.matches("{J}^{-\\frac{2}{3}}").count(),
+        1,
+        "got: {latex}"
+    );
     assert!(!latex.contains("J \\, J"), "got: {latex}");
     assert!(!latex.contains("+ -"), "got: {latex}");
     assert!(
@@ -255,7 +259,11 @@ display(D, mode=symbol)
             && latex.contains("\\frac{1}{3} \\, \\bm C \\otimes"),
         "got: {latex}"
     );
-    assert_eq!(latex.matches("{J}^{-\\frac{2}{3}}").count(), 1, "got: {latex}");
+    assert_eq!(
+        latex.matches("{J}^{-\\frac{2}{3}}").count(),
+        1,
+        "got: {latex}"
+    );
     assert!(
         !latex.contains("\\frac{{J}^{-\\frac{2}{3}}}{3}"),
         "got: {latex}"
@@ -278,7 +286,11 @@ display(det(C), mode=symbol)
 display(det(C)^(-1/3), mode=symbol)
 "#;
     let outputs = run_source(src).unwrap();
-    assert!(outputs[0].latex.contains("{J}^{2}"), "got: {}", outputs[0].latex);
+    assert!(
+        outputs[0].latex.contains("{J}^{2}"),
+        "got: {}",
+        outputs[0].latex
+    );
     assert!(
         outputs[1].latex.contains("{J}^{-\\frac{2}{3}}"),
         "got: {}",

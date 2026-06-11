@@ -15,8 +15,7 @@ fn spectral_of_symmetric_tensor() {
     let src = format!("{PRELUDE}\nS = spectral(C)\ndisplay(S, mode=symbol)");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
-        outputs[0].latex,
-        "\\bm S = \\sum_{a=1}^{3} c_a \\, \\bm N_a \\otimes \\bm N_a",
+        outputs[0].latex, "\\bm S = \\sum_{a=1}^{3} c_a \\, \\bm N_a \\otimes \\bm N_a",
         "got: {}",
         outputs[0].latex
     );
@@ -96,10 +95,7 @@ fn ddot_is_scalar_double_contraction() {
 fn markdown_export_wraps_display_math() {
     let src = format!("{PRELUDE}\nexport(C, format=markdown)");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(
-        outputs[0].latex,
-        "$$\n\\bm F^{\\mathsf{T}} \\bm F\n$$"
-    );
+    assert_eq!(outputs[0].latex, "$$\n\\bm F^{\\mathsf{T}} \\bm F\n$$");
 }
 
 // ---- isotropic tensor functions sqrt/log/exp --------------------------------
@@ -110,8 +106,7 @@ fn tensor_sqrt_is_spectral_sum() {
     let src = format!("{PRELUDE}\nU = sqrt(C)\ndisplay(U, mode=symbol)");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
-        outputs[0].latex,
-        "\\bm U = \\sum_{a=1}^{3} \\sqrt{c_a} \\, \\bm N_a \\otimes \\bm N_a",
+        outputs[0].latex, "\\bm U = \\sum_{a=1}^{3} \\sqrt{c_a} \\, \\bm N_a \\otimes \\bm N_a",
         "got: {}",
         outputs[0].latex
     );
