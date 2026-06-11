@@ -2,6 +2,8 @@
 // returned LaTeX with KaTeX. `\bm` is mapped to `\boldsymbol` via a macro
 // because KaTeX does not ship the bm package.
 
+import { setupCompletion } from "./completion.js";
+
 const invoke = window.__TAURI__?.core?.invoke;
 
 const DEFAULT_SOURCE = `# Neo-Hookean strain energy
@@ -89,6 +91,7 @@ function setCurrentPath(path) {
 }
 
 editor.value = localStorage.getItem("tensorforge.source") ?? DEFAULT_SOURCE;
+setupCompletion(editor);
 
 async function openFile() {
   if (!invoke) return;

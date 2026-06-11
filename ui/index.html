@@ -77,13 +77,44 @@
 
   /* ---- main panes ---- */
   main { display: flex; flex: 1; min-height: 0; }
-  #editor {
-    width: 44%; min-width: 280px; resize: none; border: 0; outline: none;
+  #editor-wrap {
+    position: relative; width: 44%; min-width: 280px;
     border-right: 1px solid var(--border);
-    background: var(--panel); color: var(--text);
+    background: var(--panel);
+    display: flex;
+  }
+  #editor {
+    flex: 1; resize: none; border: 0; outline: none;
+    background: transparent; color: var(--text);
     font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
     padding: 16px; tab-size: 4;
   }
+  /* hidden mirror used to measure caret position */
+  .cm-mirror {
+    position: absolute; top: 0; left: 0;
+    visibility: hidden; pointer-events: none;
+    white-space: pre-wrap; word-wrap: break-word;
+    overflow: hidden;
+  }
+  .cm-ghost {
+    position: absolute; display: none; pointer-events: none;
+    color: var(--muted); opacity: 0.55;
+    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre;
+  }
+  .cm-hint {
+    position: absolute; display: none; z-index: 5;
+    max-width: 270px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 11px;
+    box-shadow: var(--shadow);
+    font-size: 12px; pointer-events: none;
+  }
+  .cm-hint-sig {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: var(--accent); margin-bottom: 3px;
+  }
+  .cm-hint-doc { color: var(--muted); line-height: 1.45; }
   #output { flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg); }
   .block { margin-bottom: 18px; }
   .block .head {
@@ -161,7 +192,9 @@
     <button id="run">Run</button>
   </header>
   <main>
-    <textarea id="editor" spellcheck="false"></textarea>
+    <div id="editor-wrap">
+      <textarea id="editor" spellcheck="false"></textarea>
+    </div>
     <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
   </main>
   <footer>
