@@ -76,7 +76,7 @@
   }
 
   /* ---- main panes ---- */
-  main { position: relative; display: flex; flex: 1; min-height: 0; }
+  main { display: flex; flex: 1; min-height: 0; }
   #editor-wrap {
     position: relative; width: 44%; min-width: 280px;
     border-right: 1px solid var(--border);
@@ -162,50 +162,22 @@
     border-radius: 8px; padding: 12px 14px;
   }
   .placeholder { color: var(--muted); margin-top: 36px; text-align: center; }
-
-  /* ---- notes ---- */
-  #notes-layer {
-    position: absolute; inset: 0;
-    pointer-events: none; z-index: 8;
-    overflow: hidden;
-  }
-  .note {
-    position: absolute; pointer-events: auto;
-    min-width: 160px; max-width: 380px; width: max-content;
+  .markdown-doc {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; box-shadow: var(--shadow);
+    border-radius: 10px; padding: 12px 16px;
+    box-shadow: var(--shadow);
+    color: var(--text);
   }
-  .note-bar {
-    display: flex; align-items: center; justify-content: flex-end; gap: 4px;
-    padding: 4px 6px; cursor: grab; user-select: none;
-    border-bottom: 1px solid var(--border); background: var(--panel-2);
-    border-radius: 8px 8px 0 0;
+  .markdown-doc :is(h1, h2, h3) {
+    margin: 0 0 8px; line-height: 1.25;
   }
-  .note-bar:active { cursor: grabbing; }
-  .note-delete {
-    appearance: none; -webkit-appearance: none;
-    width: 22px; height: 22px; padding: 0;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--muted); background: transparent;
-    border: 1px solid transparent; border-radius: 5px;
-    cursor: pointer; font: 14px/1 -apple-system, "Segoe UI", sans-serif;
-  }
-  .note-delete:hover { color: var(--text); border-color: var(--border); }
-  .note-body {
-    padding: 10px 12px; color: var(--text);
-    font-size: 13px; line-height: 1.45;
-  }
-  .note-body textarea {
-    width: 100%; min-width: 150px; min-height: 60px; resize: none;
-    border: 0; outline: none; padding: 0;
-    background: transparent; color: var(--text);
-    font: inherit; line-height: inherit;
-  }
-  .note-body :is(h1, h2, h3) { margin: 4px 0 6px; font-size: 1.1em; }
-  .note-body p { margin: 0 0 8px; }
-  .note-body p:last-child { margin-bottom: 0; }
-  .note-body ul { margin: 0 0 8px 18px; padding: 0; }
-  .note-body code {
+  .markdown-doc h1 { font-size: 18px; }
+  .markdown-doc h2 { font-size: 16px; }
+  .markdown-doc h3 { font-size: 14px; }
+  .markdown-doc p { margin: 0 0 8px; line-height: 1.55; }
+  .markdown-doc p:last-child { margin-bottom: 0; }
+  .markdown-doc ul { margin: 0 0 8px 20px; padding: 0; }
+  .markdown-doc code {
     background: var(--panel-2); padding: 0 4px; border-radius: 4px;
     font-family: "SF Mono", Menlo, Consolas, monospace;
   }
@@ -258,7 +230,6 @@
     <button id="open">Open…</button>
     <button id="save">Save</button>
     <button id="saveas">Save&nbsp;As…</button>
-    <button id="add-note">+ Note</button>
     <span class="filename" id="filename"></span>
     <span class="spacer"></span>
     <span class="hint">⌘⏎ to run</span>
@@ -272,7 +243,6 @@
       <textarea id="editor" spellcheck="false" wrap="off"></textarea>
     </div>
     <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
-    <div id="notes-layer"></div>
   </main>
   <footer>
     <span>TensorForge v0.1.0</span>

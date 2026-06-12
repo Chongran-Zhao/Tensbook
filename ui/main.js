@@ -6,7 +6,9 @@ import { setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-const DEFAULT_SOURCE = `# Hill's class hyperelasticity with a hand-written spectral strain
+const DEFAULT_SOURCE = `## Hill's class hyperelasticity
+# Hand-written spectral strain with a symbolic Hill-CR scale function.
+#
 mu = Scalar("\\mu")
 kappa = Scalar("\\kappa")
 m = Scalar("m")
@@ -18,15 +20,18 @@ N = VectorSet("\\bm N", dim=3)
 lam = Var("\\lambda")
 Ecr = (lam^m - lam^(-n))/(m + n)
 
-# C = sum_a lambda_a^2 N_a ⊗ N_a, and E = sum_a Ecr(lambda_a) N_a ⊗ N_a
+### Spectral strain
+# C = sum_a lambda_a^2 N_a ⊗ N_a
+# E = sum_a Ecr(lambda_a) N_a ⊗ N_a
 C = sum(lambda[a]^2 * N[a] & N[a], a)
 E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
 Q = 2 * diff(E, C)
 
-# Hill's quadratic energy
+### Energy and stress
+# Hill's quadratic energy.
 W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
-# thermodynamic force and second Piola-Kirchhoff stress S = T : Q
+# Thermodynamic force and second Piola-Kirchhoff stress S = T : Q.
 T = diff(W, E)
 S = T : Q
 
@@ -47,10 +52,8 @@ const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
 const saveAsBtn = document.getElementById("saveas");
-const addNoteBtn = document.getElementById("add-note");
 const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
-const notesLayer = document.getElementById("notes-layer");
 
 // ---- theme ----------------------------------------------------------------
 
@@ -99,12 +102,9 @@ document.addEventListener("click", (e) => {
 let currentPath = null;
 
 function setCurrentPath(path) {
-  const previousScope = notesScope();
   currentPath = path;
   filenameEl.textContent = path ? path.split("/").pop() : "";
   filenameEl.title = path ?? "";
-  migrateScratchNotes(previousScope);
-  loadNotesForCurrentPath();
 }
 
 // v3 key: the bundled template changed to the hand-written spectral Hill
@@ -152,244 +152,6 @@ function markGutterErrors(outputs) {
 }
 
 syncGutter();
-
-// ---- markdown notes ---------------------------------------------------------
-
-const NOTES_KEY = "tensorforge.notes.v1";
-let notes = [];
-let notesReady = false;
-
-function notesScope() {
-  return currentPath ?? "__scratch__";
-}
-
-function readNotesStore() {
-  try {
-    const raw = localStorage.getItem(NOTES_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeNotesStore(store) {
-  localStorage.setItem(NOTES_KEY, JSON.stringify(store));
-}
-
-function normalizeNote(note, fallbackIndex) {
-  return {
-    id: String(note.id ?? `note-${Date.now()}-${fallbackIndex}`),
-    x: Number.isFinite(note.x) ? note.x : 48 + fallbackIndex * 18,
-    y: Number.isFinite(note.y) ? note.y : 48 + fallbackIndex * 18,
-    md: typeof note.md === "string" ? note.md : "",
-  };
-}
-
-function persistNotes() {
-  const store = readNotesStore();
-  if (notes.length === 0) delete store[notesScope()];
-  else store[notesScope()] = notes;
-  writeNotesStore(store);
-}
-
-function migrateScratchNotes(previousScope) {
-  if (!notesReady || previousScope !== "__scratch__" || !currentPath || notes.length === 0) {
-    return;
-  }
-  const store = readNotesStore();
-  if (!store[currentPath]) {
-    store[currentPath] = notes;
-    delete store.__scratch__;
-    writeNotesStore(store);
-  }
-}
-
-function loadNotesForCurrentPath() {
-  if (!notesLayer) return;
-  const store = readNotesStore();
-  notes = Array.isArray(store[notesScope()])
-    ? store[notesScope()].map(normalizeNote)
-    : [];
-  notesReady = true;
-  renderNotes();
-}
-
-function addNote() {
-  const rect = notesLayer.getBoundingClientRect();
-  const note = {
-    id: `note-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    x: Math.max(24, rect.width / 2 - 120 + Math.random() * 32),
-    y: Math.max(24, rect.height / 2 - 80 + Math.random() * 32),
-    md: "",
-  };
-  notes.push(note);
-  persistNotes();
-  renderNotes(note.id);
-}
-
-function renderNotes(editingId = null) {
-  notesLayer.replaceChildren(...notes.map((note) => noteElement(note, note.id === editingId)));
-}
-
-function noteElement(note, editing) {
-  const el = document.createElement("section");
-  el.className = "note";
-  el.dataset.noteId = note.id;
-
-  const bar = document.createElement("div");
-  bar.className = "note-bar";
-  const del = document.createElement("button");
-  del.className = "note-delete";
-  del.type = "button";
-  del.title = "Delete note";
-  del.textContent = "×";
-  del.addEventListener("click", () => deleteNote(note.id));
-  bar.appendChild(del);
-
-  const body = document.createElement("div");
-  body.className = "note-body";
-  if (editing) renderNoteEditor(body, note);
-  else renderNoteMarkdown(body, note);
-
-  el.append(bar, body);
-  placeNote(el, note);
-  attachDrag(bar, el, note);
-  return el;
-}
-
-function renderNoteEditor(body, note) {
-  const textarea = document.createElement("textarea");
-  textarea.value = note.md;
-  textarea.placeholder = "Markdown";
-  body.appendChild(textarea);
-
-  const fit = () => {
-    textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight}px`;
-  };
-  textarea.addEventListener("input", fit);
-  textarea.addEventListener("blur", () => commitNoteEdit(note, textarea.value));
-  textarea.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      textarea.blur();
-    }
-  });
-  requestAnimationFrame(() => {
-    textarea.focus();
-    fit();
-  });
-}
-
-function renderNoteMarkdown(body, note) {
-  body.innerHTML = renderMarkdown(note.md || "");
-  body.addEventListener("dblclick", () => renderNotes(note.id));
-}
-
-function commitNoteEdit(note, md) {
-  note.md = md;
-  if (note.md.trim() === "") deleteNote(note.id);
-  else {
-    persistNotes();
-    renderNotes();
-  }
-}
-
-function deleteNote(id) {
-  notes = notes.filter((note) => note.id !== id);
-  persistNotes();
-  renderNotes();
-}
-
-function attachDrag(bar, el, note) {
-  bar.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".note-delete")) return;
-    e.preventDefault();
-    notesLayer.appendChild(el);
-    bar.setPointerCapture(e.pointerId);
-    const layer = notesLayer.getBoundingClientRect();
-    const dx = e.clientX - layer.left - note.x;
-    const dy = e.clientY - layer.top - note.y;
-
-    const move = (ev) => {
-      note.x = ev.clientX - layer.left - dx;
-      note.y = ev.clientY - layer.top - dy;
-      placeNote(el, note);
-      persistNotes();
-    };
-    const done = () => {
-      bar.removeEventListener("pointermove", move);
-      persistNotes();
-    };
-    bar.addEventListener("pointermove", move);
-    bar.addEventListener("pointerup", done, { once: true });
-    bar.addEventListener("pointercancel", done, { once: true });
-  });
-}
-
-function placeNote(el, note) {
-  const layer = notesLayer.getBoundingClientRect();
-  const maxX = Math.max(0, layer.width - (el.offsetWidth || 180));
-  const maxY = Math.max(0, layer.height - (el.offsetHeight || 80));
-  note.x = clamp(note.x, 0, maxX);
-  note.y = clamp(note.y, 0, maxY);
-  el.style.left = `${note.x}px`;
-  el.style.top = `${note.y}px`;
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function renderMarkdown(markdown) {
-  const lines = markdown.split(/\r?\n/);
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      const level = heading[1].length;
-      out.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
-      continue;
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(`<li>${inlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`);
-        i++;
-      }
-      i--;
-      out.push(`<ul>${items.join("")}</ul>`);
-      continue;
-    }
-    if (line.trim() === "") continue;
-    out.push(`<p>${inlineMarkdown(line)}</p>`);
-  }
-  return out.join("") || "<p></p>";
-}
-
-function inlineMarkdown(text) {
-  return escapeHtml(text)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
-}
-
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-loadNotesForCurrentPath();
-window.addEventListener("resize", () => {
-  for (const note of notes) {
-    const el = notesLayer.querySelector(`[data-note-id="${CSS.escape(note.id)}"]`);
-    if (el) placeNote(el, note);
-  }
-  persistNotes();
-});
 
 async function openFile() {
   if (!invoke) return;
@@ -441,62 +203,158 @@ function copyButton(label, text) {
   return btn;
 }
 
+function markdownBlocksFromSource(source) {
+  const blocks = [];
+  let current = null;
+  const lines = source.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const trimmed = raw.trimStart();
+    if (trimmed.startsWith("#")) {
+      const text = trimmed.startsWith("# ") ? trimmed.slice(2) : trimmed.slice(1);
+      if (!current) current = { line: i + 1, lines: [] };
+      current.lines.push(text);
+      continue;
+    }
+    if (current) {
+      pushMarkdownBlock(blocks, current);
+      current = null;
+    }
+  }
+  if (current) pushMarkdownBlock(blocks, current);
+  return blocks;
+}
+
+function pushMarkdownBlock(blocks, block) {
+  const markdown = block.lines.join("\n").trim();
+  if (!markdown) return;
+  blocks.push({
+    kind: "markdown",
+    line: block.line,
+    markdown,
+  });
+}
+
+function renderMarkdown(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      out.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(`<li>${inlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`);
+        i++;
+      }
+      i--;
+      out.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+    if (line.trim() === "") continue;
+    out.push(`<p>${inlineMarkdown(line)}</p>`);
+  }
+  return out.join("") || "<p></p>";
+}
+
+function inlineMarkdown(text) {
+  return escapeHtml(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function renderMarkdownBlock(block) {
+  const el = document.createElement("div");
+  el.className = "block";
+  const head = document.createElement("div");
+  head.className = "head";
+  head.textContent = `[markdown, line ${block.line}]`;
+  const doc = document.createElement("div");
+  doc.className = "markdown-doc";
+  doc.innerHTML = renderMarkdown(block.markdown);
+  el.append(head, doc);
+  return el;
+}
+
+function renderOutputBlock(item) {
+  const { header, latex, line, error } = item;
+  const block = document.createElement("div");
+  block.className = "block";
+  const head = document.createElement("div");
+  head.className = "head";
+
+  if (error) {
+    head.textContent = `[line ${line}]`;
+    const err = document.createElement("div");
+    err.className = "error";
+    err.textContent = error;
+    block.append(head, err);
+    return block;
+  }
+
+  head.textContent = `[${header}]`;
+  const bar = document.createElement("span");
+  bar.className = "copy-bar";
+  // export(..., format=markdown) wraps in $$...$$; strip for rendering.
+  const tex = latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
+  bar.append(
+    copyButton("copy latex", tex),
+    copyButton("copy markdown", `$$\n${tex}\n$$`),
+  );
+  head.appendChild(bar);
+
+  const math = document.createElement("div");
+  math.className = "math";
+  try {
+    katex.render(tex, math, {
+      displayMode: true,
+      macros: KATEX_MACROS,
+      throwOnError: true,
+    });
+  } catch (e) {
+    math.innerHTML = `<div class="error">KaTeX: ${e.message}</div><pre>${tex}</pre>`;
+  }
+  block.append(head, math);
+  return block;
+}
+
 function renderOutputs(outputs) {
   output.innerHTML = "";
   markGutterErrors(outputs);
-  if (outputs.length === 0) {
+  const blocks = [
+    ...markdownBlocksFromSource(editor.value),
+    ...outputs.map((item) => ({ kind: "output", ...item })),
+  ].sort((a, b) => a.line - b.line || (a.kind === "markdown" ? -1 : 1));
+
+  if (blocks.length === 0) {
     output.innerHTML =
       '<div class="placeholder">No output yet — add display(...) or export(...) statements.</div>';
     return;
   }
-  for (const { header, latex, line, error } of outputs) {
-    const block = document.createElement("div");
-    block.className = "block";
-    const head = document.createElement("div");
-    head.className = "head";
-
-    if (error) {
-      head.textContent = `[line ${line}]`;
-      const err = document.createElement("div");
-      err.className = "error";
-      err.textContent = error;
-      block.append(head, err);
-      output.appendChild(block);
-      continue;
-    }
-
-    head.textContent = `[${header}]`;
-    const bar = document.createElement("span");
-    bar.className = "copy-bar";
-    // export(..., format=markdown) wraps in $$...$$; strip for rendering.
-    const tex = latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
-    bar.append(
-      copyButton("copy latex", tex),
-      copyButton("copy markdown", `$$\n${tex}\n$$`),
+  for (const block of blocks) {
+    output.appendChild(
+      block.kind === "markdown" ? renderMarkdownBlock(block) : renderOutputBlock(block),
     );
-    head.appendChild(bar);
-
-    const math = document.createElement("div");
-    math.className = "math";
-    try {
-      katex.render(tex, math, {
-        displayMode: true,
-        macros: KATEX_MACROS,
-        throwOnError: true,
-      });
-    } catch (e) {
-      math.innerHTML = `<div class="error">KaTeX: ${e.message}</div><pre>${tex}</pre>`;
-    }
-    block.append(head, math);
-    output.appendChild(block);
   }
 }
 
 async function run() {
   localStorage.setItem("tensorforge.source.v3", editor.value);
   if (!invoke) {
-    output.innerHTML =
-      '<div class="error">Tauri bridge unavailable — open this UI through the desktop app.</div>';
+    renderOutputs([]);
     return;
   }
   const result = await invoke("run_tens", { source: editor.value });
@@ -518,7 +376,10 @@ let lastGoodShown = false;
 
 async function liveRun() {
   localStorage.setItem("tensorforge.source.v3", editor.value);
-  if (!invoke) return;
+  if (!invoke) {
+    renderOutputs([]);
+    return;
+  }
   const result = await invoke("run_tens", { source: editor.value });
   if (!result.ok) {
     // Whole-file parse error: show it only if we have nothing better.
@@ -557,7 +418,6 @@ runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
 saveBtn.addEventListener("click", () => saveFile(false));
 saveAsBtn.addEventListener("click", () => saveFile(true));
-addNoteBtn.addEventListener("click", addNote);
 themeBtn.addEventListener("click", toggleTheme);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
