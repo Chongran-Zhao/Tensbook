@@ -138,7 +138,8 @@ setupCompletion(editor);
 
 let gutterLineCount = 0;
 
-function syncGutter(errorLines = new Set()) {
+function syncGutter(errorLines = new Set(), options = {}) {
+  const syncNotes = options.syncNotes ?? true;
   const count = editor.value.split("\n").length;
   const needsRebuild = count !== gutterLineCount;
   if (needsRebuild) {
@@ -163,20 +164,20 @@ function syncGutter(errorLines = new Set()) {
     if (block.closed) gutter.children[block.endLine - 1]?.classList.add("note-fence");
   }
   gutter.scrollTop = editor.scrollTop;
-  syncNoteBoxes();
+  if (syncNotes && !isEditingNote()) syncNoteBoxes();
 }
 
 function clearGutterErrors() {
   syncGutter();
 }
 
-function markGutterErrors(outputs) {
+function markGutterErrors(outputs, options = {}) {
   const lines = new Set(
     outputs
       .filter((item) => item.error && item.line)
       .map((item) => Number(item.line)),
   );
-  syncGutter(lines);
+  syncGutter(lines, options);
 }
 
 syncGutter();
@@ -386,7 +387,13 @@ function insertNoteBlock() {
   const needsTrailingBreak = end < editor.value.length && editor.value[end] !== "\n";
   const block = `${needsLeadingBreak ? "\n" : ""}\`\`\`notes\n\n\`\`\`\n${needsTrailingBreak ? "\n" : ""}`;
   editor.setRangeText(block, start, end, "end");
-  const selectStart = start + (needsLeadingBreak ? 1 : 0) + "```notes\n".length;
+  const openFenceOffset = start + (needsLeadingBreak ? 1 : 0);
+  pendingNoteFocus = {
+    startLine: lineForOffset(editor.value, openFenceOffset),
+    selectionStart: 0,
+    selectionEnd: 0,
+  };
+  const selectStart = openFenceOffset + "```notes\n".length;
   editor.focus();
   editor.setSelectionRange(selectStart, selectStart);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
@@ -421,14 +428,11 @@ function syncNoteBoxes() {
 }
 
 function updateNoteBlock(block, noteEditor) {
-  pendingNoteFocus = {
-    startLine: block.line,
-    selectionStart: noteEditor.selectionStart,
-    selectionEnd: noteEditor.selectionEnd,
-  };
-  replaceNoteBlock(block, noteEditor.value);
+  const current = currentNoteBlock(block) ?? block;
+  const updated = replaceNoteBlock(current, noteEditor.value);
   localStorage.setItem("tensorforge.source.v3", editor.value);
-  clearGutterErrors();
+  syncGutter(new Set(), { syncNotes: false });
+  resizeNoteBox(noteEditor.closest(".source-note-box"), updated);
   scheduleLiveRun();
 }
 
@@ -446,6 +450,7 @@ function replaceNoteBlock(block, markdown) {
   const body = markdown.length > 0 ? markdown.split(/\r?\n/) : [""];
   lines.splice(block.line - 1, block.endLine - block.line + 1, "```notes", ...body, "```");
   editor.value = lines.join("\n");
+  return currentNoteBlock(block);
 }
 
 function removeNoteBlock(block) {
@@ -468,6 +473,33 @@ function offsetForLine(source, line) {
     offset += lines[i].length + 1;
   }
   return offset;
+}
+
+function lineForOffset(source, offset) {
+  let line = 1;
+  for (let i = 0; i < Math.min(offset, source.length); i++) {
+    if (source[i] === "\n") line++;
+  }
+  return line;
+}
+
+function currentNoteBlock(block) {
+  return noteBlocksFromSource(editor.value).find((candidate) => candidate.line === block.line);
+}
+
+function resizeNoteBox(box, block) {
+  if (!box || !block) return;
+  const style = getComputedStyle(editor);
+  const lineHeight = Number.parseFloat(style.lineHeight);
+  const paddingTop = Number.parseFloat(style.paddingTop);
+  const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
+  const height = Math.max(3, block.endLine - block.line + 1) * lineHeight + 4;
+  box.style.top = `${top}px`;
+  box.style.height = `${height}px`;
+}
+
+function isEditingNote() {
+  return document.activeElement?.classList?.contains("source-note-editor");
 }
 
 function restorePendingNoteFocus() {
@@ -528,7 +560,7 @@ function renderOutputBlock(item) {
 
 function renderOutputs(outputs) {
   output.innerHTML = "";
-  markGutterErrors(outputs);
+  markGutterErrors(outputs, { syncNotes: !isEditingNote() });
   const blocks = [
     ...markdownBlocksFromSource(editor.value),
     ...outputs.map((item) => ({ kind: "output", ...item })),
