@@ -133,6 +133,20 @@ async fn read_tens(path: String) -> Result<OpenedFile, String> {
     opened_file(std::path::PathBuf::from(path))
 }
 
+/// Re-list a folder (file-rail restore on startup).
+#[tauri::command]
+async fn list_folder(path: String) -> Result<Vec<FileEntry>, String> {
+    Ok(list_tens_files(std::path::Path::new(&path)))
+}
+
+/// Show the native print dialog for the current window content. JS
+/// `window.print()` is not reliably wired in WKWebView; this is the
+/// supported path.
+#[tauri::command]
+async fn print_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|e| e.to_string())
+}
+
 /// Save the source. `path: None` (or Save As) opens a native save dialog.
 /// Returns the path written, or `None` if the user cancelled.
 /// `async` for the same main-thread-deadlock reason as [`open_tens`].
@@ -193,8 +207,10 @@ fn main() {
             run_tens,
             open_tens,
             read_tens,
+            list_folder,
             save_tens,
-            export_text
+            export_text,
+            print_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running TensorForge");

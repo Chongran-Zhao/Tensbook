@@ -210,9 +210,14 @@ function loadOpenedFile(opened) {
 
 function renderFileRail(folder, files) {
   if (!folder || !files || files.length === 0) {
-    fileRail.classList.remove("show");
+    railFolder.textContent = "";
+    const empty = document.createElement("div");
+    empty.className = "rail-empty";
+    empty.textContent = "Open a .tens file to browse its folder here.";
+    railFiles.replaceChildren(empty);
     return;
   }
+  localStorage.setItem("tensorforge.folder", folder);
   railFolder.textContent = folder;
   railFolder.title = folder;
   railFiles.replaceChildren(
@@ -225,8 +230,40 @@ function renderFileRail(folder, files) {
       return div;
     }),
   );
-  fileRail.classList.add("show");
 }
+
+// Restore the last-used folder listing on startup.
+async function restoreFileRail() {
+  const folder = localStorage.getItem("tensorforge.folder");
+  if (!invoke || !folder) return;
+  const files = await invoke("list_folder", { path: folder }).catch(() => null);
+  if (files) renderFileRail(folder, files);
+}
+restoreFileRail();
+
+// ---- rail resizer ----
+const railResizer = document.getElementById("rail-resizer");
+const storedRailWidth = Number(localStorage.getItem("tensorforge.railWidth"));
+if (storedRailWidth >= 90) fileRail.style.flexBasis = `${storedRailWidth}px`;
+railResizer.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  railResizer.setPointerCapture(e.pointerId);
+  railResizer.classList.add("dragging");
+  const move = (ev) => {
+    const width = Math.min(420, Math.max(90, ev.clientX - fileRail.getBoundingClientRect().left));
+    fileRail.style.flexBasis = `${width}px`;
+  };
+  railResizer.addEventListener("pointermove", move);
+  railResizer.addEventListener(
+    "pointerup",
+    () => {
+      railResizer.removeEventListener("pointermove", move);
+      railResizer.classList.remove("dragging");
+      localStorage.setItem("tensorforge.railWidth", String(fileRail.offsetWidth));
+    },
+    { once: true },
+  );
+});
 
 async function switchToFile(path) {
   if (!invoke || path === currentPath) return;
@@ -577,6 +614,7 @@ function renderMarkdownBlock(block) {
   const el = document.createElement("div");
   el.className = "block markdown-doc";
   el.innerHTML = renderMarkdown(block.markdown);
+  makeBlockJump(el, block.line);
   return el;
 }
 
@@ -621,18 +659,32 @@ function stripDisplayMath(latex) {
 // Print through the main window: WKWebView ignores print() on iframe
 // content windows, but wry hooks window.print() on the top window. The
 // printable DOM lives in #print-root and @media print hides the app shell.
-function printDocument(bodyHtml) {
+async function printDocument(bodyHtml) {
   printRoot.innerHTML = bodyHtml;
   document.body.classList.add("printing");
   const cleanup = () => {
     document.body.classList.remove("printing");
     printRoot.innerHTML = "";
+    window.scrollTo(0, 0);
   };
+  try {
+    if (invoke) {
+      // window.print() is not wired up in WKWebView; the Rust side calls
+      // the native print operation on the webview.
+      await invoke("print_window");
+    } else {
+      window.print();
+    }
+  } catch (e) {
+    showError(`Print failed: ${e}`);
+  }
+  // The invoke may resolve while the native dialog is still open, and an
+  // early cleanup would blank the printed pages. #print-root is invisible
+  // on screen anyway, so defer cleanup until the user is demonstrably back
+  // in the app (or a real afterprint fires).
   window.addEventListener("afterprint", cleanup, { once: true });
-  // WKWebView does not always fire afterprint; the content is snapshotted
-  // when the dialog opens, so a delayed cleanup is safe.
-  setTimeout(cleanup, 2000);
-  window.print();
+  document.addEventListener("pointerdown", cleanup, { once: true });
+  document.addEventListener("keydown", cleanup, { once: true });
 }
 
 function insertNoteBlock() {
@@ -654,20 +706,34 @@ function insertNoteBlock() {
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+// Pixel y of the top of `line`, taken from the matching gutter row so the
+// overlays can never drift from the text by sub-pixel line-height rounding.
+function rowTop(line) {
+  const row = gutter.children[line - 1];
+  if (row) return row.offsetTop - editor.scrollTop;
+  const style = getComputedStyle(editor);
+  return (
+    Number.parseFloat(style.paddingTop) +
+    (line - 1) * Number.parseFloat(style.lineHeight) -
+    editor.scrollTop
+  );
+}
+
+function rowSpanHeight(startLine, endLine, minLines = 1) {
+  const lines = Math.max(minLines, endLine - startLine + 1);
+  const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight);
+  return lines * lineHeight;
+}
+
 function syncNoteBoxes() {
   noteLayer.style.left = `${gutter.offsetWidth}px`;
-  const style = getComputedStyle(editor);
-  const lineHeight = Number.parseFloat(style.lineHeight);
-  const paddingTop = Number.parseFloat(style.paddingTop);
   const boxes = noteBlocksFromSource(editor.value).map((block) => {
     const div = document.createElement("div");
     div.className = "source-note-box";
     div._block = block; // shared with the closures; repositionNoteBoxes refreshes it
     div.dataset.startLine = String(block.line);
-    const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
-    const height = Math.max(3, block.endLine - block.line + 1) * lineHeight + 4;
-    div.style.top = `${top}px`;
-    div.style.height = `${height}px`;
+    div.style.top = `${rowTop(block.line) - 2}px`;
+    div.style.height = `${rowSpanHeight(block.line, block.endLine, 3) + 4}px`;
     const tag = document.createElement("span");
     tag.className = "region-tag";
     tag.textContent = "markdown";
@@ -696,22 +762,19 @@ function codeRegionsFromSource(source) {
   for (const block of noteBlocksFromSource(source)) {
     for (let l = block.line; l <= block.endLine; l++) inNote[l - 1] = true;
   }
+  // One frame per contiguous code paragraph: blank lines split regions so
+  // the frames hug the statements instead of wrapping the whole file.
   const regions = [];
   let start = null;
-  let lastNonBlank = null;
   for (let i = 0; i <= lines.length; i++) {
     const isCode = i < lines.length && !inNote[i] && lines[i].trim() !== "";
     if (isCode) {
       if (start === null) start = i + 1;
-      lastNonBlank = i + 1;
       continue;
     }
-    // A note block (not a mere blank line) or EOF ends the region.
-    const atBoundary = i === lines.length || inNote[i];
-    if (start !== null && atBoundary) {
-      regions.push({ line: start, endLine: lastNonBlank });
+    if (start !== null) {
+      regions.push({ line: start, endLine: i });
       start = null;
-      lastNonBlank = null;
     }
   }
   return regions;
@@ -720,15 +783,12 @@ function codeRegionsFromSource(source) {
 function syncCodeBoxes() {
   const codeLayer = document.getElementById("code-layer");
   codeLayer.style.left = `${gutter.offsetWidth}px`;
-  const style = getComputedStyle(editor);
-  const lineHeight = Number.parseFloat(style.lineHeight);
-  const paddingTop = Number.parseFloat(style.paddingTop);
   codeLayer.replaceChildren(
     ...codeRegionsFromSource(editor.value).map((region) => {
       const div = document.createElement("div");
       div.className = "source-code-box";
-      div.style.top = `${paddingTop + (region.line - 1) * lineHeight - editor.scrollTop - 2}px`;
-      div.style.height = `${(region.endLine - region.line + 1) * lineHeight + 4}px`;
+      div.style.top = `${rowTop(region.line) - 2}px`;
+      div.style.height = `${rowSpanHeight(region.line, region.endLine) + 4}px`;
       const tag = document.createElement("span");
       tag.className = "region-tag";
       tag.textContent = "tens";
@@ -819,15 +879,12 @@ function repositionNoteBoxes() {
   const fresh = noteBlocksFromSource(editor.value);
   const boxes = [...noteLayer.children];
   if (fresh.length !== boxes.length) return;
-  const style = getComputedStyle(editor);
-  const lineHeight = Number.parseFloat(style.lineHeight);
-  const paddingTop = Number.parseFloat(style.paddingTop);
   boxes.forEach((box, i) => {
     const block = fresh[i];
     if (box._block) Object.assign(box._block, block);
     box.dataset.startLine = String(block.line);
-    box.style.top = `${paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2}px`;
-    box.style.height = `${Math.max(3, block.endLine - block.line + 1) * lineHeight + 4}px`;
+    box.style.top = `${rowTop(block.line) - 2}px`;
+    box.style.height = `${rowSpanHeight(block.line, block.endLine, 3) + 4}px`;
   });
   syncCodeBoxes();
 }
@@ -933,10 +990,30 @@ function insertTableIntoNote() {
   scheduleLiveRun();
 }
 
+function jumpToSourceLine(line) {
+  if (!line) return;
+  const target = Math.max(0, rowTop(line) + editor.scrollTop - editor.clientHeight / 3);
+  editor.scrollTo({ top: target, behavior: "smooth" });
+  const row = gutter.children[line - 1];
+  if (row) {
+    row.classList.add("jump");
+    setTimeout(() => row.classList.remove("jump"), 1200);
+  }
+}
+
+function makeBlockJump(el, line) {
+  el.title = `Click to jump to line ${line}`;
+  el.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return; // copy buttons keep their job
+    jumpToSourceLine(line);
+  });
+}
+
 function renderOutputBlock(item) {
   const { header, latex, line, error } = item;
   const block = document.createElement("div");
   block.className = "block";
+  makeBlockJump(block, line);
   const head = document.createElement("div");
   head.className = "head";
 
