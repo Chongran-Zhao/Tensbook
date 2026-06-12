@@ -27,15 +27,14 @@ brew upgrade tensorforge
 | `det(A)` | Symbolic determinant. |
 | `tr(A)` | Symbolic trace. |
 | `inv(A)` | Symbolic tensor inverse. |
-| `log(x)`, `sqrt(x)`, `exp(x)` | Scalar functions; also tensor spectral functions for provably symmetric tensors. |
+| `log(x)`, `sqrt(x)`, `exp(x)` | Symbolic scalar functions. |
 | `sinh(x)`, `cosh(x)`, `tanh(x)` | Symbolic scalar hyperbolic functions. |
 | `A & B` | Tensor product `A \otimes B`. |
 | `dot(A, B)` | Single contraction / matrix product. |
 | `ddot(A, B)` | Double contraction `A : B`. |
-| `spectral(C)` | Spectral decomposition of a provably symmetric tensor. |
 | `diff(expr, X)` | Symbolic derivative with respect to a scalar, tensor, compound tensor, or generalized strain. |
 | `simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
-| `display(expr, mode=...)` | Render in the app/CLI. Modes: `symbol`, `components`, `matrix`, `block_components`, `spectral`. |
+| `display(expr, mode=...)` | Render in the app/CLI. Modes: `symbol`, `components`, `matrix`, `block_components`. |
 | `export(expr, format=...)` | Export `latex` or `markdown`. |
 
 Operators: `+`, `-`, `*`, `/`, `^`, `A & B`, `A : B`, and `A.T`.

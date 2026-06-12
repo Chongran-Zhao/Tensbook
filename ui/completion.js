@@ -28,16 +28,15 @@ const BUILTINS = [
   { name: "inv", sig: "inv(A)", doc: "symbolic tensor inverse" },
   { name: "dot", sig: "dot(A, B)", doc: "single contraction AB" },
   { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — infix `A : B` also works" },
-  { name: "spectral", sig: "spectral(C)", doc: "spectral decomposition Σ c_a N_a ⊗ N_a (requires provably symmetric C)" },
   { name: "simplify", sig: "simplify(expr, rules=…)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
-  { name: "display", sig: "display(expr, mode=…)", doc: "mode = symbol | components | matrix | block_components | spectral" },
+  { name: "display", sig: "display(expr, mode=…)", doc: "mode = symbol | components | matrix | block_components" },
   { name: "export", sig: "export(expr, format=…)", doc: "format = latex | markdown" },
 ];
 
 const BUILTIN_MAP = new Map(BUILTINS.map((b) => [b.name, b]));
 
 const ENUM_VALUES = {
-  mode: ["symbol", "components", "matrix", "block_components", "spectral"],
+  mode: ["symbol", "components", "matrix", "block_components"],
   format: ["latex", "markdown"],
   rules: ["algebra", "tensor", "continuum"],
 };

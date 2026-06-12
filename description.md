@@ -427,27 +427,20 @@ display(dCdF, mode=components)
 
 暂时不需要支持曲线坐标、协变/逆变指标、Christoffel 符号、流形等微分几何功能。
 
-但需要支持二阶张量谱分解：
+谱分解不作为内置的 opaque 对象,而是用 set 显式手写(`spectral(C)` 内置函数已移除):
 
 ```text
-spectral(C)
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+C = sum(lambda[a]^2 * N[a] & N[a], a)
 ```
-
-例如对于对称二阶张量：
 
 ```latex
-\bm C = \sum_{a=1}^3 c_a \bm N_a \otimes \bm N_a
+\bm C = \sum_{a=1}^3 \lambda_a^2 \, \bm N_a \otimes \bm N_a
 ```
 
-未来可扩展支持：
-
-```text
-sqrt(C)
-log(C)
-exp(C)
-```
-
-这些基于谱分解的张量函数。
+基于谱分解的张量函数(`sqrt(C)`、`log(C)` 等)同样用 set 形式显式书写,
+例如 `sum(log(lambda[a]) * N[a] & N[a], a)`。
 
 # 14. 不需要优先考虑的功能
 

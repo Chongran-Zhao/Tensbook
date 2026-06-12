@@ -3,12 +3,6 @@
 
 use tensorforge::run_source;
 
-/// Drop the `X = ` display left-hand side so outputs of differently named
-/// variables can be compared.
-fn rhs(latex: &str) -> &str {
-    latex.split_once(" = ").map(|(_, r)| r).unwrap_or(latex)
-}
-
 const PRELUDE: &str = r#"
 lam = Var("\lambda")
 m = Scalar("m")
@@ -31,42 +25,6 @@ fn function_application_substitutes_the_var() {
         !latex.contains("\\lambda"),
         "var must be substituted: {latex}"
     );
-}
-
-#[test]
-fn legacy_gstrain_custom_scale_matches_builtin_cr() {
-    // Legacy compatibility: the old gstrain shortcut still accepts a
-    // user-defined scale and matches the built-in CR scale.
-    let src = format!(
-        "{PRELUDE}\nEcr = (lam^m - lam^(-n))/(m + n)\n\
-         E1 = gstrain(C, scale=Ecr)\nE2 = gstrain(C, scale=CR, m=m, n=n)\n\
-         W1 = mu * ddot(E1, E1)\nW2 = mu * ddot(E2, E2)\n\
-         S1 = 2 * diff(W1, C)\nS2 = 2 * diff(W2, C)\n\
-         display(E1, mode=spectral)\ndisplay(E2, mode=spectral)\n\
-         display(S1, mode=spectral)\ndisplay(S2, mode=spectral)"
-    );
-    let outputs = run_source(&src).unwrap();
-    assert_eq!(
-        rhs(&outputs[0].latex),
-        rhs(&outputs[1].latex),
-        "strain displays differ"
-    );
-    assert_eq!(
-        rhs(&outputs[2].latex),
-        rhs(&outputs[3].latex),
-        "stress displays differ"
-    );
-}
-
-#[test]
-fn legacy_gstrain_custom_hencky_scale_matches_builtin() {
-    let src = format!(
-        "{PRELUDE}\nEh = log(lam)\n\
-         E1 = gstrain(C, scale=Eh)\nE2 = gstrain(C, scale=Hencky)\n\
-         display(E1, mode=spectral)\ndisplay(E2, mode=spectral)"
-    );
-    let outputs = run_source(&src).unwrap();
-    assert_eq!(rhs(&outputs[0].latex), rhs(&outputs[1].latex));
 }
 
 #[test]

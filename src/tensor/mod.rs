@@ -7,104 +7,6 @@ use crate::error::Error;
 use crate::symbolic::{fold_mul, ScalarExpr};
 use std::rc::Rc;
 
-/// Scale function of a generalized strain, mapping principal stretches to
-/// principal strain values (Hill's generalized strain family).
-#[derive(Debug, Clone, PartialEq)]
-pub enum Scale {
-    /// Seth–Hill: `E(λ) = (λ^m − 1)/m`. `m = 2` is Green–Lagrange,
-    /// `m = -2` Almansi (referential), `m = 1` Biot.
-    SethHill { m: Rc<ScalarExpr> },
-    /// Curnier–Rakotomanana (coercive): `E(λ) = (λ^m − λ^{−n})/(m + n)`.
-    CR {
-        m: Rc<ScalarExpr>,
-        n: Rc<ScalarExpr>,
-    },
-    /// Hencky (logarithmic, coercive): `E(λ) = ln λ`.
-    Hencky,
-    /// A user-defined scale function: `body` is an ordinary scalar
-    /// expression in the declared variable `var` (e.g. `lam = Var("\lambda")`
-    /// then `E = (lam^m - lam^(-n))/(m+n)`). `dbody` is `d body/d var`,
-    /// computed once at declaration by the scalar differentiation engine.
-    Custom {
-        var: String,
-        body: Rc<ScalarExpr>,
-        dbody: Rc<ScalarExpr>,
-    },
-}
-
-impl Scale {
-    /// `E(λ)` applied to a symbolic principal value.
-    pub fn apply(&self, lambda: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
-        match self {
-            Scale::SethHill { m } => Rc::new(ScalarExpr::Div(
-                Rc::new(ScalarExpr::Sub(
-                    Rc::new(ScalarExpr::Pow(lambda.clone(), m.clone())),
-                    Rc::new(ScalarExpr::Num(1.0)),
-                )),
-                m.clone(),
-            )),
-            Scale::CR { m, n } => Rc::new(ScalarExpr::Div(
-                Rc::new(ScalarExpr::Sub(
-                    Rc::new(ScalarExpr::Pow(lambda.clone(), m.clone())),
-                    Rc::new(ScalarExpr::Pow(
-                        lambda.clone(),
-                        Rc::new(ScalarExpr::Neg(n.clone())),
-                    )),
-                )),
-                Rc::new(ScalarExpr::Add(m.clone(), n.clone())),
-            )),
-            Scale::Hencky => Rc::new(ScalarExpr::Log(lambda.clone())),
-            Scale::Custom { var, body, .. } => {
-                crate::substitute::subst_scalar_sym(body, var, lambda)
-            }
-        }
-    }
-
-    /// `E'(λ)`, the derivative of the scale function.
-    pub fn dapply(&self, lambda: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
-        let pow = |b: &Rc<ScalarExpr>, e: Rc<ScalarExpr>| Rc::new(ScalarExpr::Pow(b.clone(), e));
-        let num = |v: f64| Rc::new(ScalarExpr::Num(v));
-        match self {
-            // d/dλ (λ^m − 1)/m = λ^{m−1}
-            Scale::SethHill { m } => pow(lambda, Rc::new(ScalarExpr::Sub(m.clone(), num(1.0)))),
-            // d/dλ (λ^m − λ^{−n})/(m+n) = (m λ^{m−1} + n λ^{−n−1})/(m+n)
-            Scale::CR { m, n } => Rc::new(ScalarExpr::Div(
-                Rc::new(ScalarExpr::Add(
-                    Rc::new(ScalarExpr::Mul(
-                        m.clone(),
-                        pow(lambda, Rc::new(ScalarExpr::Sub(m.clone(), num(1.0)))),
-                    )),
-                    Rc::new(ScalarExpr::Mul(
-                        n.clone(),
-                        pow(
-                            lambda,
-                            Rc::new(ScalarExpr::Sub(
-                                Rc::new(ScalarExpr::Neg(n.clone())),
-                                num(1.0),
-                            )),
-                        ),
-                    )),
-                )),
-                Rc::new(ScalarExpr::Add(m.clone(), n.clone())),
-            )),
-            // d/dλ ln λ = 1/λ
-            Scale::Hencky => Rc::new(ScalarExpr::Div(num(1.0), lambda.clone())),
-            Scale::Custom { var, dbody, .. } => {
-                crate::substitute::subst_scalar_sym(dbody, var, lambda)
-            }
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Scale::SethHill { .. } => "SethHill",
-            Scale::CR { .. } => "CR",
-            Scale::Hencky => "Hencky",
-            Scale::Custom { .. } => "Custom",
-        }
-    }
-}
-
 /// Declared properties of a tensor variable.
 ///
 /// Mirrors the full design (identity / symmetric / antisymmetric /
@@ -164,42 +66,6 @@ pub enum TensorExpr {
     Identity4 {
         dim: usize,
     },
-    /// Spectral decomposition of a provably symmetric second-order tensor:
-    /// `T = Σ_a λ_a N_a ⊗ N_a`. `base_latex` names the decomposed tensor
-    /// (used to derive eigenvalue/eigenvector symbols).
-    Spectral {
-        base: Rc<TensorExpr>,
-        base_latex: String,
-    },
-    /// An isotropic tensor function applied through the spectral form:
-    /// `f(T) = Σ_a f(λ_a) N_a ⊗ N_a` for symmetric `T`.
-    /// `func` is the scalar function name: "sqrt" | "log" | "exp".
-    SpectralFn {
-        func: String,
-        base: Rc<TensorExpr>,
-        base_latex: String,
-    },
-    /// Generalized strain of a symmetric deformation tensor:
-    /// `E(C) = Σ_a E(λ_a) M_a` with scale function `scale` (order 2).
-    GenStrain {
-        base: Rc<TensorExpr>,
-        scale: Scale,
-        /// LaTeX of the strain symbol, e.g. `\bm E`.
-        latex: String,
-    },
-    /// The rank-four strain projection `Q = 2 ∂E/∂C` induced by a
-    /// generalized strain (order 4). Kept opaque; spectral component
-    /// formulas (Miehe–Lambrecht) are display-only in this phase.
-    QTensor {
-        strain: Rc<TensorExpr>, // the GenStrain this Q belongs to
-    },
-    /// Double contraction of a second-order tensor with a fourth-order
-    /// tensor over its first two indices: `(T : Q)_{kl} = T_{ij} Q_{ijkl}`.
-    /// Result is order 2. This is the paper's `S = T : Q` structure.
-    DdotTQ {
-        second: Rc<TensorExpr>,
-        fourth: Rc<TensorExpr>,
-    },
     Add(Rc<TensorExpr>, Rc<TensorExpr>),
     Sub(Rc<TensorExpr>, Rc<TensorExpr>),
     /// Scalar times tensor.
@@ -237,10 +103,6 @@ impl TensorExpr {
             TensorExpr::Diff { num, den, .. } => num.order() + den.order(),
             TensorExpr::Outer(a, b) => a.order() + b.order(),
             TensorExpr::BoxTimes(..) | TensorExpr::Identity4 { .. } => 4,
-            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => base.order(),
-            TensorExpr::GenStrain { .. } => 2,
-            TensorExpr::QTensor { .. } => 4,
-            TensorExpr::DdotTQ { .. } => 2,
             TensorExpr::MatMul(a, _) => a.order(), // 2 in MVP
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.order(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.order(),
@@ -258,10 +120,6 @@ impl TensorExpr {
             TensorExpr::Diff { num, .. } => num.dim(),
             TensorExpr::Outer(a, _) | TensorExpr::BoxTimes(a, _) => a.dim(),
             TensorExpr::Identity4 { dim } => *dim,
-            TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => base.dim(),
-            TensorExpr::GenStrain { base, .. } => base.dim(),
-            TensorExpr::QTensor { strain } => strain.dim(),
-            TensorExpr::DdotTQ { second, .. } => second.dim(),
             TensorExpr::MatMul(a, _) => a.dim(),
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.dim(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.dim(),
@@ -341,28 +199,6 @@ impl TensorExpr {
         Ok(TensorExpr::BoxTimes(a, b))
     }
 
-    /// Generalized strain `E(C) = Σ E(λ_a) M_a` — requires a provably
-    /// symmetric base (the spectral form must exist).
-    pub fn gen_strain(
-        base: Rc<TensorExpr>,
-        scale: Scale,
-        latex: String,
-    ) -> Result<TensorExpr, Error> {
-        if base.order() != 2 {
-            return Err(Error::msg(format!(
-                "a generalized strain requires a second-order tensor, got order {}",
-                base.order()
-            )));
-        }
-        if !base.is_symmetric() {
-            return Err(Error::msg(
-                "a generalized strain requires a provably symmetric tensor \
-                 (e.g. C = F.T * F)",
-            ));
-        }
-        Ok(TensorExpr::GenStrain { base, scale, latex })
-    }
-
     /// `T : Q` — contract a second-order tensor with the first two indices
     /// of a fourth-order tensor.
     pub fn ddot_tq(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Result<TensorExpr, Error> {
@@ -377,51 +213,7 @@ impl TensorExpr {
         if second.dim() != fourth.dim() {
             return Err(Error::msg("dimension mismatch in T : Q"));
         }
-        Ok(contract_second_fourth(second, fourth))
-    }
-
-    /// `spectral(T)` requires symmetry to be strictly provable — the
-    /// decomposition `T = Σ λ_a N_a ⊗ N_a` only exists for symmetric tensors.
-    pub fn spectral(base: Rc<TensorExpr>, base_latex: String) -> Result<TensorExpr, Error> {
-        if base.order() != 2 {
-            return Err(Error::msg(format!(
-                "`spectral` requires a second-order tensor, got order {}",
-                base.order()
-            )));
-        }
-        if !base.is_symmetric() {
-            return Err(Error::msg(
-                "`spectral` requires a provably symmetric tensor; declare it with \
-                 symmetric=true or build it from a symmetric form like F.T * F",
-            ));
-        }
-        Ok(TensorExpr::Spectral { base, base_latex })
-    }
-
-    /// Isotropic tensor function `f(T) = Σ f(λ_a) N_a ⊗ N_a` — same
-    /// symmetry requirement as [`Self::spectral`].
-    pub fn spectral_fn(
-        func: &str,
-        base: Rc<TensorExpr>,
-        base_latex: String,
-    ) -> Result<TensorExpr, Error> {
-        if base.order() != 2 {
-            return Err(Error::msg(format!(
-                "`{func}` of a tensor requires a second-order tensor, got order {}",
-                base.order()
-            )));
-        }
-        if !base.is_symmetric() {
-            return Err(Error::msg(format!(
-                "`{func}` of a tensor is defined through the spectral decomposition \
-                 and requires a provably symmetric tensor",
-            )));
-        }
-        Ok(TensorExpr::SpectralFn {
-            func: func.to_string(),
-            base,
-            base_latex,
-        })
+        contract_second_fourth(second, fourth)
     }
 
     pub fn matmul(a: Rc<TensorExpr>, b: Rc<TensorExpr>) -> Result<TensorExpr, Error> {
@@ -469,27 +261,30 @@ impl TensorExpr {
     }
 }
 
-fn contract_second_fourth(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> TensorExpr {
+fn contract_second_fourth(
+    second: Rc<TensorExpr>,
+    fourth: Rc<TensorExpr>,
+) -> Result<TensorExpr, Error> {
     if let TensorExpr::ScalarMul(s, inner) = &*second {
-        return scale_tensor(
+        return Ok(scale_tensor(
             s.clone(),
-            Rc::new(contract_second_fourth(inner.clone(), fourth)),
-        );
+            Rc::new(contract_second_fourth(inner.clone(), fourth)?),
+        ));
     }
 
-    match &*fourth {
+    Ok(match &*fourth {
         TensorExpr::Identity4 { .. } => (*second).clone(),
         TensorExpr::ScalarMul(s, inner) => scale_tensor(
             s.clone(),
-            Rc::new(contract_second_fourth(second, inner.clone())),
+            Rc::new(contract_second_fourth(second, inner.clone())?),
         ),
         TensorExpr::Add(a, b) => TensorExpr::Add(
-            Rc::new(contract_second_fourth(second.clone(), a.clone())),
-            Rc::new(contract_second_fourth(second, b.clone())),
+            Rc::new(contract_second_fourth(second.clone(), a.clone())?),
+            Rc::new(contract_second_fourth(second, b.clone())?),
         ),
         TensorExpr::Sub(a, b) => TensorExpr::Sub(
-            Rc::new(contract_second_fourth(second.clone(), a.clone())),
-            Rc::new(contract_second_fourth(second, b.clone())),
+            Rc::new(contract_second_fourth(second.clone(), a.clone())?),
+            Rc::new(contract_second_fourth(second, b.clone())?),
         ),
         TensorExpr::SumIdx {
             index,
@@ -500,9 +295,9 @@ fn contract_second_fourth(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Ten
             index: index.clone(),
             range: *range,
             exclude: exclude.clone(),
-            body: Rc::new(contract_second_fourth(second, body.clone())),
+            body: Rc::new(contract_second_fourth(second, body.clone())?),
         },
-        TensorExpr::Neg(inner) => Rc::new(contract_second_fourth(second, inner.clone()))
+        TensorExpr::Neg(inner) => Rc::new(contract_second_fourth(second, inner.clone())?)
             .as_ref()
             .clone()
             .negated(),
@@ -518,8 +313,13 @@ fn contract_second_fourth(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Ten
             };
             TensorExpr::MatMul(Rc::new(TensorExpr::MatMul(at, second)), b.clone())
         }
-        _ => TensorExpr::DdotTQ { second, fourth },
-    }
+        _ => {
+            return Err(Error::msg(
+                "this 2:4 contraction has no closed form; contract with sums of \
+                 outer/boxtimes products of second-order tensors",
+            ))
+        }
+    })
 }
 
 fn contract_coeff(second: Rc<TensorExpr>, first: Rc<TensorExpr>) -> Rc<ScalarExpr> {

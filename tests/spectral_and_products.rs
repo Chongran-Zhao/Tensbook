@@ -11,34 +11,6 @@ C = F.T * F
 "#;
 
 #[test]
-fn spectral_of_symmetric_tensor() {
-    let src = format!("{PRELUDE}\nS = spectral(C)\ndisplay(S, mode=symbol)");
-    let outputs = run_source(&src).unwrap();
-    assert_eq!(
-        outputs[0].latex, "\\bm S = \\sum_{a=1}^{3} c_a \\, \\bm N_a \\otimes \\bm N_a",
-        "got: {}",
-        outputs[0].latex
-    );
-}
-
-#[test]
-fn spectral_rejects_unsymmetric_tensor() {
-    // F is a general tensor: spectral(F) must be refused (not provably symmetric).
-    let src = format!("{PRELUDE}\nS = spectral(F)");
-    assert!(run_source(&src).is_err());
-}
-
-#[test]
-fn spectral_result_is_symmetric() {
-    let src = format!("{PRELUDE}\nS = spectral(C)");
-    let (_, interp) = run_source_with_env(&src).unwrap();
-    match interp.get("S") {
-        Some(Value::Tensor(t)) => assert!(t.is_symmetric()),
-        other => panic!("expected Tensor, got {other:?}"),
-    }
-}
-
-#[test]
 fn outer_product_order_and_display() {
     let src = format!("{PRELUDE}\nO = F & G\ndisplay(O, mode=symbol)");
     let (outputs, interp) = run_source_with_env(&src).unwrap();
@@ -119,54 +91,16 @@ fn markdown_export_wraps_display_math() {
 // ---- isotropic tensor functions sqrt/log/exp --------------------------------
 
 #[test]
-fn tensor_sqrt_is_spectral_sum() {
-    // U = sqrt(C) is the right stretch tensor.
-    let src = format!("{PRELUDE}\nU = sqrt(C)\ndisplay(U, mode=symbol)");
-    let outputs = run_source(&src).unwrap();
-    assert_eq!(
-        outputs[0].latex, "\\bm U = \\sum_{a=1}^{3} \\sqrt{c_a} \\, \\bm N_a \\otimes \\bm N_a",
-        "got: {}",
-        outputs[0].latex
-    );
-}
-
-#[test]
-fn tensor_log_and_exp() {
-    let src = format!(
-        "{PRELUDE}\nL = log(C)\nE = exp(C)\n\
-         display(L, mode=symbol)\ndisplay(E, mode=symbol)"
-    );
-    let outputs = run_source(&src).unwrap();
+fn tensor_scalar_functions_point_at_the_set_form() {
+    // log/sqrt/exp of a tensor are no longer built in; the error points at
+    // the explicit spectral-sum form.
+    let src = format!("{PRELUDE}\nC = F.T * F\nL = log(C)\ndisplay(L)");
+    let err = run_source(&src).unwrap_err();
     assert!(
-        outputs[0].latex.contains("\\log c_a"),
+        err.message.contains("sum(log(lambda[a]) * N[a] & N[a], a)"),
         "got: {}",
-        outputs[0].latex
+        err.message
     );
-    assert!(
-        outputs[1].latex.contains("e^{c_a}"),
-        "got: {}",
-        outputs[1].latex
-    );
-}
-
-#[test]
-fn tensor_fn_requires_symmetry() {
-    // sqrt of a general (not provably symmetric) tensor must be refused.
-    let src = format!("{PRELUDE}\nU = sqrt(F)");
-    assert!(run_source(&src).is_err());
-}
-
-#[test]
-fn tensor_fn_result_is_symmetric() {
-    let src = format!("{PRELUDE}\nU = sqrt(C)");
-    let (_, interp) = run_source_with_env(&src).unwrap();
-    match interp.get("U") {
-        Some(Value::Tensor(t)) => {
-            assert!(t.is_symmetric());
-            assert_eq!(t.order(), 2);
-        }
-        other => panic!("expected Tensor, got {other:?}"),
-    }
 }
 
 #[test]

@@ -112,31 +112,6 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             tensor_pass(a, rules),
             tensor_pass(b, rules),
         )),
-        TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
-            base: tensor_pass(base, rules),
-            base_latex: base_latex.clone(),
-        }),
-        TensorExpr::SpectralFn {
-            func,
-            base,
-            base_latex,
-        } => Rc::new(TensorExpr::SpectralFn {
-            func: func.clone(),
-            base: tensor_pass(base, rules),
-            base_latex: base_latex.clone(),
-        }),
-        TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
-            base: tensor_pass(base, rules),
-            scale: scale.clone(),
-            latex: latex.clone(),
-        }),
-        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor {
-            strain: tensor_pass(strain, rules),
-        }),
-        TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
-            second: tensor_pass(second, rules),
-            fourth: tensor_pass(fourth, rules),
-        }),
         TensorExpr::SumIdx {
             index,
             range,
@@ -440,7 +415,6 @@ fn scalar_pass(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             name: name.clone(),
             arg: scalar_pass(arg, rules),
         }),
-        ScalarExpr::Eig { .. } => s.clone(),
         ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
             body: scalar_pass(body, rules),
             index: index.clone(),

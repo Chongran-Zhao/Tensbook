@@ -57,15 +57,6 @@ pub enum ScalarExpr {
     Tr(Rc<TensorExpr>),
     /// Double contraction of two second-order tensors, `A : B` (a scalar).
     Ddot(Rc<TensorExpr>, Rc<TensorExpr>),
-    /// Principal value of a generalized strain or deformation tensor:
-    /// `Eig { base, index }` is λ_index(base) — e.g. the principal stretch
-    /// λ_a of C. `index` is the abstract spectral index name (usually "a").
-    Eig {
-        base: Rc<TensorExpr>,
-        /// LaTeX of the eigenvalue symbol, e.g. `\lambda`.
-        symbol: String,
-        index: String,
-    },
     /// Spectral sum `Σ_{index=1}^{dim} body`, where `body` may reference
     /// `Eig` values with the same index.
     SpecSum {

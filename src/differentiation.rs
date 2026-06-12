@@ -40,19 +40,6 @@ pub fn diff_scalar_by_tensor(
     s: &Rc<ScalarExpr>,
     x: &Rc<TensorExpr>,
 ) -> Result<Rc<TensorExpr>, Error> {
-    // Chain rule through a generalized strain: if s depends on x only
-    // through E = GenStrain(x), then ∂s/∂x = (∂s/∂E) : ∂E/∂C = ½ T : Q
-    // with T = ∂s/∂E and Q = 2 ∂E/∂C kept opaque.
-    if let Some(strain) = find_gen_strain_of(s, x)? {
-        let t = diff_scalar_by_tensor(s, &strain)?;
-        let q = Rc::new(TensorExpr::QTensor {
-            strain: strain.clone(),
-        });
-        return Ok(Rc::new(TensorExpr::ScalarMul(
-            Rc::new(ScalarExpr::Num(0.5)),
-            Rc::new(TensorExpr::ddot_tq(t, q)?),
-        )));
-    }
     let s_eff = if matches!(&**x, TensorExpr::Var { .. }) {
         s.clone()
     } else {
@@ -103,12 +90,6 @@ pub fn diff_tensor_by_tensor(
              respect to a matching stretch spectral decomposition \
              C = sum(lambda[a]^2 * N[a] & N[a], a)",
         ));
-    }
-    if let Some(strain) = strain_projection_for(t, x, num_label.as_deref())? {
-        return Ok(Rc::new(TensorExpr::ScalarMul(
-            Rc::new(ScalarExpr::Num(0.5)),
-            Rc::new(TensorExpr::QTensor { strain }),
-        )));
     }
     if matches!(&**x, TensorExpr::Var { .. }) {
         return Ok(Rc::new(TensorExpr::Diff {
@@ -454,21 +435,6 @@ fn fraction_parts(s: Rc<ScalarExpr>) -> (Rc<ScalarExpr>, Rc<ScalarExpr>) {
 
 /// Recognize a native `gstrain(C, ...)` as a generalized strain of `x`, so
 /// legacy `gstrain` programs can still use the opaque Q path.
-fn strain_projection_for(
-    t: &Rc<TensorExpr>,
-    x: &Rc<TensorExpr>,
-    label: Option<&str>,
-) -> Result<Option<Rc<TensorExpr>>, Error> {
-    if let TensorExpr::GenStrain { base, .. } = &**t {
-        if base == x {
-            return Ok(Some(t.clone()));
-        }
-        return Ok(None);
-    }
-    let _ = label;
-    Ok(None)
-}
-
 #[derive(Clone, Copy)]
 struct ScalarSetElemRef<'a> {
     latex: &'a str,
@@ -530,10 +496,7 @@ fn collect_scalar_set_elems<'a>(
         }
         ScalarExpr::SpecSum { body, .. } => collect_scalar_set_elems(body, index, out),
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => collect_scalar_set_elems_tensor(t, index, out),
-        ScalarExpr::Sym { .. }
-        | ScalarExpr::Num(_)
-        | ScalarExpr::Eig { .. }
-        | ScalarExpr::SetElem { .. } => {}
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => {}
     }
 }
 
@@ -559,18 +522,10 @@ fn collect_scalar_set_elems_tensor<'a>(
         | TensorExpr::Add(a, b)
         | TensorExpr::Sub(a, b)
         | TensorExpr::Outer(a, b)
-        | TensorExpr::BoxTimes(a, b)
-        | TensorExpr::DdotTQ {
-            second: a,
-            fourth: b,
-        } => {
+        | TensorExpr::BoxTimes(a, b) => {
             collect_scalar_set_elems_tensor(a, index, out);
             collect_scalar_set_elems_tensor(b, index, out);
         }
-        TensorExpr::Spectral { base, .. }
-        | TensorExpr::SpectralFn { base, .. }
-        | TensorExpr::GenStrain { base, .. } => collect_scalar_set_elems_tensor(base, index, out),
-        TensorExpr::QTensor { strain } => collect_scalar_set_elems_tensor(strain, index, out),
         TensorExpr::Var { .. }
         | TensorExpr::Identity4 { .. }
         | TensorExpr::SetElem { .. }
@@ -614,7 +569,6 @@ fn replace_scalar_set_elem_with_var(
         }),
         ScalarExpr::Sym { .. }
         | ScalarExpr::Num(_)
-        | ScalarExpr::Eig { .. }
         | ScalarExpr::SetElem { .. }
         | ScalarExpr::Det(_)
         | ScalarExpr::Tr(_)
@@ -650,7 +604,7 @@ fn rewrite_scalar_for_compound(
     let rw = |e: &Rc<ScalarExpr>| rewrite_scalar_for_compound(e, x, a);
     let rwt = |t: &Rc<TensorExpr>| rewrite_tensor_for_compound(t, x, a);
     match &**s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => s.clone(),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
         ScalarExpr::SetElem {
             latex,
             index,
@@ -749,18 +703,6 @@ fn rewrite_tensor_for_compound(
             set_dim: *set_dim,
             base: base.as_ref().map(&rwt),
         }),
-        TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
-            base: rwt(base),
-            scale: scale.clone(),
-            latex: latex.clone(),
-        }),
-        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor {
-            strain: rwt(strain),
-        }),
-        TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
-            second: rwt(second),
-            fourth: rwt(fourth),
-        }),
         TensorExpr::Transpose(p) => Rc::new(TensorExpr::Transpose(rwt(p))),
         TensorExpr::Inverse(p) => Rc::new(TensorExpr::Inverse(rwt(p))),
         TensorExpr::InverseTranspose(p) => Rc::new(TensorExpr::InverseTranspose(rwt(p))),
@@ -788,19 +730,6 @@ fn rewrite_tensor_for_compound(
             range: *range,
             exclude: exclude.clone(),
             body: rwt(body),
-        }),
-        TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
-            base: rwt(base),
-            base_latex: base_latex.clone(),
-        }),
-        TensorExpr::SpectralFn {
-            func,
-            base,
-            base_latex,
-        } => Rc::new(TensorExpr::SpectralFn {
-            func: func.clone(),
-            base: rwt(base),
-            base_latex: base_latex.clone(),
         }),
         TensorExpr::ScalarMul(s, p) => Rc::new(TensorExpr::ScalarMul(rw(s), rwt(p))),
         TensorExpr::Neg(p) => Rc::new(TensorExpr::Neg(rwt(p))),
@@ -844,15 +773,6 @@ fn replace_scalar(
         ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(rt(t))),
         ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(rt(t))),
         ScalarExpr::Ddot(a, b) => Rc::new(ScalarExpr::Ddot(rt(a), rt(b))),
-        ScalarExpr::Eig {
-            base,
-            symbol,
-            index,
-        } => Rc::new(ScalarExpr::Eig {
-            base: rt(base),
-            symbol: symbol.clone(),
-            index: index.clone(),
-        }),
         ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
             body: rs(body),
             index: index.clone(),
@@ -915,29 +835,6 @@ fn replace_tensor(
             range: *range,
             exclude: exclude.clone(),
             body: rt(body),
-        }),
-        TensorExpr::Spectral { base, base_latex } => Rc::new(TensorExpr::Spectral {
-            base: rt(base),
-            base_latex: base_latex.clone(),
-        }),
-        TensorExpr::SpectralFn {
-            func,
-            base,
-            base_latex,
-        } => Rc::new(TensorExpr::SpectralFn {
-            func: func.clone(),
-            base: rt(base),
-            base_latex: base_latex.clone(),
-        }),
-        TensorExpr::GenStrain { base, scale, latex } => Rc::new(TensorExpr::GenStrain {
-            base: rt(base),
-            scale: scale.clone(),
-            latex: latex.clone(),
-        }),
-        TensorExpr::QTensor { strain } => Rc::new(TensorExpr::QTensor { strain: rt(strain) }),
-        TensorExpr::DdotTQ { second, fourth } => Rc::new(TensorExpr::DdotTQ {
-            second: rt(second),
-            fourth: rt(fourth),
         }),
         TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(rs(s), rt(a))),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),
@@ -1005,12 +902,7 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
         | TensorExpr::Diff { .. }
         | TensorExpr::MatMul(..)
         | TensorExpr::Outer(..)
-        | TensorExpr::BoxTimes(..)
-        | TensorExpr::Spectral { .. }
-        | TensorExpr::SpectralFn { .. }
-        | TensorExpr::GenStrain { .. }
-        | TensorExpr::QTensor { .. }
-        | TensorExpr::DdotTQ { .. } => Err(Error::msg(
+        | TensorExpr::BoxTimes(..) => Err(Error::msg(
             "this tensor-by-tensor derivative form is not supported yet",
         )),
     }
@@ -1066,95 +958,6 @@ fn func_derivative(name: &str, arg: &Rc<ScalarExpr>) -> Result<Rc<ScalarExpr>, E
             )))
         }
     })
-}
-
-/// Find the (unique) generalized strain `E(x)` inside `s`, if any.
-/// Multiple distinct strains of the same tensor are rejected.
-fn find_gen_strain_of(s: &ScalarExpr, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExpr>>, Error> {
-    let mut found: Vec<Rc<TensorExpr>> = Vec::new();
-    collect_strains_scalar(s, x, &mut found);
-    found.dedup();
-    match found.len() {
-        0 => Ok(None),
-        1 => Ok(Some(found.remove(0))),
-        _ => {
-            if found.iter().all(|g| g == &found[0]) {
-                Ok(Some(found.remove(0)))
-            } else {
-                Err(Error::msg(
-                    "multiple distinct generalized strains of the same tensor in one \
-                     expression are not supported yet",
-                ))
-            }
-        }
-    }
-}
-
-fn collect_strains_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, out: &mut Vec<Rc<TensorExpr>>) {
-    match s {
-        ScalarExpr::Sym { .. }
-        | ScalarExpr::Num(_)
-        | ScalarExpr::Eig { .. }
-        | ScalarExpr::SetElem { .. } => {}
-        ScalarExpr::Add(a, b)
-        | ScalarExpr::Sub(a, b)
-        | ScalarExpr::Mul(a, b)
-        | ScalarExpr::Div(a, b)
-        | ScalarExpr::Pow(a, b) => {
-            collect_strains_scalar(a, x, out);
-            collect_strains_scalar(b, x, out);
-        }
-        ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
-            collect_strains_scalar(a, x, out)
-        }
-        ScalarExpr::SpecSum { body, .. } => collect_strains_scalar(body, x, out),
-        ScalarExpr::Det(t) | ScalarExpr::Tr(t) => collect_strains_tensor(t, x, out),
-        ScalarExpr::Ddot(a, b) => {
-            collect_strains_tensor(a, x, out);
-            collect_strains_tensor(b, x, out);
-        }
-    }
-}
-
-fn collect_strains_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>, out: &mut Vec<Rc<TensorExpr>>) {
-    if let TensorExpr::GenStrain { base, .. } = &**t {
-        if base == x {
-            out.push(t.clone());
-            return;
-        }
-    }
-    match &**t {
-        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => {}
-        TensorExpr::SumIdx { body, .. } => collect_strains_tensor(body, x, out),
-        TensorExpr::Transpose(a)
-        | TensorExpr::Inverse(a)
-        | TensorExpr::InverseTranspose(a)
-        | TensorExpr::Neg(a) => collect_strains_tensor(a, x, out),
-        TensorExpr::Diff { num, den, .. } => {
-            collect_strains_tensor(num, x, out);
-            collect_strains_tensor(den, x, out);
-        }
-        TensorExpr::MatMul(a, b)
-        | TensorExpr::Add(a, b)
-        | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b)
-        | TensorExpr::BoxTimes(a, b) => {
-            collect_strains_tensor(a, x, out);
-            collect_strains_tensor(b, x, out);
-        }
-        TensorExpr::Spectral { base, .. }
-        | TensorExpr::SpectralFn { base, .. }
-        | TensorExpr::GenStrain { base, .. } => collect_strains_tensor(base, x, out),
-        TensorExpr::QTensor { strain } => collect_strains_tensor(strain, x, out),
-        TensorExpr::DdotTQ { second, fourth } => {
-            collect_strains_tensor(second, x, out);
-            collect_strains_tensor(fourth, x, out);
-        }
-        TensorExpr::ScalarMul(s, a) => {
-            collect_strains_scalar(s, x, out);
-            collect_strains_tensor(a, x, out);
-        }
-    }
 }
 
 /// `∂s/∂a` for a declared scalar symbol `a` (matched by name).
@@ -1249,7 +1052,6 @@ fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExp
             };
             Ok(Some(fold_mul(&func_derivative(f, arg)?, &da)))
         }
-        ScalarExpr::Eig { .. } => Ok(None),
         ScalarExpr::SpecSum { body, index, dim } => Ok(d_scalar_scalar(body, name)?.map(|d| {
             Rc::new(ScalarExpr::SpecSum {
                 body: d,
@@ -1304,32 +1106,8 @@ fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
         | TensorExpr::BoxTimes(a, b) => {
             tensor_mentions_scalar(a, name) || tensor_mentions_scalar(b, name)
         }
-        TensorExpr::Spectral { base, .. } | TensorExpr::SpectralFn { base, .. } => {
-            tensor_mentions_scalar(base, name)
-        }
-        TensorExpr::GenStrain { base, scale, .. } => {
-            tensor_mentions_scalar(base, name) || scale_mentions_scalar(scale, name)
-        }
-        TensorExpr::QTensor { strain } => tensor_mentions_scalar(strain, name),
-        TensorExpr::DdotTQ { second, fourth } => {
-            tensor_mentions_scalar(second, name) || tensor_mentions_scalar(fourth, name)
-        }
         TensorExpr::ScalarMul(s, a) => {
             scalar_mentions_scalar(s, name) || tensor_mentions_scalar(a, name)
-        }
-    }
-}
-
-fn scale_mentions_scalar(scale: &crate::tensor::Scale, name: &str) -> bool {
-    match scale {
-        crate::tensor::Scale::SethHill { m } => scalar_mentions_scalar(m, name),
-        crate::tensor::Scale::CR { m, n } => {
-            scalar_mentions_scalar(m, name) || scalar_mentions_scalar(n, name)
-        }
-        crate::tensor::Scale::Hencky => false,
-        // The scale's own bound variable is not a free mention.
-        crate::tensor::Scale::Custom { var, body, .. } => {
-            name != var && scalar_mentions_scalar(body, name)
         }
     }
 }
@@ -1337,7 +1115,7 @@ fn scale_mentions_scalar(scale: &crate::tensor::Scale, name: &str) -> bool {
 pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
     match s {
         ScalarExpr::Sym { name: n, .. } => n == name,
-        ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => false,
+        ScalarExpr::Num(_) => false,
         ScalarExpr::SetElem { eig, .. } => eig
             .as_ref()
             .is_some_and(|l| tensor_mentions_scalar(&l.base, name)),
@@ -1388,14 +1166,6 @@ fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
             tensor_var_names(a, out);
             tensor_var_names(b, out);
         }
-        TensorExpr::Spectral { base, .. }
-        | TensorExpr::SpectralFn { base, .. }
-        | TensorExpr::GenStrain { base, .. } => tensor_var_names(base, out),
-        TensorExpr::QTensor { strain } => tensor_var_names(strain, out),
-        TensorExpr::DdotTQ { second, fourth } => {
-            tensor_var_names(second, out);
-            tensor_var_names(fourth, out);
-        }
         TensorExpr::ScalarMul(_, a) => tensor_var_names(a, out),
     }
 }
@@ -1417,7 +1187,7 @@ fn check_independence_tensor(t: &TensorExpr, x: &Rc<TensorExpr>) -> Result<(), E
 
 fn walk_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<(), Error> {
     match s {
-        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::Eig { .. } => Ok(()),
+        ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => Ok(()),
         // λ_a(base): an eigenvalue of X itself is an opaque occurrence of X;
         // any other base is checked for hidden dependence.
         ScalarExpr::SetElem { eig, .. } => match eig {
@@ -1483,14 +1253,6 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
         | TensorExpr::BoxTimes(a, b) => {
             walk_tensor(a, x, vars)?;
             walk_tensor(b, x, vars)
-        }
-        TensorExpr::Spectral { base, .. }
-        | TensorExpr::SpectralFn { base, .. }
-        | TensorExpr::GenStrain { base, .. } => walk_tensor(base, x, vars),
-        TensorExpr::QTensor { strain } => walk_tensor(strain, x, vars),
-        TensorExpr::DdotTQ { second, fourth } => {
-            walk_tensor(second, x, vars)?;
-            walk_tensor(fourth, x, vars)
         }
         TensorExpr::ScalarMul(s, a) => {
             walk_scalar(s, x, vars)?;
@@ -1645,11 +1407,6 @@ fn d_scalar(s: &Rc<ScalarExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
                 body: t,
             })
         })),
-        // Display-level eigenvalue symbols of opaque spectral objects.
-        ScalarExpr::Eig { .. } => Err(Error::msg(
-            "differentiating eigenvalue symbols is not supported; differentiate the \
-             tensor expression they came from instead",
-        )),
     }
 }
 
@@ -1815,11 +1572,6 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         | TensorExpr::Sub(a, b)
         | TensorExpr::Outer(a, b)
         | TensorExpr::BoxTimes(a, b) => t_contains(a, x) || t_contains(b, x),
-        TensorExpr::Spectral { base, .. }
-        | TensorExpr::SpectralFn { base, .. }
-        | TensorExpr::GenStrain { base, .. } => t_contains(base, x),
-        TensorExpr::QTensor { strain } => t_contains(strain, x),
-        TensorExpr::DdotTQ { second, fourth } => t_contains(second, x) || t_contains(fourth, x),
         TensorExpr::ScalarMul(s, a) => s_contains(s, x) || t_contains(a, x),
     }
 }
@@ -1839,7 +1591,6 @@ pub fn s_contains(s: &ScalarExpr, x: &TensorExpr) -> bool {
         }
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => t_contains(t, x),
         ScalarExpr::Ddot(a, b) => t_contains(a, x) || t_contains(b, x),
-        ScalarExpr::Eig { base, .. } => t_contains(base, x),
         ScalarExpr::SpecSum { body, .. } => s_contains(body, x),
     }
 }

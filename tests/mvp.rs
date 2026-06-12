@@ -171,7 +171,7 @@ fn neo_hookean_example_runs_end_to_end() {
     ))
     .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
-    assert_eq!(outputs.len(), 13);
+    assert_eq!(outputs.len(), 12);
 
     // W is a scalar expression containing mu, lambda, log, det, tr.
     match interp.get("W") {

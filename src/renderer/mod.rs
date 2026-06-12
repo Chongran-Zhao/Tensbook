@@ -2,4 +2,3 @@
 
 pub mod components;
 pub mod latex;
-pub mod spectral;

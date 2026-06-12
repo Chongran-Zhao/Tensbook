@@ -352,112 +352,11 @@ impl Interpreter {
                             arg: s,
                         }))),
                     },
-                    Value::Tensor(t) => {
-                        // Isotropic tensor function through the spectral form.
-                        let label = match &args[0] {
-                            Expr::Ident(name) => format!("\\bm {name}"),
-                            _ => tensor_to_latex(&t),
-                        };
-                        Ok(Value::Tensor(Rc::new(TensorExpr::spectral_fn(
-                            callee, t, label,
-                        )?)))
-                    }
+                    Value::Tensor(_) => Err(Error::msg(format!(
+                        "`{callee}` of a tensor is not supported; write the spectral \
+                         form explicitly, e.g. sum({callee}(lambda[a]) * N[a] & N[a], a)"
+                    ))),
                 }
-            }
-            // gstrain(C, scale=CR, m=..., n=...): generalized Lagrangian
-            // strain E(C) = Σ E(λ_a) M_a (Hill's family).
-            "gstrain" => {
-                if args.len() != 1 {
-                    return Err(Error::msg(
-                        "`gstrain` expects one tensor argument: gstrain(C, scale=..., ...)",
-                    ));
-                }
-                let base = match self.eval(&args[0])? {
-                    Value::Tensor(t) => t,
-                    Value::Scalar(_) => {
-                        return Err(Error::msg("`gstrain` requires a tensor argument"))
-                    }
-                };
-                let mut kind: Option<String> = None;
-                let mut m: Option<Rc<ScalarExpr>> = None;
-                let mut n: Option<Rc<ScalarExpr>> = None;
-                for (key, raw) in kwargs {
-                    match key.as_str() {
-                        "scale" => match raw {
-                            Expr::Ident(s) | Expr::Str(s) => kind = Some(s.clone()),
-                            other => {
-                                return Err(Error::msg(format!(
-                                    "invalid scale: {other:?} (expected CR, SethHill, or Hencky)"
-                                )))
-                            }
-                        },
-                        "m" => match self.eval(raw)? {
-                            Value::Scalar(s) => m = Some(s),
-                            _ => return Err(Error::msg("`m` must be a scalar")),
-                        },
-                        "n" => match self.eval(raw)? {
-                            Value::Scalar(s) => n = Some(s),
-                            _ => return Err(Error::msg("`n` must be a scalar")),
-                        },
-                        other => {
-                            return Err(Error::msg(format!("unknown gstrain keyword `{other}`")))
-                        }
-                    }
-                }
-                let scale = match kind.as_deref() {
-                    Some("CR") => crate::tensor::Scale::CR {
-                        m: m.ok_or_else(|| Error::msg("CR strain requires m=..."))?,
-                        n: n.ok_or_else(|| Error::msg("CR strain requires n=..."))?,
-                    },
-                    Some("SethHill") => crate::tensor::Scale::SethHill {
-                        m: m.ok_or_else(|| Error::msg("Seth–Hill strain requires m=..."))?,
-                    },
-                    Some("Hencky") => crate::tensor::Scale::Hencky,
-                    // A user-defined function of one `Var` argument.
-                    Some(other) => match self.env.get(other).cloned() {
-                        Some(Value::Scalar(body)) => {
-                            let vars = self.free_fn_vars(&body);
-                            let var = match vars.as_slice() {
-                                [v] => v.clone(),
-                                [] => {
-                                    return Err(Error::msg(format!(
-                                        "scale `{other}` is not a function: it mentions no \
-                                         `Var(...)` argument"
-                                    )))
-                                }
-                                _ => {
-                                    return Err(Error::msg(format!(
-                                        "scale `{other}` mentions several `Var(...)` arguments \
-                                         ({}); a scale function has one variable",
-                                        vars.join(", ")
-                                    )))
-                                }
-                            };
-                            let dbody = simplify_scalar(
-                                &diff_scalar_by_scalar(&body, &var)?,
-                                RuleSet::Continuum,
-                            );
-                            crate::tensor::Scale::Custom { var, body, dbody }
-                        }
-                        _ => {
-                            return Err(Error::msg(format!(
-                                "unknown scale `{other}` (supported: CR, SethHill, Hencky, \
-                                 or a function declared via Var)"
-                            )))
-                        }
-                    },
-                    None => {
-                        return Err(Error::msg(
-                            "`gstrain` requires scale=CR | SethHill | Hencky or a \
-                             user function of a Var argument",
-                        ))
-                    }
-                };
-                Ok(Value::Tensor(Rc::new(TensorExpr::gen_strain(
-                    base,
-                    scale,
-                    "\\bm E".to_string(),
-                )?)))
             }
             "diff" => self.builtin_diff(args, kwargs),
             "outer" | "otimes" => {
@@ -491,24 +390,6 @@ impl Interpreter {
                          {oa} and {ob}"
                     ))),
                 }
-            }
-            "spectral" => {
-                if args.len() != 1 || !kwargs.is_empty() {
-                    return Err(Error::msg("`spectral` takes exactly one argument"));
-                }
-                let t = match self.eval(&args[0])? {
-                    Value::Tensor(t) => t,
-                    Value::Scalar(_) => {
-                        return Err(Error::msg("`spectral` requires a tensor argument"))
-                    }
-                };
-                // Eigenvalue symbol comes from the subject variable name when
-                // available (spectral(C) → c_a), else from the tensor's latex.
-                let label = match &args[0] {
-                    Expr::Ident(name) => format!("\\bm {name}"),
-                    _ => tensor_to_latex(&t),
-                };
-                Ok(Value::Tensor(Rc::new(TensorExpr::spectral(t, label)?)))
             }
             "inv" => {
                 let t = self.expect_tensor_arg(callee, args, kwargs)?;
@@ -1095,10 +976,10 @@ impl Interpreter {
 
         // Back-substitute registered definitions (most recent first) so the
         // display shows \bm C rather than the expanded FᵀF. Internal values
-        // stay expanded; this is presentation only. Derivative nodes and
-        // spectral mode are exempt: they need the expanded structure.
-        let skip_subst = mode == "spectral"
-            || matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }));
+        // stay expanded; this is presentation only. Derivative nodes are
+        // exempt: they need the expanded structure.
+        let skip_subst =
+            matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }));
         let value = if skip_subst {
             value
         } else {
@@ -1152,14 +1033,6 @@ impl Interpreter {
         match (value, mode) {
             (Value::Scalar(s), "symbol") => Ok(format!("{lhs}{}", scalar_to_latex(s))),
             (Value::Tensor(t), "symbol") => Ok(format!("{lhs}{}", tensor_to_latex(t))),
-            // Principal-axis form: E, T(E), and S = T : Q expand to Σ_a ... M_a.
-            (Value::Tensor(t), "spectral") => Ok(format!(
-                "{lhs}{}",
-                crate::renderer::spectral::tensor_to_spectral(t)?
-            )),
-            (Value::Scalar(_), "spectral") => {
-                Err(Error::msg("spectral display is only defined for tensors"))
-            }
             // Derivative components use the abstract-index engine and carry
             // their own ∂C_ij/∂F_mn left-hand side.
             (Value::Tensor(t), "components" | "matrix" | "block_components")
@@ -1277,13 +1150,6 @@ fn tensor_index_range(t: &TensorExpr, idx: &str) -> Option<usize> {
         | TensorExpr::BoxTimes(a, b) => {
             tensor_index_range(a, idx).or_else(|| tensor_index_range(b, idx))
         }
-        TensorExpr::Spectral { base, .. }
-        | TensorExpr::SpectralFn { base, .. }
-        | TensorExpr::GenStrain { base, .. } => tensor_index_range(base, idx),
-        TensorExpr::QTensor { strain } => tensor_index_range(strain, idx),
-        TensorExpr::DdotTQ { second, fourth } => {
-            tensor_index_range(second, idx).or_else(|| tensor_index_range(fourth, idx))
-        }
         TensorExpr::SumIdx { index, body, .. } => {
             // An inner sum over the same index binds it.
             if index == idx {
@@ -1307,7 +1173,6 @@ fn scalar_index_range(s: &ScalarExpr, idx: &str) -> Option<usize> {
             ..
         } if i == idx => Some(*set_dim),
         ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => None,
-        ScalarExpr::Eig { base, .. } => tensor_index_range(base, idx),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
