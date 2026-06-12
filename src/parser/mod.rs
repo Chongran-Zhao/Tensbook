@@ -32,6 +32,10 @@ pub fn parse(src: &str) -> Result<Vec<Stmt>, Error> {
 fn strip_note_blocks(src: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(src.len());
     let mut in_note = false;
+    // A fenced code block *inside* a note (e.g. ```rust … ```): its closing
+    // bare ``` must not terminate the note. Mirrors noteBlocksFromSource in
+    // ui/main.js — keep the two in sync.
+    let mut in_inner_fence = false;
     let mut start_line = None;
 
     for (idx, line) in src.split_inclusive('\n').enumerate() {
@@ -41,7 +45,13 @@ fn strip_note_blocks(src: &str) -> Result<String, Error> {
 
         if in_note {
             out.push_str(blank_like(line));
-            if is_note_close(trimmed) {
+            if in_inner_fence {
+                if is_note_close(trimmed) {
+                    in_inner_fence = false;
+                }
+            } else if is_inner_fence_open(trimmed) {
+                in_inner_fence = true;
+            } else if is_note_close(trimmed) {
                 in_note = false;
                 start_line = None;
             }
@@ -50,6 +60,7 @@ fn strip_note_blocks(src: &str) -> Result<String, Error> {
 
         if is_note_open(trimmed) {
             in_note = true;
+            in_inner_fence = false;
             start_line = Some(line_no);
             out.push_str(blank_like(line));
             continue;
@@ -73,6 +84,13 @@ fn is_note_open(trimmed: &str) -> bool {
 
 fn is_note_close(trimmed: &str) -> bool {
     trimmed == "```"
+}
+
+/// An opening fence with an info string (```rust, ```text, …) starts a code
+/// block inside the note; the bare ``` that ends it is consumed by the
+/// inner-fence state instead of closing the note.
+fn is_inner_fence_open(trimmed: &str) -> bool {
+    trimmed.starts_with("```") && trimmed != "```"
 }
 
 fn blank_like(line: &str) -> &'static str {

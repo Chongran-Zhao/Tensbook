@@ -57,6 +57,32 @@ display(mu, mode=symbol)
 }
 
 #[test]
+fn note_blocks_may_contain_fenced_code() {
+    // A markdown code fence inside a note: its closing bare ``` must not
+    // terminate the note block.
+    let src = r#"
+```notes
+# Note with code
+
+```rust
+let x = 1;
+```
+
+more prose after the inner fence
+```
+mu = Scalar("\mu")
+display(mu, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert!(
+        outputs[0].latex.contains("\\mu"),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
 fn unterminated_markdown_note_block_is_a_parse_error() {
     let src = r#"
 ```notes

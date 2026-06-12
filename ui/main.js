@@ -223,7 +223,6 @@ async function exportMarkdown() {
       filterName: "Markdown",
       extensions: ["md", "markdown"],
     }).catch(showError);
-    if (path) closeExportMenu();
     return;
   }
   downloadText(markdown, defaultExportName("md"), "text/markdown");
@@ -308,8 +307,19 @@ function noteBlocksFromSource(source) {
   for (let i = 0; i < lines.length; i++) {
     if (!isNoteOpen(lines[i])) continue;
     const block = { line: i + 1, endLine: i + 1, closed: false, lines: [] };
+    // Fenced code blocks inside the note (```rust … ```): the inner bare
+    // ``` must not close the note. Mirrors strip_note_blocks in
+    // src/parser/mod.rs — keep the two in sync.
+    let inInnerFence = false;
     i++;
-    while (i < lines.length && !isNoteClose(lines[i])) {
+    while (i < lines.length) {
+      if (inInnerFence) {
+        if (isNoteClose(lines[i])) inInnerFence = false;
+      } else if (isInnerFenceOpen(lines[i])) {
+        inInnerFence = true;
+      } else if (isNoteClose(lines[i])) {
+        break;
+      }
       block.lines.push(lines[i]);
       i++;
     }
@@ -329,11 +339,26 @@ function isNoteClose(line) {
   return /^```\s*$/.test(line.trim());
 }
 
+function isInnerFenceOpen(line) {
+  const trimmed = line.trim();
+  return trimmed.startsWith("```") && trimmed !== "```";
+}
+
 function renderMarkdown(markdown) {
   const lines = markdown.split(/\r?\n/);
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (isInnerFenceOpen(line)) {
+      const code = [];
+      i++;
+      while (i < lines.length && !isNoteClose(lines[i])) {
+        code.push(lines[i]);
+        i++;
+      }
+      out.push(`<pre class="md-code"><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      continue;
+    }
     const oneLineMath = line.match(/^\s*\$\$\s*(.*?)\s*\$\$\s*$/);
     if (oneLineMath) {
       out.push(`<div class="markdown-math">${renderMath(oneLineMath[1], true)}</div>`);
@@ -441,9 +466,13 @@ function renderMarkdownBlock(block) {
 }
 
 function exportBlocks() {
+  // Error outputs are working-state, not document content: exports carry
+  // only notes and rendered results.
   return [
     ...markdownBlocksFromSource(editor.value),
-    ...lastRenderedOutputs.map((item) => ({ kind: "output", ...item })),
+    ...lastRenderedOutputs
+      .filter((item) => !item.error)
+      .map((item) => ({ kind: "output", ...item })),
   ].sort((a, b) => a.line - b.line || (a.kind === "markdown" ? -1 : 1));
 }
 
@@ -451,7 +480,6 @@ function buildExportMarkdown() {
   return exportBlocks()
     .map((block) => {
       if (block.kind === "markdown") return block.markdown.trim();
-      if (block.error) return `### ${block.header || `Line ${block.line}`}\n\n\`\`\`text\n${block.error}\n\`\`\``;
       return `### ${block.header}\n\n$$\n${stripDisplayMath(block.latex)}\n$$`;
     })
     .filter(Boolean)
@@ -465,9 +493,6 @@ function buildPrintableHtml() {
     .map((block) => {
       if (block.kind === "markdown") {
         return `<section class="doc-block markdown-doc">${renderMarkdown(block.markdown)}</section>`;
-      }
-      if (block.error) {
-        return `<section class="doc-block"><div class="head">${escapeHtml(block.header || `line ${block.line}`)}</div><pre class="error-block">${escapeHtml(block.error)}</pre></section>`;
       }
       return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
     })
@@ -497,13 +522,17 @@ function buildPrintableHtml() {
   .markdown-doc h3 { font-size: 15px; margin: 0 0 8px; }
   .markdown-doc p { margin: 0 0 8px; }
   .markdown-doc ul { margin: 0 0 8px 22px; padding: 0; }
-  .markdown-doc code, .error-block {
+  .markdown-doc code {
     font-family: "SF Mono", Menlo, Consolas, monospace;
     background: #f0f1f4;
     border-radius: 4px;
+    padding: 0 4px;
   }
-  .markdown-doc code { padding: 0 4px; }
-  .error-block { white-space: pre-wrap; padding: 12px; }
+  .markdown-doc pre.md-code {
+    background: #f0f1f4; border-radius: 6px;
+    padding: 10px 12px; overflow-x: auto; margin: 0 0 8px;
+  }
+  .markdown-doc pre.md-code code { background: transparent; padding: 0; }
   @page { margin: 18mm; }
 </style>
 </head>
@@ -561,6 +590,7 @@ function syncNoteBoxes() {
   const boxes = noteBlocksFromSource(editor.value).map((block) => {
     const div = document.createElement("div");
     div.className = "source-note-box";
+    div._block = block; // shared with the closures; repositionNoteBoxes refreshes it
     div.dataset.startLine = String(block.line);
     const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
     const height = Math.max(3, block.endLine - block.line + 1) * lineHeight + 4;
@@ -583,10 +613,12 @@ function syncNoteBoxes() {
 
 function updateNoteBlock(block, noteEditor) {
   const current = currentNoteBlock(block) ?? block;
-  const updated = replaceNoteBlock(current, noteEditor.value);
+  replaceNoteBlock(current, noteEditor.value);
   localStorage.setItem("tensorforge.source.v3", editor.value);
   syncGutter(new Set(), { syncNotes: false });
-  resizeNoteBox(noteEditor.closest(".source-note-box"), updated);
+  // Reposition every box (without rebuilding, to keep focus): edits in this
+  // note shift the line spans of all notes below it.
+  repositionNoteBoxes();
   scheduleLiveRun();
 }
 
@@ -600,33 +632,44 @@ function handleNoteKeydown(e, block, noteEditor) {
 }
 
 function replaceNoteBlock(block, markdown) {
-  const lines = editor.value.split(/\r?\n/);
-  const body = markdown.length > 0 ? markdown.split(/\r?\n/) : [""];
-  lines.splice(block.line - 1, block.endLine - block.line + 1, "```notes", ...body, "```");
-  editor.value = lines.join("\n");
-  return currentNoteBlock(block);
+  // setRangeText (not a value assignment) keeps the main editor's undo
+  // history intact and leaves the rest of the file byte-identical.
+  const [start, end] = lineRangeOffsets(editor.value, block.line, block.endLine);
+  editor.setRangeText(`\`\`\`notes\n${markdown}\n\`\`\``, start, end, "preserve");
 }
 
 function removeNoteBlock(block) {
-  const lines = editor.value.split(/\r?\n/);
-  lines.splice(block.line - 1, block.endLine - block.line + 1);
-  editor.value = lines.join("\n");
-  const cursor = offsetForLine(editor.value, block.line);
+  // Re-resolve the block: the closure's line span goes stale while the
+  // note is being edited, and a stale span would delete following code.
+  const current = currentNoteBlock(block) ?? block;
+  const start = offsetForLine(editor.value, current.line);
+  const end = offsetForLine(editor.value, current.endLine + 1); // incl. newline
+  editor.setRangeText("", start, end, "start");
   editor.focus();
-  editor.setSelectionRange(cursor, cursor);
+  editor.setSelectionRange(start, start);
   localStorage.setItem("tensorforge.source.v3", editor.value);
   clearGutterErrors();
   scheduleLiveRun();
 }
 
+// Character offset of the start of `line` (1-based).
 function offsetForLine(source, line) {
-  if (line <= 1) return 0;
   let offset = 0;
-  const lines = source.split(/\r?\n/);
-  for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
-    offset += lines[i].length + 1;
+  for (let l = 1; l < line; l++) {
+    const nl = source.indexOf("\n", offset);
+    if (nl === -1) return source.length;
+    offset = nl + 1;
   }
   return offset;
+}
+
+// [start, end) covering lines startLine..=endLine, excluding the trailing
+// newline of endLine.
+function lineRangeOffsets(source, startLine, endLine) {
+  const start = offsetForLine(source, startLine);
+  let end = offsetForLine(source, endLine + 1);
+  if (end > start && source[end - 1] === "\n") end -= 1;
+  return [start, end];
 }
 
 function lineForOffset(source, offset) {
@@ -641,15 +684,24 @@ function currentNoteBlock(block) {
   return noteBlocksFromSource(editor.value).find((candidate) => candidate.line === block.line);
 }
 
-function resizeNoteBox(box, block) {
-  if (!box || !block) return;
+/// Refresh position, size and the closure-shared block objects of all note
+/// boxes from the current source, without rebuilding the DOM (rebuilding
+/// would destroy the focused note editor). Falls back to doing nothing when
+/// the block count changed (a fence was typed); the next full sync rebuilds.
+function repositionNoteBoxes() {
+  const fresh = noteBlocksFromSource(editor.value);
+  const boxes = [...noteLayer.children];
+  if (fresh.length !== boxes.length) return;
   const style = getComputedStyle(editor);
   const lineHeight = Number.parseFloat(style.lineHeight);
   const paddingTop = Number.parseFloat(style.paddingTop);
-  const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
-  const height = Math.max(3, block.endLine - block.line + 1) * lineHeight + 4;
-  box.style.top = `${top}px`;
-  box.style.height = `${height}px`;
+  boxes.forEach((box, i) => {
+    const block = fresh[i];
+    if (box._block) Object.assign(box._block, block);
+    box.dataset.startLine = String(block.line);
+    box.style.top = `${paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2}px`;
+    box.style.height = `${Math.max(3, block.endLine - block.line + 1) * lineHeight + 4}px`;
+  });
 }
 
 function isEditingNote() {
@@ -792,7 +844,14 @@ editor.addEventListener("input", () => {
 });
 editor.addEventListener("scroll", () => {
   gutter.scrollTop = editor.scrollTop;
-  syncNoteBoxes();
+  // A full rebuild would destroy the focused note editor mid-edit.
+  if (isEditingNote()) repositionNoteBoxes();
+  else syncNoteBoxes();
+});
+// Leaving the note layer (blur to the main editor, a button, …) is the
+// moment to rebuild boxes so stale spans never survive an editing session.
+noteLayer.addEventListener("focusout", (e) => {
+  if (!noteLayer.contains(e.relatedTarget)) syncNoteBoxes();
 });
 // initial render on startup
 scheduleLiveRun();
