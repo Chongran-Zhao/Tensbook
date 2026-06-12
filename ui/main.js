@@ -74,6 +74,10 @@ const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
 const saveAsBtn = document.getElementById("saveas");
 const addNoteBtn = document.getElementById("add-note");
+const exportBtn = document.getElementById("export");
+const exportMenu = document.getElementById("export-menu");
+const exportMdBtn = document.getElementById("export-md");
+const exportPdfBtn = document.getElementById("export-pdf");
 const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
 
@@ -122,6 +126,7 @@ document.addEventListener("click", (e) => {
 
 // Path of the currently open file; null = unsaved buffer.
 let currentPath = null;
+let lastRenderedOutputs = [];
 
 function setCurrentPath(path) {
   currentPath = path;
@@ -202,6 +207,61 @@ async function saveFile(forceDialog) {
     path: forceDialog ? null : currentPath,
   }).catch(showError);
   if (path) setCurrentPath(path);
+}
+
+async function exportMarkdown() {
+  closeExportMenu();
+  const markdown = buildExportMarkdown();
+  if (!markdown.trim()) {
+    showError("Nothing to export yet. Add notes or display(...) output first.");
+    return;
+  }
+  if (invoke) {
+    const path = await invoke("export_text", {
+      content: markdown,
+      defaultFilename: defaultExportName("md"),
+      filterName: "Markdown",
+      extensions: ["md", "markdown"],
+    }).catch(showError);
+    if (path) closeExportMenu();
+    return;
+  }
+  downloadText(markdown, defaultExportName("md"), "text/markdown");
+}
+
+function exportPdf() {
+  closeExportMenu();
+  const html = buildPrintableHtml();
+  if (!html) {
+    showError("Nothing to export yet. Add notes or display(...) output first.");
+    return;
+  }
+  printHtml(html);
+}
+
+function defaultExportName(ext) {
+  const base = currentPath
+    ? currentPath.split("/").pop().replace(/\.[^.]+$/, "")
+    : "tensorforge-export";
+  return `${base}.${ext}`;
+}
+
+function downloadText(text, filename, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function toggleExportMenu() {
+  exportMenu.classList.toggle("show");
+}
+
+function closeExportMenu() {
+  exportMenu.classList.remove("show");
 }
 
 function showError(message) {
@@ -378,6 +438,100 @@ function renderMarkdownBlock(block) {
   el.className = "block markdown-doc";
   el.innerHTML = renderMarkdown(block.markdown);
   return el;
+}
+
+function exportBlocks() {
+  return [
+    ...markdownBlocksFromSource(editor.value),
+    ...lastRenderedOutputs.map((item) => ({ kind: "output", ...item })),
+  ].sort((a, b) => a.line - b.line || (a.kind === "markdown" ? -1 : 1));
+}
+
+function buildExportMarkdown() {
+  return exportBlocks()
+    .map((block) => {
+      if (block.kind === "markdown") return block.markdown.trim();
+      if (block.error) return `### ${block.header || `Line ${block.line}`}\n\n\`\`\`text\n${block.error}\n\`\`\``;
+      return `### ${block.header}\n\n$$\n${stripDisplayMath(block.latex)}\n$$`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildPrintableHtml() {
+  const blocks = exportBlocks();
+  if (blocks.length === 0) return "";
+  const body = blocks
+    .map((block) => {
+      if (block.kind === "markdown") {
+        return `<section class="doc-block markdown-doc">${renderMarkdown(block.markdown)}</section>`;
+      }
+      if (block.error) {
+        return `<section class="doc-block"><div class="head">${escapeHtml(block.header || `line ${block.line}`)}</div><pre class="error-block">${escapeHtml(block.error)}</pre></section>`;
+      }
+      return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
+    })
+    .join("\n");
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>TensorForge Export</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<style>
+  body {
+    margin: 34px;
+    color: #1d1d22;
+    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .doc-block { margin: 0 0 22px; break-inside: avoid; }
+  .head {
+    color: #6b6c78;
+    font: 12px/1.4 "SF Mono", Menlo, Consolas, monospace;
+    margin-bottom: 8px;
+  }
+  .math-block { overflow-x: visible; text-align: center; }
+  .math-block .katex { font-size: 1.12em; }
+  .markdown-doc h1 { font-size: 22px; margin: 0 0 10px; }
+  .markdown-doc h2 { font-size: 18px; margin: 0 0 8px; }
+  .markdown-doc h3 { font-size: 15px; margin: 0 0 8px; }
+  .markdown-doc p { margin: 0 0 8px; }
+  .markdown-doc ul { margin: 0 0 8px 22px; padding: 0; }
+  .markdown-doc code, .error-block {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: #f0f1f4;
+    border-radius: 4px;
+  }
+  .markdown-doc code { padding: 0 4px; }
+  .error-block { white-space: pre-wrap; padding: 12px; }
+  @page { margin: 18mm; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+}
+
+function stripDisplayMath(latex) {
+  return latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
+}
+
+function printHtml(html) {
+  const frame = document.createElement("iframe");
+  frame.style.position = "fixed";
+  frame.style.right = "0";
+  frame.style.bottom = "0";
+  frame.style.width = "0";
+  frame.style.height = "0";
+  frame.style.border = "0";
+  document.body.appendChild(frame);
+  frame.onload = () => {
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 1000);
+  };
+  frame.srcdoc = html;
 }
 
 function insertNoteBlock() {
@@ -560,6 +714,7 @@ function renderOutputBlock(item) {
 
 function renderOutputs(outputs) {
   output.innerHTML = "";
+  lastRenderedOutputs = outputs;
   markGutterErrors(outputs, { syncNotes: !isEditingNote() });
   const blocks = [
     ...markdownBlocksFromSource(editor.value),
@@ -647,7 +802,15 @@ openBtn.addEventListener("click", openFile);
 saveBtn.addEventListener("click", () => saveFile(false));
 saveAsBtn.addEventListener("click", () => saveFile(true));
 addNoteBtn.addEventListener("click", insertNoteBlock);
+exportBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleExportMenu();
+});
+exportMenu.addEventListener("click", (e) => e.stopPropagation());
+exportMdBtn.addEventListener("click", exportMarkdown);
+exportPdfBtn.addEventListener("click", exportPdf);
 themeBtn.addEventListener("click", toggleTheme);
+document.addEventListener("click", closeExportMenu);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === "Enter") {

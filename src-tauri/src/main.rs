@@ -113,11 +113,40 @@ async fn save_tens(
     Ok(Some(target.display().to_string()))
 }
 
+/// Export a generated text document such as Markdown.
+#[tauri::command]
+async fn export_text(
+    app: tauri::AppHandle,
+    content: String,
+    default_filename: String,
+    filter_name: String,
+    extensions: Vec<String>,
+) -> Result<Option<String>, String> {
+    let ext_refs: Vec<&str> = extensions.iter().map(String::as_str).collect();
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .add_filter(&filter_name, &ext_refs)
+        .set_file_name(&default_filename)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let target = picked.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&target, content).map_err(|e| e.to_string())?;
+    Ok(Some(target.display().to_string()))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![run_tens, open_tens, save_tens])
+        .invoke_handler(tauri::generate_handler![
+            run_tens,
+            open_tens,
+            save_tens,
+            export_text
+        ])
         .run(tauri::generate_context!())
         .expect("error while running TensorForge");
 }
