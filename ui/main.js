@@ -6,9 +6,18 @@ import { setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-const DEFAULT_SOURCE = `## Hill's class hyperelasticity
-# Hand-written spectral strain with a symbolic Hill-CR scale function.
-#
+const DEFAULT_SOURCE = `\`\`\`notes
+# Hill's class hyperelasticity
+
+Hand-written spectral strain with a symbolic Hill-CR scale function.
+
+$$
+\\bm C = \\sum_{a=1}^{3} \\lambda_a^2 \\, \\bm N_a \\otimes \\bm N_a,
+\\qquad
+\\bm E = \\sum_{a=1}^{3} E(\\lambda_a) \\, \\bm N_a \\otimes \\bm N_a.
+$$
+\`\`\`
+
 mu = Scalar("\\mu")
 kappa = Scalar("\\kappa")
 m = Scalar("m")
@@ -20,18 +29,27 @@ N = VectorSet("\\bm N", dim=3)
 lam = Var("\\lambda")
 Ecr = (lam^m - lam^(-n))/(m + n)
 
-### Spectral strain
-# C = sum_a lambda_a^2 N_a ⊗ N_a
-# E = sum_a Ecr(lambda_a) N_a ⊗ N_a
+\`\`\`notes
+## Spectral strain
+
+The source expression mirrors the math directly:
+
+- \`&\` is the outer product.
+- \`Q = 2 * diff(E, C)\` builds the fourth-order tangent from the two spectral sums.
+\`\`\`
+
 C = sum(lambda[a]^2 * N[a] & N[a], a)
 E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
 Q = 2 * diff(E, C)
 
-### Energy and stress
-# Hill's quadratic energy.
+\`\`\`notes
+## Energy and stress
+
+Hill's quadratic energy gives the thermodynamic force $\\bm T = \\partial W / \\partial \\bm E$.
+\`\`\`
+
 W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
-# Thermodynamic force and second Piola-Kirchhoff stress S = T : Q.
 T = diff(W, E)
 S = T : Q
 
@@ -47,11 +65,13 @@ const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 
 const editor = document.getElementById("editor");
 const gutter = document.getElementById("gutter");
+const noteLayer = document.getElementById("note-layer");
 const output = document.getElementById("output");
 const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
 const saveAsBtn = document.getElementById("saveas");
+const addNoteBtn = document.getElementById("add-note");
 const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
 
@@ -136,6 +156,7 @@ function syncGutter(errorLines = new Set()) {
     line.classList.toggle("err", errorLines.has(Number(line.dataset.line)));
   }
   gutter.scrollTop = editor.scrollTop;
+  syncNoteBoxes();
 }
 
 function clearGutterErrors() {
@@ -204,35 +225,38 @@ function copyButton(label, text) {
 }
 
 function markdownBlocksFromSource(source) {
+  return noteBlocksFromSource(source)
+    .map((block) => ({
+      kind: "markdown",
+      line: block.line,
+      markdown: block.lines.join("\n").trim(),
+    }))
+    .filter((block) => block.markdown);
+}
+
+function noteBlocksFromSource(source) {
   const blocks = [];
-  let current = null;
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const trimmed = raw.trimStart();
-    if (trimmed.startsWith("#")) {
-      const text = trimmed.startsWith("# ") ? trimmed.slice(2) : trimmed.slice(1);
-      if (!current) current = { line: i + 1, lines: [] };
-      current.lines.push(text);
-      continue;
+    if (!isNoteOpen(lines[i])) continue;
+    const block = { line: i + 1, endLine: i + 1, lines: [] };
+    i++;
+    while (i < lines.length && !isNoteClose(lines[i])) {
+      block.lines.push(lines[i]);
+      i++;
     }
-    if (current) {
-      pushMarkdownBlock(blocks, current);
-      current = null;
-    }
+    block.endLine = i < lines.length ? i + 1 : lines.length;
+    blocks.push(block);
   }
-  if (current) pushMarkdownBlock(blocks, current);
   return blocks;
 }
 
-function pushMarkdownBlock(blocks, block) {
-  const markdown = block.lines.join("\n").trim();
-  if (!markdown) return;
-  blocks.push({
-    kind: "markdown",
-    line: block.line,
-    markdown,
-  });
+function isNoteOpen(line) {
+  return /^```notes\s*$/i.test(line.trim());
+}
+
+function isNoteClose(line) {
+  return /^```\s*$/.test(line.trim());
 }
 
 function renderMarkdown(markdown) {
@@ -240,6 +264,21 @@ function renderMarkdown(markdown) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const oneLineMath = line.match(/^\s*\$\$\s*(.*?)\s*\$\$\s*$/);
+    if (oneLineMath) {
+      out.push(`<div class="markdown-math">${renderMath(oneLineMath[1], true)}</div>`);
+      continue;
+    }
+    if (line.trim() === "$$") {
+      const tex = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "$$") {
+        tex.push(lines[i]);
+        i++;
+      }
+      out.push(`<div class="markdown-math">${renderMath(tex.join("\n"), true)}</div>`);
+      continue;
+    }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
@@ -263,10 +302,58 @@ function renderMarkdown(markdown) {
 }
 
 function inlineMarkdown(text) {
+  const parts = [];
+  let plain = "";
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end !== -1) {
+        if (plain) parts.push(renderInlinePlain(plain));
+        plain = "";
+        parts.push(`<code>${escapeHtml(text.slice(i + 1, end))}</code>`);
+        i = end;
+        continue;
+      }
+    }
+    if (text[i] === "$" && text[i + 1] !== "$") {
+      const end = findInlineMathEnd(text, i + 1);
+      if (end !== -1) {
+        if (plain) parts.push(renderInlinePlain(plain));
+        plain = "";
+        parts.push(renderMath(text.slice(i + 1, end), false));
+        i = end;
+        continue;
+      }
+    }
+    plain += text[i];
+  }
+  if (plain) parts.push(renderInlinePlain(plain));
+  return parts.join("");
+}
+
+function findInlineMathEnd(text, start) {
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "$" && text[i - 1] !== "\\") return i;
+  }
+  return -1;
+}
+
+function renderInlinePlain(text) {
   return escapeHtml(text)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function renderMath(tex, displayMode) {
+  try {
+    return katex.renderToString(tex, {
+      displayMode,
+      macros: KATEX_MACROS,
+      throwOnError: true,
+    });
+  } catch (e) {
+    return `<code>${escapeHtml(tex)}</code>`;
+  }
 }
 
 function escapeHtml(text) {
@@ -278,15 +365,41 @@ function escapeHtml(text) {
 
 function renderMarkdownBlock(block) {
   const el = document.createElement("div");
-  el.className = "block";
-  const head = document.createElement("div");
-  head.className = "head";
-  head.textContent = `[markdown, line ${block.line}]`;
-  const doc = document.createElement("div");
-  doc.className = "markdown-doc";
-  doc.innerHTML = renderMarkdown(block.markdown);
-  el.append(head, doc);
+  el.className = "block markdown-doc";
+  el.innerHTML = renderMarkdown(block.markdown);
   return el;
+}
+
+function insertNoteBlock() {
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const needsLeadingBreak = start > 0 && editor.value[start - 1] !== "\n";
+  const needsTrailingBreak = end < editor.value.length && editor.value[end] !== "\n";
+  const body = "# Notes\n\nWrite Markdown here.\n\n$$\n\\bm E = \\sum_{a=1}^{3} E(\\lambda_a) \\bm N_a \\otimes \\bm N_a\n$$";
+  const block = `${needsLeadingBreak ? "\n" : ""}\`\`\`notes\n${body}\n\`\`\`\n${needsTrailingBreak ? "\n" : ""}`;
+  editor.setRangeText(block, start, end, "end");
+  const selectStart = start + (needsLeadingBreak ? 1 : 0) + "```notes\n".length;
+  const selectEnd = selectStart + body.length;
+  editor.focus();
+  editor.setSelectionRange(selectStart, selectEnd);
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function syncNoteBoxes() {
+  noteLayer.style.left = `${gutter.offsetWidth}px`;
+  const style = getComputedStyle(editor);
+  const lineHeight = Number.parseFloat(style.lineHeight);
+  const paddingTop = Number.parseFloat(style.paddingTop);
+  const boxes = noteBlocksFromSource(editor.value).map((block) => {
+    const div = document.createElement("div");
+    div.className = "source-note-box";
+    const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
+    const height = (block.endLine - block.line + 1) * lineHeight + 4;
+    div.style.top = `${top}px`;
+    div.style.height = `${height}px`;
+    return div;
+  });
+  noteLayer.replaceChildren(...boxes);
 }
 
 function renderOutputBlock(item) {
@@ -410,6 +523,7 @@ editor.addEventListener("input", () => {
 });
 editor.addEventListener("scroll", () => {
   gutter.scrollTop = editor.scrollTop;
+  syncNoteBoxes();
 });
 // initial render on startup
 scheduleLiveRun();
@@ -418,6 +532,7 @@ runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
 saveBtn.addEventListener("click", () => saveFile(false));
 saveAsBtn.addEventListener("click", () => saveFile(true));
+addNoteBtn.addEventListener("click", insertNoteBlock);
 themeBtn.addEventListener("click", toggleTheme);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;

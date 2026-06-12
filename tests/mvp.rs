@@ -26,6 +26,51 @@ fn scalar_parses() {
 }
 
 #[test]
+fn markdown_note_blocks_are_ignored_by_parser() {
+    let src = r#"
+```notes
+# Model notes
+
+Inline math $W = \mu I_1$ and display math:
+
+$$
+\bm C = \bm F^\mathsf{T}\bm F
+$$
+```
+
+mu = Scalar("\mu")
+display(mu, mode=symbol)
+```notes
+## More notes
+
+- These lines are Markdown, not TensorForge DSL.
+- Symbols like $$, #, and `code` stay inside the note block.
+```
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert!(
+        outputs[0].latex.contains("\\mu"),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
+fn unterminated_markdown_note_block_is_a_parse_error() {
+    let src = r#"
+```notes
+# Missing close
+mu = Scalar("\mu")
+"#;
+    let err = run_source(src).unwrap_err();
+    assert!(
+        err.to_string().contains("unterminated notes block"),
+        "got: {err}"
+    );
+}
+
+#[test]
 fn tensor_parses_with_order_and_dim() {
     let (_, interp) = run_source_with_env(r#"F = Tensor("\bm F", order=2, dim=3)"#).unwrap();
     match interp.get("F") {

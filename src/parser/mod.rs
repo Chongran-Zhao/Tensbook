@@ -24,8 +24,63 @@ use lexer::{lex, Tok, Token};
 type CallArgs = (Vec<Expr>, Vec<(String, Expr)>);
 
 pub fn parse(src: &str) -> Result<Vec<Stmt>, Error> {
-    let tokens = lex(src)?;
+    let stripped = strip_note_blocks(src)?;
+    let tokens = lex(&stripped)?;
     Parser { tokens, pos: 0 }.parse_program()
+}
+
+fn strip_note_blocks(src: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(src.len());
+    let mut in_note = false;
+    let mut start_line = None;
+
+    for (idx, line) in src.split_inclusive('\n').enumerate() {
+        let line_no = idx + 1;
+        let body = line.trim_end_matches(['\r', '\n']);
+        let trimmed = body.trim();
+
+        if in_note {
+            out.push_str(blank_like(line));
+            if is_note_close(trimmed) {
+                in_note = false;
+                start_line = None;
+            }
+            continue;
+        }
+
+        if is_note_open(trimmed) {
+            in_note = true;
+            start_line = Some(line_no);
+            out.push_str(blank_like(line));
+            continue;
+        }
+
+        out.push_str(line);
+    }
+
+    if in_note {
+        return Err(Error::new(
+            "unterminated notes block; expected closing ```",
+            start_line,
+        ));
+    }
+    Ok(out)
+}
+
+fn is_note_open(trimmed: &str) -> bool {
+    trimmed.eq_ignore_ascii_case("```notes")
+}
+
+fn is_note_close(trimmed: &str) -> bool {
+    trimmed == "```"
+}
+
+fn blank_like(line: &str) -> &'static str {
+    if line.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    }
 }
 
 struct Parser {
