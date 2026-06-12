@@ -72,7 +72,12 @@ const output = document.getElementById("output");
 const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
-const saveAsBtn = document.getElementById("saveas");
+const fileRail = document.getElementById("file-rail");
+const railFolder = document.getElementById("rail-folder");
+const railFiles = document.getElementById("rail-files");
+const insertTableBtn = document.getElementById("insert-table");
+const tableMenu = document.getElementById("table-menu");
+const printRoot = document.getElementById("print-root");
 const addNoteBtn = document.getElementById("add-note");
 const exportBtn = document.getElementById("export");
 const exportMenu = document.getElementById("export-menu");
@@ -191,22 +196,70 @@ async function openFile() {
   if (!invoke) return;
   const opened = await invoke("open_tens").catch(showError);
   if (!opened) return; // cancelled
+  loadOpenedFile(opened);
+}
+
+function loadOpenedFile(opened) {
   editor.value = opened.source;
   setCurrentPath(opened.path);
   localStorage.setItem("tensorforge.source.v3", editor.value);
+  renderFileRail(opened.folder, opened.files);
   clearGutterErrors();
   scheduleLiveRun();
 }
 
-async function saveFile(forceDialog) {
+function renderFileRail(folder, files) {
+  if (!folder || !files || files.length === 0) {
+    fileRail.classList.remove("show");
+    return;
+  }
+  railFolder.textContent = folder;
+  railFolder.title = folder;
+  railFiles.replaceChildren(
+    ...files.map((f) => {
+      const div = document.createElement("div");
+      div.className = "file" + (f.path === currentPath ? " active" : "");
+      div.textContent = f.name;
+      div.title = f.path;
+      div.addEventListener("click", () => switchToFile(f.path));
+      return div;
+    }),
+  );
+  fileRail.classList.add("show");
+}
+
+async function switchToFile(path) {
+  if (!invoke || path === currentPath) return;
+  // Notebook-style: persist the current file before switching away.
+  if (currentPath) {
+    await invoke("save_tens", {
+      source: editor.value,
+      path: currentPath,
+    }).catch(showError);
+  }
+  const opened = await invoke("read_tens", { path }).catch(showError);
+  if (opened) loadOpenedFile(opened);
+}
+
+async function saveFile() {
   if (!invoke) return;
   localStorage.setItem("tensorforge.source.v3", editor.value);
-  if (!forceDialog && !currentPath) return;
+  // No path yet (scratch buffer): Save behaves as Save As.
   const path = await invoke("save_tens", {
     source: editor.value,
-    path: forceDialog ? null : currentPath,
+    path: currentPath,
   }).catch(showError);
-  if (path) setCurrentPath(path);
+  if (path) {
+    setCurrentPath(path);
+    await refreshFolderListing(path);
+  }
+}
+
+// Re-list the folder of `path` so the rail picks up new files.
+async function refreshFolderListing(path) {
+  if (!invoke || !path) return;
+  const opened = await invoke("read_tens", { path }).catch(() => null);
+  if (opened) renderFileRail(opened.folder, opened.files);
 }
 
 async function exportMarkdown() {
@@ -217,7 +270,7 @@ async function exportMarkdown() {
     return;
   }
   if (invoke) {
-    const path = await invoke("export_text", {
+    await invoke("export_text", {
       content: markdown,
       defaultFilename: defaultExportName("md"),
       filterName: "Markdown",
@@ -230,12 +283,12 @@ async function exportMarkdown() {
 
 function exportPdf() {
   closeExportMenu();
-  const html = buildPrintableHtml();
-  if (!html) {
+  const body = buildPrintableBody();
+  if (!body) {
     showError("Nothing to export yet. Add notes or display(...) output first.");
     return;
   }
-  printHtml(html);
+  printDocument(body);
 }
 
 function defaultExportName(ext) {
@@ -374,6 +427,19 @@ function renderMarkdown(markdown) {
       out.push(`<div class="markdown-math">${renderMath(tex.join("\n"), true)}</div>`);
       continue;
     }
+    if (isTableRow(line) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const aligns = tableAlignments(lines[i + 1]);
+      const header = tableCells(line);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && isTableRow(lines[i])) {
+        rows.push(tableCells(lines[i]));
+        i++;
+      }
+      i--;
+      out.push(renderTable(header, rows, aligns));
+      continue;
+    }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
@@ -394,6 +460,41 @@ function renderMarkdown(markdown) {
     out.push(`<p>${inlineMarkdown(line)}</p>`);
   }
   return out.join("") || "<p></p>";
+}
+
+function isTableRow(line) {
+  const t = line.trim();
+  return t.startsWith("|") && t.endsWith("|") && t.length > 1;
+}
+
+function isTableSeparator(line) {
+  const t = line.trim();
+  if (!isTableRow(t)) return false;
+  return tableCells(t).every((c) => /^:?-{3,}:?$/.test(c.trim()) || c.trim() === "");
+}
+
+function tableCells(line) {
+  const t = line.trim();
+  return t.slice(1, t.length - 1).split("|");
+}
+
+function tableAlignments(sepLine) {
+  return tableCells(sepLine).map((c) => {
+    const t = c.trim();
+    if (t.startsWith(":") && t.endsWith(":")) return "center";
+    if (t.endsWith(":")) return "right";
+    return "left";
+  });
+}
+
+function renderTable(header, rows, aligns) {
+  const cell = (tag, content, k) =>
+    `<${tag} style="text-align:${aligns[k] ?? "left"}">${inlineMarkdown(content.trim())}</${tag}>`;
+  const head = `<thead><tr>${header.map((c, k) => cell("th", c, k)).join("")}</tr></thead>`;
+  const body = rows
+    .map((r) => `<tr>${r.map((c, k) => cell("td", c, k)).join("")}</tr>`)
+    .join("");
+  return `<table class="md-table">${head}<tbody>${body}</tbody></table>`;
 }
 
 function inlineMarkdown(text) {
@@ -434,6 +535,20 @@ function findInlineMathEnd(text, start) {
 }
 
 function renderInlinePlain(text) {
+  // Pasted images: only data:image/ URLs are honored (no remote loads).
+  const parts = [];
+  let rest = text;
+  const img = /!\[([^\]]*)\]\((data:image\/[a-zA-Z+.-]+;base64,[A-Za-z0-9+/=]+)\)/;
+  for (let m = rest.match(img); m; m = rest.match(img)) {
+    parts.push(inlineStyles(rest.slice(0, m.index)));
+    parts.push(`<img class="md-img" alt="${escapeHtml(m[1])}" src="${m[2]}">`);
+    rest = rest.slice(m.index + m[0].length);
+  }
+  parts.push(inlineStyles(rest));
+  return parts.join("");
+}
+
+function inlineStyles(text) {
   return escapeHtml(text)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>");
@@ -486,10 +601,10 @@ function buildExportMarkdown() {
     .join("\n\n");
 }
 
-function buildPrintableHtml() {
+function buildPrintableBody() {
   const blocks = exportBlocks();
   if (blocks.length === 0) return "";
-  const body = blocks
+  return blocks
     .map((block) => {
       if (block.kind === "markdown") {
         return `<section class="doc-block markdown-doc">${renderMarkdown(block.markdown)}</section>`;
@@ -497,70 +612,27 @@ function buildPrintableHtml() {
       return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
     })
     .join("\n");
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>TensorForge Export</title>
-<link rel="stylesheet" href="vendor/katex/katex.min.css">
-<style>
-  body {
-    margin: 34px;
-    color: #1d1d22;
-    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  }
-  .doc-block { margin: 0 0 22px; break-inside: avoid; }
-  .head {
-    color: #6b6c78;
-    font: 12px/1.4 "SF Mono", Menlo, Consolas, monospace;
-    margin-bottom: 8px;
-  }
-  .math-block { overflow-x: visible; text-align: center; }
-  .math-block .katex { font-size: 1.12em; }
-  .markdown-doc h1 { font-size: 22px; margin: 0 0 10px; }
-  .markdown-doc h2 { font-size: 18px; margin: 0 0 8px; }
-  .markdown-doc h3 { font-size: 15px; margin: 0 0 8px; }
-  .markdown-doc p { margin: 0 0 8px; }
-  .markdown-doc ul { margin: 0 0 8px 22px; padding: 0; }
-  .markdown-doc code {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    background: #f0f1f4;
-    border-radius: 4px;
-    padding: 0 4px;
-  }
-  .markdown-doc pre.md-code {
-    background: #f0f1f4; border-radius: 6px;
-    padding: 10px 12px; overflow-x: auto; margin: 0 0 8px;
-  }
-  .markdown-doc pre.md-code code { background: transparent; padding: 0; }
-  @page { margin: 18mm; }
-</style>
-</head>
-<body>
-${body}
-</body>
-</html>`;
 }
 
 function stripDisplayMath(latex) {
   return latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
 }
 
-function printHtml(html) {
-  const frame = document.createElement("iframe");
-  frame.style.position = "fixed";
-  frame.style.right = "0";
-  frame.style.bottom = "0";
-  frame.style.width = "0";
-  frame.style.height = "0";
-  frame.style.border = "0";
-  document.body.appendChild(frame);
-  frame.onload = () => {
-    frame.contentWindow.focus();
-    frame.contentWindow.print();
-    setTimeout(() => frame.remove(), 1000);
+// Print through the main window: WKWebView ignores print() on iframe
+// content windows, but wry hooks window.print() on the top window. The
+// printable DOM lives in #print-root and @media print hides the app shell.
+function printDocument(bodyHtml) {
+  printRoot.innerHTML = bodyHtml;
+  document.body.classList.add("printing");
+  const cleanup = () => {
+    document.body.classList.remove("printing");
+    printRoot.innerHTML = "";
   };
-  frame.srcdoc = html;
+  window.addEventListener("afterprint", cleanup, { once: true });
+  // WKWebView does not always fire afterprint; the content is snapshotted
+  // when the dialog opens, so a delayed cleanup is safe.
+  setTimeout(cleanup, 2000);
+  window.print();
 }
 
 function insertNoteBlock() {
@@ -596,6 +668,10 @@ function syncNoteBoxes() {
     const height = Math.max(3, block.endLine - block.line + 1) * lineHeight + 4;
     div.style.top = `${top}px`;
     div.style.height = `${height}px`;
+    const tag = document.createElement("span");
+    tag.className = "region-tag";
+    tag.textContent = "markdown";
+    div.appendChild(tag);
     const noteEditor = document.createElement("textarea");
     noteEditor.className = "source-note-editor";
     noteEditor.spellcheck = false;
@@ -604,11 +680,62 @@ function syncNoteBoxes() {
     noteEditor.value = block.lines.join("\n");
     noteEditor.addEventListener("input", () => updateNoteBlock(block, noteEditor));
     noteEditor.addEventListener("keydown", (e) => handleNoteKeydown(e, block, noteEditor));
+    noteEditor.addEventListener("paste", (e) => handleNotePaste(e, noteEditor));
     div.appendChild(noteEditor);
     return div;
   });
   noteLayer.replaceChildren(...boxes);
+  syncCodeBoxes();
   restorePendingNoteFocus();
+}
+
+/// Contiguous non-note, non-blank line spans: the `.tens` code regions.
+function codeRegionsFromSource(source) {
+  const lines = source.split(/\r?\n/);
+  const inNote = new Array(lines.length).fill(false);
+  for (const block of noteBlocksFromSource(source)) {
+    for (let l = block.line; l <= block.endLine; l++) inNote[l - 1] = true;
+  }
+  const regions = [];
+  let start = null;
+  let lastNonBlank = null;
+  for (let i = 0; i <= lines.length; i++) {
+    const isCode = i < lines.length && !inNote[i] && lines[i].trim() !== "";
+    if (isCode) {
+      if (start === null) start = i + 1;
+      lastNonBlank = i + 1;
+      continue;
+    }
+    // A note block (not a mere blank line) or EOF ends the region.
+    const atBoundary = i === lines.length || inNote[i];
+    if (start !== null && atBoundary) {
+      regions.push({ line: start, endLine: lastNonBlank });
+      start = null;
+      lastNonBlank = null;
+    }
+  }
+  return regions;
+}
+
+function syncCodeBoxes() {
+  const codeLayer = document.getElementById("code-layer");
+  codeLayer.style.left = `${gutter.offsetWidth}px`;
+  const style = getComputedStyle(editor);
+  const lineHeight = Number.parseFloat(style.lineHeight);
+  const paddingTop = Number.parseFloat(style.paddingTop);
+  codeLayer.replaceChildren(
+    ...codeRegionsFromSource(editor.value).map((region) => {
+      const div = document.createElement("div");
+      div.className = "source-code-box";
+      div.style.top = `${paddingTop + (region.line - 1) * lineHeight - editor.scrollTop - 2}px`;
+      div.style.height = `${(region.endLine - region.line + 1) * lineHeight + 4}px`;
+      const tag = document.createElement("span");
+      tag.className = "region-tag";
+      tag.textContent = "tens";
+      div.appendChild(tag);
+      return div;
+    }),
+  );
 }
 
 function updateNoteBlock(block, noteEditor) {
@@ -702,6 +829,7 @@ function repositionNoteBoxes() {
     box.style.top = `${paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2}px`;
     box.style.height = `${Math.max(3, block.endLine - block.line + 1) * lineHeight + 4}px`;
   });
+  syncCodeBoxes();
 }
 
 function isEditingNote() {
@@ -720,6 +848,89 @@ function restorePendingNoteFocus() {
   const end = Math.min(focus.selectionEnd, box.value.length);
   box.focus();
   box.setSelectionRange(start, end);
+}
+
+// Pasted images are embedded as data-URL markdown so the .tens file stays
+// self-contained.
+function handleNotePaste(e, noteEditor) {
+  const item = [...(e.clipboardData?.items ?? [])].find((it) =>
+    it.type.startsWith("image/"),
+  );
+  if (!item) return;
+  e.preventDefault();
+  const file = item.getAsFile();
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const md = `![pasted image](${reader.result})`;
+    noteEditor.setRangeText(md, noteEditor.selectionStart, noteEditor.selectionEnd, "end");
+    noteEditor.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---- insert-table popover --------------------------------------------------
+// Enabled only while a note editor has focus. Opening the popover moves
+// focus into its inputs, so the target note and caret are captured (by
+// start line, which is stable while no edits happen) at open time.
+let tableTarget = null;
+
+function updateInsertTableState() {
+  insertTableBtn.disabled = !isEditingNote();
+}
+
+function openTableMenu() {
+  const noteEditor = document.activeElement;
+  const box = noteEditor.closest(".source-note-box");
+  if (!box) return;
+  tableTarget = {
+    startLine: Number(box.dataset.startLine),
+    selectionStart: noteEditor.selectionStart,
+    selectionEnd: noteEditor.selectionEnd,
+  };
+  tableMenu.classList.add("show");
+}
+
+function closeTableMenu() {
+  tableMenu.classList.remove("show");
+}
+
+function markdownTable(rows, cols, align) {
+  const sep = { left: "---", center: ":---:", right: "---:" }[align] ?? "---";
+  const cells = (fill) => `| ${Array.from({ length: cols }, () => fill).join(" | ")} |`;
+  const lines = [cells("   "), cells(sep)];
+  for (let r = 0; r < rows; r++) lines.push(cells("   "));
+  return lines.join("\n");
+}
+
+function insertTableIntoNote() {
+  if (!tableTarget) return;
+  const rows = Math.max(1, Number(document.getElementById("table-rows").value) || 2);
+  const cols = Math.max(1, Number(document.getElementById("table-cols").value) || 3);
+  const align = document.getElementById("table-align").value;
+  const block = noteBlocksFromSource(editor.value).find(
+    (b) => b.line === tableTarget.startLine,
+  );
+  if (!block) {
+    closeTableMenu();
+    return;
+  }
+  const body = block.lines.join("\n");
+  const s = Math.min(tableTarget.selectionStart, body.length);
+  const e = Math.min(tableTarget.selectionEnd, body.length);
+  const atLineStart = s === 0 || body[s - 1] === "\n";
+  const table = `${atLineStart ? "" : "\n"}${markdownTable(rows, cols, align)}\n`;
+  replaceNoteBlock(block, body.slice(0, s) + table + body.slice(e));
+  localStorage.setItem("tensorforge.source.v3", editor.value);
+  pendingNoteFocus = {
+    startLine: tableTarget.startLine,
+    selectionStart: s + table.length,
+    selectionEnd: s + table.length,
+  };
+  tableTarget = null;
+  closeTableMenu();
+  clearGutterErrors(); // full resync rebuilds boxes and restores focus
+  scheduleLiveRun();
 }
 
 function renderOutputBlock(item) {
@@ -850,7 +1061,12 @@ editor.addEventListener("scroll", () => {
 });
 // Leaving the note layer (blur to the main editor, a button, …) is the
 // moment to rebuild boxes so stale spans never survive an editing session.
+noteLayer.addEventListener("focusin", updateInsertTableState);
 noteLayer.addEventListener("focusout", (e) => {
+  // Focus moving into the table popover must not disable the button or
+  // rebuild the boxes mid-interaction.
+  if (tableMenu.contains(e.relatedTarget)) return;
+  updateInsertTableState();
   if (!noteLayer.contains(e.relatedTarget)) syncNoteBoxes();
 });
 // initial render on startup
@@ -858,18 +1074,33 @@ scheduleLiveRun();
 
 runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
-saveBtn.addEventListener("click", () => saveFile(false));
-saveAsBtn.addEventListener("click", () => saveFile(true));
+saveBtn.addEventListener("click", () => saveFile());
+
 addNoteBtn.addEventListener("click", insertNoteBlock);
 exportBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleExportMenu();
 });
 exportMenu.addEventListener("click", (e) => e.stopPropagation());
+// pointerdown + preventDefault keeps the note editor focused while the
+// popover opens; without it the click would blur the note first.
+insertTableBtn.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (insertTableBtn.disabled) return;
+  if (tableMenu.classList.contains("show")) closeTableMenu();
+  else openTableMenu();
+});
+insertTableBtn.addEventListener("click", (e) => e.stopPropagation());
+tableMenu.addEventListener("click", (e) => e.stopPropagation());
+document.getElementById("table-insert").addEventListener("click", insertTableIntoNote);
 exportMdBtn.addEventListener("click", exportMarkdown);
 exportPdfBtn.addEventListener("click", exportPdf);
 themeBtn.addEventListener("click", toggleTheme);
-document.addEventListener("click", closeExportMenu);
+document.addEventListener("click", () => {
+  closeExportMenu();
+  closeTableMenu();
+});
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === "Enter") {

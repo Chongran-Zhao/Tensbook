@@ -16,6 +16,7 @@
     --accent: #6aa7ff;
     --accent-text: #11131a;
     --note-bg: rgba(106, 167, 255, 0.08);
+    --tens-frame: #4ab368;
     --error: #ff7b72;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   }
@@ -29,6 +30,7 @@
     --accent: #2f6fdb;
     --accent-text: #ffffff;
     --note-bg: rgba(47, 111, 219, 0.08);
+    --tens-frame: #1a7f37;
     --error: #c62828;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   }
@@ -83,6 +85,20 @@
     padding: 6px 9px; background: transparent;
   }
   .menu button:hover { background: var(--panel-2); border-color: transparent; }
+  .menu .menu-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 4px 9px; font-size: 12.5px; color: var(--muted);
+  }
+  .menu .menu-row input, .menu .menu-row select {
+    width: 64px; padding: 2px 5px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    font: inherit;
+  }
+  .menu button#table-insert {
+    margin-top: 4px; background: var(--accent); color: var(--accent-text);
+    text-align: center; font-weight: 600;
+  }
   header .spacer { margin-left: auto; }
   header button.icon { padding: 5px 10px; font-size: 14px; line-height: 1.3; }
   header .filename {
@@ -90,6 +106,29 @@
     font-family: "SF Mono", Menlo, Consolas, monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     max-width: 22%;
+  }
+
+  /* ---- file rail ---- */
+  #file-rail {
+    flex: 0 0 160px; display: none; flex-direction: column;
+    border-right: 1px solid var(--border); background: var(--panel-2);
+    overflow-y: auto; padding: 8px 0; font-size: 12.5px; min-height: 0;
+  }
+  #file-rail.show { display: flex; }
+  #file-rail .rail-head {
+    color: var(--muted); font-size: 11px; padding: 2px 12px 8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    direction: rtl; text-align: left;
+  }
+  #file-rail .file {
+    padding: 5px 12px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: 2px solid transparent;
+  }
+  #file-rail .file:hover { background: var(--panel); }
+  #file-rail .file.active {
+    color: var(--accent); border-left-color: var(--accent);
+    background: var(--panel); font-weight: 600;
   }
 
   /* ---- main panes ---- */
@@ -128,6 +167,27 @@
   #note-layer {
     position: absolute; top: 0; right: 0; bottom: 0;
     overflow: hidden; pointer-events: none; z-index: 2;
+  }
+  #code-layer {
+    position: absolute; top: 0; right: 0; bottom: 0;
+    overflow: hidden; pointer-events: none; z-index: 2;
+  }
+  .source-code-box {
+    position: absolute; left: 8px; right: 8px;
+    border: 1px solid color-mix(in srgb, var(--tens-frame) 55%, transparent);
+    border-radius: 8px;
+  }
+  .region-tag {
+    position: absolute; top: 0; right: 0; z-index: 3;
+    font: 10px/1.6 -apple-system, "Segoe UI", sans-serif;
+    padding: 0 8px; border-radius: 0 7px 0 7px;
+    pointer-events: none; user-select: none;
+  }
+  .source-note-box .region-tag {
+    background: var(--accent); color: var(--accent-text);
+  }
+  .source-code-box .region-tag {
+    background: var(--tens-frame); color: var(--accent-text);
   }
   .source-note-box {
     position: absolute; left: 8px; right: 8px;
@@ -218,6 +278,16 @@
     font: 12px/1.5 "SF Mono", Menlo, Consolas, monospace;
   }
   .markdown-doc pre.md-code code { background: transparent; padding: 0; }
+  .markdown-doc table.md-table {
+    border-collapse: collapse; margin: 4px 0 8px; font-size: 12.5px;
+  }
+  .markdown-doc .md-table th, .markdown-doc .md-table td {
+    border: 1px solid var(--border); padding: 4px 10px; min-width: 40px;
+  }
+  .markdown-doc .md-table th { background: var(--panel-2); font-weight: 600; }
+  .markdown-doc img.md-img {
+    display: block; max-width: 100%; border-radius: 6px; margin: 4px 0 8px;
+  }
   .markdown-doc :is(h1, h2, h3) {
     margin: 0 0 8px; line-height: 1.25;
   }
@@ -274,16 +344,54 @@
     padding: 6px 22px; border-radius: 7px; font-weight: 600;
     font-size: 13px; cursor: pointer;
   }
+  /* ---- print/PDF export ---- */
+  #print-root { display: none; }
+  @media print {
+    body.printing > #app, body.printing > #about-overlay { display: none !important; }
+    body.printing #print-root {
+      display: block;
+      color: #1d1d22;
+      font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #print-root .doc-block { margin: 0 0 22px; break-inside: avoid; }
+    #print-root .head {
+      color: #6b6c78;
+      font: 12px/1.4 "SF Mono", Menlo, Consolas, monospace;
+      margin-bottom: 8px;
+    }
+    #print-root .math-block { text-align: center; }
+    #print-root .markdown-doc h1 { font-size: 22px; margin: 0 0 10px; }
+    #print-root .markdown-doc h2 { font-size: 18px; margin: 0 0 8px; }
+    #print-root .markdown-doc h3 { font-size: 15px; margin: 0 0 8px; }
+    #print-root .markdown-doc code { background: #f0f1f4; }
+    #print-root .markdown-doc pre.md-code { background: #f0f1f4; border-color: #d8d8de; }
+    #print-root .md-table th, #print-root .md-table td { border-color: #d8d8de; }
+    #print-root .md-table th { background: #f0f1f4; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <h1>Tensor<span class="accent">Forge</span></h1>
-    <button id="open">Open…</button>
+    <button id="open">Open</button>
     <button id="save">Save</button>
-    <button id="saveas">Save&nbsp;As…</button>
     <button id="add-note">Add&nbsp;Notes</button>
+    <div class="menu-wrap">
+      <button id="insert-table" disabled title="Insert a Markdown table (click inside a note first)">Table</button>
+      <div id="table-menu" class="menu">
+        <label class="menu-row">Rows <input id="table-rows" type="number" min="1" max="20" value="2"></label>
+        <label class="menu-row">Cols <input id="table-cols" type="number" min="1" max="10" value="3"></label>
+        <label class="menu-row">Align
+          <select id="table-align">
+            <option value="left">left</option>
+            <option value="center" selected>center</option>
+            <option value="right">right</option>
+          </select>
+        </label>
+        <button id="table-insert">Insert</button>
+      </div>
+    </div>
     <div class="menu-wrap">
       <button id="export">Export</button>
       <div id="export-menu" class="menu">
@@ -299,8 +407,13 @@
     <button id="run">Run</button>
   </header>
   <main>
+    <div id="file-rail" aria-label="Files in the open folder">
+      <div class="rail-head" id="rail-folder"></div>
+      <div id="rail-files"></div>
+    </div>
     <div id="editor-wrap">
       <div id="gutter" aria-hidden="true"></div>
+      <div id="code-layer" aria-hidden="true"></div>
       <div id="note-layer" aria-hidden="true"></div>
       <textarea id="editor" spellcheck="false" wrap="off"></textarea>
     </div>
@@ -326,6 +439,8 @@
     <div class="close-row"><button id="about-close">Close</button></div>
   </div>
 </div>
+
+<div id="print-root" aria-hidden="true"></div>
 
 <script type="module" src="main.js"></script>
 </body>

@@ -23,10 +23,56 @@ struct RunResult {
 }
 
 /// Result of an open dialog: `None` if the user cancelled.
+/// `files` lists the sibling `.tens` files of the opened file's folder so
+/// the frontend can show a file rail.
 #[derive(Serialize)]
 struct OpenedFile {
     path: String,
     source: String,
+    folder: Option<String>,
+    files: Vec<FileEntry>,
+}
+
+#[derive(Serialize)]
+struct FileEntry {
+    name: String,
+    path: String,
+}
+
+/// All `.tens` files directly inside `dir`, sorted by name.
+fn list_tens_files(dir: &std::path::Path) -> Vec<FileEntry> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<FileEntry> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let is_tens = path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tens"));
+            if !path.is_file() || !is_tens {
+                return None;
+            }
+            Some(FileEntry {
+                name: path.file_name()?.to_string_lossy().into_owned(),
+                path: path.display().to_string(),
+            })
+        })
+        .collect();
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    files
+}
+
+fn opened_file(path: std::path::PathBuf) -> Result<OpenedFile, String> {
+    let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let folder = path.parent().map(|p| p.to_path_buf());
+    Ok(OpenedFile {
+        path: path.display().to_string(),
+        source,
+        folder: folder.as_ref().map(|p| p.display().to_string()),
+        files: folder.as_deref().map(list_tens_files).unwrap_or_default(),
+    })
 }
 
 /// Parse and execute a `.tens` program with per-statement error recovery:
@@ -78,11 +124,13 @@ async fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> 
         return Ok(None);
     };
     let path = path.into_path().map_err(|e| e.to_string())?;
-    let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    Ok(Some(OpenedFile {
-        path: path.display().to_string(),
-        source,
-    }))
+    opened_file(path).map(Some)
+}
+
+/// Read a specific `.tens` file (file-rail click), re-listing its folder.
+#[tauri::command]
+async fn read_tens(path: String) -> Result<OpenedFile, String> {
+    opened_file(std::path::PathBuf::from(path))
 }
 
 /// Save the source. `path: None` (or Save As) opens a native save dialog.
@@ -144,6 +192,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             run_tens,
             open_tens,
+            read_tens,
             save_tens,
             export_text
         ])
