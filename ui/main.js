@@ -41,6 +41,7 @@ display(S, mode=symbol)
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 
 const editor = document.getElementById("editor");
+const gutter = document.getElementById("gutter");
 const output = document.getElementById("output");
 const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
@@ -106,6 +107,47 @@ function setCurrentPath(path) {
 editor.value = localStorage.getItem("tensorforge.source.v3") ?? DEFAULT_SOURCE;
 setupCompletion(editor);
 
+// ---- editor gutter -----------------------------------------------------------
+
+let gutterLineCount = 0;
+
+function syncGutter(errorLines = new Set()) {
+  const count = editor.value.split("\n").length;
+  const needsRebuild = count !== gutterLineCount;
+  if (needsRebuild) {
+    gutter.replaceChildren(
+      ...Array.from({ length: count }, (_, i) => {
+        const line = i + 1;
+        const div = document.createElement("div");
+        div.className = "ln";
+        div.dataset.line = String(line);
+        div.textContent = String(line);
+        return div;
+      }),
+    );
+    gutterLineCount = count;
+  }
+  for (const line of gutter.children) {
+    line.classList.toggle("err", errorLines.has(Number(line.dataset.line)));
+  }
+  gutter.scrollTop = editor.scrollTop;
+}
+
+function clearGutterErrors() {
+  syncGutter();
+}
+
+function markGutterErrors(outputs) {
+  const lines = new Set(
+    outputs
+      .filter((item) => item.error && item.line)
+      .map((item) => Number(item.line)),
+  );
+  syncGutter(lines);
+}
+
+syncGutter();
+
 async function openFile() {
   if (!invoke) return;
   const opened = await invoke("open_tens").catch(showError);
@@ -113,6 +155,7 @@ async function openFile() {
   editor.value = opened.source;
   setCurrentPath(opened.path);
   localStorage.setItem("tensorforge.source.v3", editor.value);
+  clearGutterErrors();
   scheduleLiveRun();
 }
 
@@ -129,6 +172,7 @@ async function saveFile(forceDialog) {
 
 function showError(message) {
   output.innerHTML = "";
+  clearGutterErrors();
   const div = document.createElement("div");
   div.className = "error";
   div.textContent = String(message);
@@ -156,6 +200,7 @@ function copyButton(label, text) {
 
 function renderOutputs(outputs) {
   output.innerHTML = "";
+  markGutterErrors(outputs);
   if (outputs.length === 0) {
     output.innerHTML =
       '<div class="placeholder">No output yet — add display(...) or export(...) statements.</div>';
@@ -255,7 +300,13 @@ function scheduleLiveRun() {
   liveTimer = setTimeout(liveRun, 350);
 }
 
-editor.addEventListener("input", scheduleLiveRun);
+editor.addEventListener("input", () => {
+  clearGutterErrors();
+  scheduleLiveRun();
+});
+editor.addEventListener("scroll", () => {
+  gutter.scrollTop = editor.scrollTop;
+});
 // initial render on startup
 scheduleLiveRun();
 

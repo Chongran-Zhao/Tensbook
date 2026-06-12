@@ -83,17 +83,32 @@
     background: var(--panel);
     display: flex;
   }
+  #gutter {
+    flex: 0 0 auto; overflow: hidden;
+    padding: 16px 0;
+    text-align: right; user-select: none;
+    color: var(--muted); background: var(--panel-2);
+    border-right: 1px solid var(--border);
+    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
+  }
+  #gutter .ln {
+    min-width: 3.5ch; padding: 0 10px 0 12px;
+  }
+  #gutter .ln.err {
+    color: var(--error); font-weight: 600;
+  }
   #editor {
     flex: 1; resize: none; border: 0; outline: none;
     background: transparent; color: var(--text);
     font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
     padding: 16px; tab-size: 4;
+    overflow: auto; white-space: pre;
   }
   /* hidden mirror used to measure caret position */
   .cm-mirror {
     position: absolute; top: 0; left: 0;
     visibility: hidden; pointer-events: none;
-    white-space: pre-wrap; word-wrap: break-word;
+    white-space: pre;
     overflow: hidden;
   }
   .cm-ghost {
@@ -205,7 +220,8 @@
   </header>
   <main>
     <div id="editor-wrap">
-      <textarea id="editor" spellcheck="false"></textarea>
+      <div id="gutter" aria-hidden="true"></div>
+      <textarea id="editor" spellcheck="false" wrap="off"></textarea>
     </div>
     <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
   </main>

@@ -760,7 +760,7 @@ impl Interpreter {
 
     /// `Var("\lambda")` — declare a scalar *function argument*. Any scalar
     /// expression mentioning it becomes a function of it (applicable with
-    /// call syntax, usable as a `gstrain` scale).
+    /// call syntax, e.g. `Ecr(lambda[a])` inside a spectral sum).
     fn builtin_var(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
         if args.len() != 1 || !kwargs.is_empty() {
             return Err(Error::msg(
@@ -1211,7 +1211,8 @@ impl Interpreter {
             ))),
             Value::Tensor(_) => Err(Error::msg(format!(
                 "`{name}` is a scalar function; applying it to a tensor is not \
-                 supported yet (use gstrain for spectral application)"
+                 supported; write the spectral form explicitly, e.g. \
+                 sum({name}(lambda[a]) * N[a] & N[a], a)"
             ))),
         }
     }

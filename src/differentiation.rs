@@ -433,8 +433,6 @@ fn fraction_parts(s: Rc<ScalarExpr>) -> (Rc<ScalarExpr>, Rc<ScalarExpr>) {
     }
 }
 
-/// Recognize a native `gstrain(C, ...)` as a generalized strain of `x`, so
-/// legacy `gstrain` programs can still use the opaque Q path.
 #[derive(Clone, Copy)]
 struct ScalarSetElemRef<'a> {
     latex: &'a str,

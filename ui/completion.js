@@ -16,9 +16,9 @@ const BUILTINS = [
   { name: "diff", sig: "diff(expr, X)", doc: "symbolic derivative ∂expr/∂X — X: tensor variable, compound tensor (e.g. C = F.T*F), or scalar symbol" },
   { name: "det", sig: "det(A)", doc: "determinant, kept symbolic" },
   { name: "tr", sig: "tr(A)", doc: "trace, kept symbolic" },
-  { name: "log", sig: "log(x)  |  log(C)", doc: "scalar log; tensor log via spectral form (requires symmetric C)" },
-  { name: "sqrt", sig: "sqrt(x) | sqrt(C)", doc: "scalar square root, or tensor square root via spectral form (symmetric C)" },
-  { name: "exp", sig: "exp(x) | exp(C)", doc: "scalar exponential, or tensor exponential via spectral form (symmetric C)" },
+  { name: "log", sig: "log(x)", doc: "scalar logarithm; tensor spectral forms are written with sum(log(c[a]) * N[a] & N[a], a)" },
+  { name: "sqrt", sig: "sqrt(x)", doc: "scalar square root; tensor spectral forms are written with indexed sums" },
+  { name: "exp", sig: "exp(x)", doc: "scalar exponential; tensor spectral forms are written with indexed sums" },
   { name: "sinh", sig: "sinh(x)", doc: "hyperbolic sine (symbolic, with derivative rule)" },
   { name: "cosh", sig: "cosh(x)", doc: "hyperbolic cosine (symbolic, with derivative rule)" },
   { name: "Var", sig: 'Var("\\lambda")', doc: "declare a scalar function argument" },
@@ -71,7 +71,9 @@ export function setupCompletion(editor) {
     ]) {
       mirror.style[prop] = cs[prop];
     }
+    mirror.style.left = editor.offsetLeft + "px";
     mirror.style.width = editor.clientWidth + "px";
+    mirror.style.whiteSpace = "pre";
   }
 
   /** Pixel position of the caret, relative to the wrapper. */
@@ -85,7 +87,7 @@ export function setupCompletion(editor) {
     marker.textContent = "​";
     mirror.appendChild(marker);
     return {
-      left: marker.offsetLeft - editor.scrollLeft,
+      left: editor.offsetLeft + marker.offsetLeft - editor.scrollLeft,
       top: marker.offsetTop - editor.scrollTop,
       height: marker.offsetHeight,
     };
