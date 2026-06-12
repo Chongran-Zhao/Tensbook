@@ -24,9 +24,58 @@ use lexer::{lex, Tok, Token};
 type CallArgs = (Vec<Expr>, Vec<(String, Expr)>);
 
 pub fn parse(src: &str) -> Result<Vec<Stmt>, Error> {
-    let stripped = strip_note_blocks(src)?;
+    let stripped = prepare_source(src)?;
     let tokens = lex(&stripped)?;
     Parser { tokens, pos: 0 }.parse_program()
+}
+
+fn prepare_source(src: &str) -> Result<String, Error> {
+    if has_tens_block(src) {
+        extract_tens_blocks(src)
+    } else {
+        strip_note_blocks(src)
+    }
+}
+
+fn has_tens_block(src: &str) -> bool {
+    src.lines().any(|line| {
+        line.trim()
+            .eq_ignore_ascii_case("<!-- tensorforge:tens -->")
+    })
+}
+
+fn extract_tens_blocks(src: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(src.len());
+    let mut in_tens = false;
+    let mut start_line = None;
+
+    for (idx, line) in src.split_inclusive('\n').enumerate() {
+        let line_no = idx + 1;
+        let body = line.trim_end_matches(['\r', '\n']);
+        let trimmed = body.trim();
+
+        if in_tens {
+            if trimmed.eq_ignore_ascii_case("<!-- /tensorforge:tens -->") {
+                in_tens = false;
+                start_line = None;
+                out.push_str(blank_like(line));
+            } else {
+                out.push_str(line);
+            }
+            continue;
+        }
+
+        if trimmed.eq_ignore_ascii_case("<!-- tensorforge:tens -->") {
+            in_tens = true;
+            start_line = Some(line_no);
+        }
+        out.push_str(blank_like(line));
+    }
+
+    if in_tens {
+        return Err(Error::new("unterminated tens block", start_line));
+    }
+    Ok(out)
 }
 
 fn strip_note_blocks(src: &str) -> Result<String, Error> {

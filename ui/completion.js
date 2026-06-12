@@ -73,7 +73,6 @@ export function setupCompletion(editor) {
     }
     mirror.style.left = editor.offsetLeft + "px";
     mirror.style.width = editor.clientWidth + "px";
-    mirror.style.whiteSpace = "pre";
   }
 
   /** Pixel position of the caret, relative to the wrapper. */

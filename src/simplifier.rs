@@ -444,7 +444,14 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x + y)),
             // a + (−b) → a − b
             (_, ScalarExpr::Neg(y)) => Rc::new(ScalarExpr::Sub(a.clone(), y.clone())),
-            _ => s,
+            // a + ((−k) · b) → a − k · b
+            _ => {
+                if let Some(positive) = negative_coeff(b) {
+                    Rc::new(ScalarExpr::Sub(a.clone(), positive))
+                } else {
+                    s
+                }
+            }
         },
         ScalarExpr::Sub(a, b) => match (&**a, &**b) {
             (_, ScalarExpr::Num(x)) if *x == 0.0 => a.clone(),
@@ -561,6 +568,11 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
         },
         _ => s,
     }
+}
+
+fn negative_coeff(s: &Rc<ScalarExpr>) -> Option<Rc<ScalarExpr>> {
+    let (coeff, rest) = extract_coeff(s);
+    (coeff < 0.0).then(|| with_coeff(-coeff, rest))
 }
 
 // ---- trace cyclic canonicalization helpers ---------------------------------

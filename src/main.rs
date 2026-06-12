@@ -9,8 +9,7 @@ Usage:
   tensorforge --help    | -h      print this help
 
 Examples:
-  tensorforge run examples/hill_cr.tens
-  tensorforge run examples/neo_hookean.tens";
+  tensorforge run examples/mooney_rivlin_uniaxial.tens";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();

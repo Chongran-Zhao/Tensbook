@@ -15,8 +15,7 @@
     --muted: #9a9ba6;
     --accent: #6aa7ff;
     --accent-text: #11131a;
-    --note-bg: rgba(106, 167, 255, 0.08);
-    --tens-frame: #4ab368;
+    --tens-frame: #6aa7ff;
     --error: #ff7b72;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   }
@@ -29,8 +28,7 @@
     --muted: #6b6c78;
     --accent: #2f6fdb;
     --accent-text: #ffffff;
-    --note-bg: rgba(47, 111, 219, 0.08);
-    --tens-frame: #1a7f37;
+    --tens-frame: #2f6fdb;
     --error: #c62828;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   }
@@ -65,6 +63,22 @@
     transition: border-color 0.12s, background 0.12s;
   }
   header button:hover { border-color: var(--accent); background: var(--panel-2); }
+  header button:disabled {
+    background: color-mix(in srgb, var(--panel) 86%, var(--muted));
+    color: var(--muted);
+    border-color: color-mix(in srgb, var(--border) 80%, var(--muted));
+    cursor: not-allowed;
+  }
+  header button:disabled:hover { border-color: var(--border); background: var(--panel); }
+  header button#insert-table:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  header button#insert-table:not(:disabled):hover {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
   header button:active { transform: translateY(0.5px); }
   header button#run {
     background: var(--accent); color: var(--accent-text); border: 0;
@@ -142,11 +156,15 @@
   /* ---- main panes ---- */
   main { display: flex; flex: 1; min-height: 0; }
   #editor-wrap {
-    position: relative; width: 44%; min-width: 280px;
-    border-right: 1px solid var(--border);
+    position: relative; flex: 0 0 44%; min-width: 280px;
     background: var(--panel);
     display: flex;
   }
+  #split-resizer {
+    flex: 0 0 4px; cursor: col-resize;
+    background: var(--border); opacity: 0.6;
+  }
+  #split-resizer:hover, #split-resizer.dragging { background: var(--accent); opacity: 1; }
   #gutter {
     flex: 0 0 auto; overflow: hidden;
     padding: 16px 0;
@@ -157,11 +175,12 @@
   }
   #gutter .ln {
     min-width: 3.5ch; padding: 0 10px 0 12px;
+    overflow: hidden;
   }
   #gutter .ln.err {
     color: var(--error); font-weight: 600;
   }
-  #gutter .ln.note-fence {
+  #gutter .ln.block-fence {
     color: transparent;
   }
   #gutter .ln.jump {
@@ -173,50 +192,31 @@
     background: transparent; color: var(--text);
     font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
     padding: 16px; tab-size: 4;
-    overflow: auto; white-space: pre;
-  }
-  #note-layer {
-    position: absolute; top: 0; right: 0; bottom: 0;
-    overflow: hidden; pointer-events: none; z-index: 2;
+    overflow-y: auto; overflow-x: hidden;
+    white-space: pre-wrap; word-wrap: break-word;
   }
   #code-layer {
     position: absolute; top: 0; right: 0; bottom: 0;
     overflow: hidden; pointer-events: none; z-index: 2;
+    will-change: transform;
   }
   .source-code-box {
     position: absolute; left: 8px; right: 8px;
-    border: 1px solid color-mix(in srgb, var(--tens-frame) 55%, transparent);
-    border-radius: 8px;
-  }
-  .region-tag {
-    position: absolute; top: 0; right: 0; z-index: 3;
-    font: 10px/1.6 -apple-system, "Segoe UI", sans-serif;
-    padding: 0 8px; border-radius: 0 7px 0 7px;
-    pointer-events: none; user-select: none;
-  }
-  .source-note-box .region-tag {
-    background: var(--accent); color: var(--accent-text);
-  }
-  .source-code-box .region-tag {
-    background: var(--tens-frame); color: var(--accent-text);
-  }
-  .source-note-box {
-    position: absolute; left: 8px; right: 8px;
-    border: 1px solid var(--accent);
-    background: color-mix(in srgb, var(--panel) 92%, var(--accent));
+    border: 1px solid var(--tens-frame);
+    background: color-mix(in srgb, var(--panel) 94%, var(--tens-frame));
     border-radius: 8px;
     pointer-events: auto;
     overflow: hidden;
   }
-  .source-note-editor {
+  .source-tens-editor {
     display: block; width: 100%; height: 100%;
     resize: none; border: 0; outline: none;
     background: transparent; color: var(--text);
     font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
     padding: 9px 12px; overflow: hidden;
-    white-space: pre; tab-size: 4;
+    white-space: pre-wrap; word-wrap: break-word; tab-size: 4;
   }
-  .source-note-editor::placeholder {
+  .source-tens-editor::placeholder {
     color: var(--muted);
     opacity: 0.55;
   }
@@ -224,7 +224,7 @@
   .cm-mirror {
     position: absolute; top: 0; left: 0;
     visibility: hidden; pointer-events: none;
-    white-space: pre;
+    white-space: pre-wrap; word-wrap: break-word;
     overflow: hidden;
   }
   .cm-ghost {
@@ -387,9 +387,9 @@
     <h1>Tensor<span class="accent">Forge</span></h1>
     <button id="open">Open</button>
     <button id="save">Save</button>
-    <button id="add-note">Add&nbsp;Notes</button>
+    <button id="add-note">Add&nbsp;Tens</button>
     <div class="menu-wrap">
-      <button id="insert-table" disabled title="Insert a Markdown table (click inside a note first)">Table</button>
+      <button id="insert-table" title="Insert a Markdown table">Table</button>
       <div id="table-menu" class="menu">
         <label class="menu-row">Rows <input id="table-rows" type="number" min="1" max="20" value="2"></label>
         <label class="menu-row">Cols <input id="table-cols" type="number" min="1" max="10" value="3"></label>
@@ -426,9 +426,9 @@
     <div id="editor-wrap">
       <div id="gutter" aria-hidden="true"></div>
       <div id="code-layer" aria-hidden="true"></div>
-      <div id="note-layer" aria-hidden="true"></div>
-      <textarea id="editor" spellcheck="false" wrap="off"></textarea>
+      <textarea id="editor" spellcheck="false" wrap="soft"></textarea>
     </div>
+    <div id="split-resizer" aria-hidden="true"></div>
     <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
   </main>
   <footer>

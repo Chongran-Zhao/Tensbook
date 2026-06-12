@@ -178,13 +178,14 @@ fn second_pk_stress_symbol_formula() {
 }
 
 #[test]
-fn hill_cr_example_runs_end_to_end() {
+fn shipped_example_runs_end_to_end() {
     let src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/hill_cr.tens"
+        "/examples/mooney_rivlin_uniaxial.tens"
     ))
     .unwrap();
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs.len(), 7);
     assert!(outputs.iter().all(|o| o.error.is_none()));
+    assert!(outputs.iter().any(|o| o.header.starts_with("display P11")));
 }

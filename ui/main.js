@@ -6,72 +6,74 @@ import { setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-const NOTE_OPEN = "<!-- tensorforge:note -->";
-const NOTE_CLOSE = "<!-- /tensorforge:note -->";
+const TENS_OPEN = "<!-- tensorforge:tens -->";
+const TENS_CLOSE = "<!-- /tensorforge:tens -->";
 
-const DEFAULT_SOURCE = `${NOTE_OPEN}
-# Hill's class hyperelasticity
+const DEFAULT_SOURCE = `# Incompressible uniaxial tension
 
-Hand-written spectral strain with a symbolic Hill-CR scale function.
+This document derives the axial first Piola-Kirchhoff stress component for a
+Mooney-Rivlin material. Ordinary text is Markdown by default; only blue
+.tens blocks are executed.
 
 $$
-\\bm C = \\sum_{a=1}^{3} \\lambda_a^2 \\, \\bm N_a \\otimes \\bm N_a,
-\\qquad
-\\bm E = \\sum_{a=1}^{3} E(\\lambda_a) \\, \\bm N_a \\otimes \\bm N_a.
+\\bm F = \\operatorname{diag}(\\lambda, \\lambda^{-1/2}, \\lambda^{-1/2})
 $$
-${NOTE_CLOSE}
 
-mu = Scalar("\\mu")
-kappa = Scalar("\\kappa")
-m = Scalar("m")
-n = Scalar("n")
-
-lambda = ScalarSet("\\lambda", dim=3)
-N = VectorSet("\\bm N", dim=3)
-
+${TENS_OPEN}
 lam = Var("\\lambda")
-Ecr = (lam^m - lam^(-n))/(m + n)
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
 
-${NOTE_OPEN}
-## Spectral strain
+F = Tensor("\\bm F", order=2, dim=3)
+F[1][1] = lam
+F[2][2] = lam^(-1/2)
+F[3][3] = lam^(-1/2)
 
-The source expression mirrors the math directly:
+C = F.T * F
+${TENS_CLOSE}
 
-- \`&\` is the outer product.
-- \`Q = 2 * diff(E, C)\` builds the fourth-order tangent from the two spectral sums.
-${NOTE_CLOSE}
+For this deformation, the invariants reduce to
 
-C = sum(lambda[a]^2 * N[a] & N[a], a)
-E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
-Q = 2 * diff(E, C)
+$$
+I_1 = \\lambda^2 + 2\\lambda^{-1},
+\\qquad
+I_2 = 2\\lambda + \\lambda^{-2}.
+$$
 
-${NOTE_OPEN}
-## Energy and stress
+${TENS_OPEN}
+I1 = Scalar("I_1")
+I2 = Scalar("I_2")
+I1 = lam^2 + 2 * lam^(-1)
+I2 = 2 * lam + lam^(-2)
 
-Hill's quadratic energy gives the thermodynamic force $\\bm T = \\partial W / \\partial \\bm E$.
-${NOTE_CLOSE}
+W = C1 * (I1 - 3) + C2 * (I2 - 3)
 
-W = mu * ddot(E, E) + kappa/2 * tr(E)^2
+P11 = Scalar("P_{11}")
+P11 = simplify(diff(W, lam))
+${TENS_CLOSE}
 
-T = diff(W, E)
-S = T : Q
+The first component of the first Piola-Kirchhoff stress is \(P_{11}=dW/d\\lambda\).
 
-display(C, mode=symbol)
-display(E, mode=symbol)
-display(Q, mode=symbol)
+${TENS_OPEN}
+display(F, mode=matrix)
+display(C, mode=matrix)
+display(I1, mode=symbol)
+display(I2, mode=symbol)
 display(W, mode=symbol)
-display(T, mode=symbol)
-display(S, mode=symbol)
+display(P11, mode=symbol)
+export(P11, format=latex)
+${TENS_CLOSE}
 `;
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
-const NOTE_PLACEHOLDER = "Write Markdown here.";
-let pendingNoteFocus = null;
+const TENS_PLACEHOLDER = "Write TensorForge code here.";
+let pendingTensFocus = null;
 
 const editor = document.getElementById("editor");
+const editorWrap = document.getElementById("editor-wrap");
 const gutter = document.getElementById("gutter");
-const noteLayer = document.getElementById("note-layer");
 const output = document.getElementById("output");
+const splitResizer = document.getElementById("split-resizer");
 const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
@@ -152,8 +154,9 @@ setupCompletion(editor);
 let gutterLineCount = 0;
 
 function syncGutter(errorLines = new Set(), options = {}) {
-  const syncNotes = options.syncNotes ?? true;
-  const count = editor.value.split("\n").length;
+  const syncBlocks = options.syncBlocks ?? true;
+  const sourceLines = editor.value.split("\n");
+  const count = sourceLines.length;
   const needsRebuild = count !== gutterLineCount;
   if (needsRebuild) {
     gutter.replaceChildren(
@@ -170,14 +173,17 @@ function syncGutter(errorLines = new Set(), options = {}) {
   }
   for (const line of gutter.children) {
     line.classList.toggle("err", errorLines.has(Number(line.dataset.line)));
-    line.classList.remove("note-fence");
+    line.classList.remove("block-fence");
+    line.style.height = "";
+    line.style.lineHeight = "";
   }
-  for (const block of noteBlocksFromSource(editor.value)) {
-    gutter.children[block.line - 1]?.classList.add("note-fence");
-    if (block.closed) gutter.children[block.endLine - 1]?.classList.add("note-fence");
+  for (const block of tensBlocksFromSource(editor.value)) {
+    gutter.children[block.line - 1]?.classList.add("block-fence");
+    if (block.closed) gutter.children[block.endLine - 1]?.classList.add("block-fence");
   }
   gutter.scrollTop = editor.scrollTop;
-  if (syncNotes && !isEditingNote()) syncNoteBoxes();
+  syncSourceLayerScroll();
+  if (syncBlocks && !isEditingTens()) syncTensBoxes();
 }
 
 function clearGutterErrors() {
@@ -268,6 +274,73 @@ railResizer.addEventListener("pointerdown", (e) => {
   );
 });
 
+// ---- editor/output resizer ----
+const storedEditorWidth = Number(localStorage.getItem("tensorforge.editorWidth"));
+if (storedEditorWidth >= 280) editorWrap.style.flexBasis = `${storedEditorWidth}px`;
+
+function refreshEditorGeometry() {
+  syncGutter(new Set(), { syncBlocks: !isEditingTens() });
+  if (isEditingTens()) repositionTensBoxes();
+}
+
+function editorWidthBounds() {
+  const mainRect = document.querySelector("main").getBoundingClientRect();
+  const left = editorWrap.getBoundingClientRect().left;
+  const minEditor = 280;
+  const minOutput = 360;
+  const maxEditor = Math.max(minEditor, mainRect.right - left - minOutput);
+  return { minEditor, maxEditor };
+}
+
+function setEditorWidthFromClientX(clientX) {
+  const { minEditor, maxEditor } = editorWidthBounds();
+  const left = editorWrap.getBoundingClientRect().left;
+  const width = Math.min(maxEditor, Math.max(minEditor, clientX - left));
+  editorWrap.style.flexBasis = `${width}px`;
+  requestAnimationFrame(refreshEditorGeometry);
+}
+
+let splitDragActive = false;
+
+splitResizer.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  splitDragActive = true;
+  splitResizer.setPointerCapture(e.pointerId);
+  splitResizer.classList.add("dragging");
+  const move = (ev) => {
+    setEditorWidthFromClientX(ev.clientX);
+  };
+  splitResizer.addEventListener("pointermove", move);
+  splitResizer.addEventListener(
+    "pointerup",
+    () => {
+      splitDragActive = false;
+      splitResizer.removeEventListener("pointermove", move);
+      splitResizer.classList.remove("dragging");
+      localStorage.setItem("tensorforge.editorWidth", String(editorWrap.offsetWidth));
+      refreshEditorGeometry();
+    },
+    { once: true },
+  );
+});
+
+splitResizer.addEventListener("mousedown", (e) => {
+  if (splitDragActive) return;
+  e.preventDefault();
+  splitDragActive = true;
+  splitResizer.classList.add("dragging");
+  const move = (ev) => setEditorWidthFromClientX(ev.clientX);
+  const up = () => {
+    splitDragActive = false;
+    document.removeEventListener("mousemove", move);
+    splitResizer.classList.remove("dragging");
+    localStorage.setItem("tensorforge.editorWidth", String(editorWrap.offsetWidth));
+    refreshEditorGeometry();
+  };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up, { once: true });
+});
+
 async function switchToFile(path) {
   if (!invoke || path === currentPath) return;
   // Notebook-style: persist the current file before switching away.
@@ -306,7 +379,7 @@ async function exportMarkdown() {
   closeExportMenu();
   const markdown = buildExportMarkdown();
   if (!markdown.trim()) {
-    showError("Nothing to export yet. Add notes or display(...) output first.");
+    showError("Nothing to export yet. Add Markdown or display(...) output first.");
     return;
   }
   if (invoke) {
@@ -325,7 +398,7 @@ function exportPdf() {
   closeExportMenu();
   const body = buildPrintableBody();
   if (!body) {
-    showError("Nothing to export yet. Add notes or display(...) output first.");
+    showError("Nothing to export yet. Add Markdown or display(...) output first.");
     return;
   }
   printDocument(body);
@@ -385,40 +458,37 @@ function copyButton(label, text) {
 }
 
 function markdownBlocksFromSource(source) {
-  return noteBlocksFromSource(source)
-    .map((block) => ({
-      kind: "markdown",
-      line: block.line,
-      markdown: block.lines.join("\n").trim(),
-    }))
-    .filter((block) => block.markdown);
+  const tens = tensBlocksFromSource(source);
+  if (tens.length === 0) {
+    const markdown = source.trim();
+    return markdown ? [{ kind: "markdown", line: 1, markdown }] : [];
+  }
+  const lines = source.split(/\r?\n/);
+  const blocks = [];
+  let start = 1;
+  for (const block of tens) {
+    pushMarkdownBlock(blocks, lines, start, block.line - 1);
+    start = block.endLine + 1;
+  }
+  pushMarkdownBlock(blocks, lines, start, lines.length);
+  return blocks;
 }
 
-function noteBlocksFromSource(source) {
+function pushMarkdownBlock(blocks, lines, startLine, endLine) {
+  if (endLine < startLine) return;
+  const markdown = lines.slice(startLine - 1, endLine).join("\n").trim();
+  if (markdown) blocks.push({ kind: "markdown", line: startLine, markdown });
+}
+
+function tensBlocksFromSource(source) {
   const blocks = [];
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const kind = noteOpenKind(lines[i]);
-    if (!kind) continue;
-    const block = { line: i + 1, endLine: i + 1, closed: false, kind, lines: [] };
-    // Legacy ```notes blocks can contain fenced code only when the inner
-    // fence carries an info string (```rust … ```). New note blocks use
-    // HTML-comment sentinels, so ordinary Markdown fences never conflict.
-    // Mirrors strip_note_blocks in src/parser/mod.rs — keep the two in sync.
-    let inInnerFence = false;
+    if (!isTensOpen(lines[i])) continue;
+    const block = { line: i + 1, endLine: i + 1, closed: false, lines: [] };
     i++;
     while (i < lines.length) {
-      if (kind === "backtick") {
-        if (inInnerFence) {
-          if (isLegacyNoteClose(lines[i])) inInnerFence = false;
-        } else if (isInnerFenceOpen(lines[i])) {
-          inInnerFence = true;
-        } else if (isNoteClose(lines[i], kind)) {
-          break;
-        }
-      } else if (isNoteClose(lines[i], kind)) {
-        break;
-      }
+      if (isTensClose(lines[i])) break;
       block.lines.push(lines[i]);
       i++;
     }
@@ -430,27 +500,21 @@ function noteBlocksFromSource(source) {
   return blocks;
 }
 
-function noteOpenKind(line) {
-  const trimmed = line.trim();
-  if (trimmed.toLowerCase() === NOTE_OPEN.toLowerCase()) return "html";
-  if (/^```notes\s*$/i.test(trimmed)) return "backtick";
-  return null;
+function isTensOpen(line) {
+  return line.trim().toLowerCase() === TENS_OPEN.toLowerCase();
 }
 
-function isNoteClose(line, kind) {
-  const trimmed = line.trim();
-  return kind === "html"
-    ? trimmed.toLowerCase() === NOTE_CLOSE.toLowerCase()
-    : isLegacyNoteClose(trimmed);
-}
-
-function isLegacyNoteClose(line) {
-  return /^```\s*$/.test(line.trim());
+function isTensClose(line) {
+  return line.trim().toLowerCase() === TENS_CLOSE.toLowerCase();
 }
 
 function isInnerFenceOpen(line) {
   const trimmed = line.trim();
   return trimmed.startsWith("```") && trimmed !== "```";
+}
+
+function isBareFenceClose(line) {
+  return /^```\s*$/.test(line.trim());
 }
 
 function renderMarkdown(markdown) {
@@ -461,7 +525,7 @@ function renderMarkdown(markdown) {
     if (isInnerFenceOpen(line)) {
       const code = [];
       i++;
-      while (i < lines.length && !isLegacyNoteClose(lines[i])) {
+      while (i < lines.length && !isBareFenceClose(lines[i])) {
         code.push(lines[i]);
         i++;
       }
@@ -639,7 +703,8 @@ function renderMarkdownBlock(block) {
 
 function exportBlocks() {
   // Error outputs are working-state, not document content: exports carry
-  // only notes and rendered results.
+  // Error outputs are working-state, not document content: exports carry
+  // only Markdown and rendered results.
   return [
     ...markdownBlocksFromSource(editor.value),
     ...lastRenderedOutputs
@@ -706,148 +771,109 @@ async function printDocument(bodyHtml) {
   document.addEventListener("keydown", cleanup, { once: true });
 }
 
-function insertNoteBlock() {
+function insertTensBlock() {
   const start = editor.selectionStart;
   const end = editor.selectionEnd;
   const needsLeadingBreak = start > 0 && editor.value[start - 1] !== "\n";
   const needsTrailingBreak = end < editor.value.length && editor.value[end] !== "\n";
-  const block = `${needsLeadingBreak ? "\n" : ""}${NOTE_OPEN}\n\n${NOTE_CLOSE}\n${needsTrailingBreak ? "\n" : ""}`;
+  const block = `${needsLeadingBreak ? "\n" : ""}${TENS_OPEN}\n\n${TENS_CLOSE}\n${needsTrailingBreak ? "\n" : ""}`;
   editor.setRangeText(block, start, end, "end");
   const openFenceOffset = start + (needsLeadingBreak ? 1 : 0);
-  pendingNoteFocus = {
+  pendingTensFocus = {
     startLine: lineForOffset(editor.value, openFenceOffset),
     selectionStart: 0,
     selectionEnd: 0,
   };
-  const selectStart = openFenceOffset + `${NOTE_OPEN}\n`.length;
+  const selectStart = openFenceOffset + `${TENS_OPEN}\n`.length;
   editor.focus();
   editor.setSelectionRange(selectStart, selectStart);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-// Pixel y of the top of `line`, taken from the matching gutter row so the
-// overlays can never drift from the text by sub-pixel line-height rounding.
-function rowTop(line) {
-  const row = gutter.children[line - 1];
-  if (row) return row.offsetTop - editor.scrollTop;
+function sourceLineTop(line) {
   const style = getComputedStyle(editor);
   return (
     Number.parseFloat(style.paddingTop) +
-    (line - 1) * Number.parseFloat(style.lineHeight) -
-    editor.scrollTop
+    (line - 1) * Number.parseFloat(style.lineHeight)
   );
+}
+
+function rowTop(line) {
+  return sourceLineTop(line) - editor.scrollTop;
 }
 
 function rowSpanHeight(startLine, endLine, minLines = 1) {
-  const lines = Math.max(minLines, endLine - startLine + 1);
   const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight);
-  return lines * lineHeight;
+  return Math.max(minLines, endLine - startLine + 1) * lineHeight;
 }
 
-function syncNoteBoxes() {
-  noteLayer.style.left = `${gutter.offsetWidth}px`;
-  const boxes = noteBlocksFromSource(editor.value).map((block) => {
+function syncSourceLayerScroll() {
+  const y = `translateY(${-editor.scrollTop}px)`;
+  document.getElementById("code-layer").style.transform = y;
+}
+
+function syncTensBoxes() {
+  const codeLayer = document.getElementById("code-layer");
+  codeLayer.style.left = `${gutter.offsetWidth}px`;
+  const boxes = tensBlocksFromSource(editor.value).map((block) => {
     const div = document.createElement("div");
-    div.className = "source-note-box";
-    div._block = block; // shared with the closures; repositionNoteBoxes refreshes it
+    div.className = "source-code-box";
+    div._block = block; // shared with the closures; repositionTensBoxes refreshes it
     div.dataset.startLine = String(block.line);
-    div.style.top = `${rowTop(block.line) - 2}px`;
+    div.style.top = `${sourceLineTop(block.line) - 2}px`;
     div.style.height = `${rowSpanHeight(block.line, block.endLine, 3) + 4}px`;
-    const tag = document.createElement("span");
-    tag.className = "region-tag";
-    tag.textContent = "markdown";
-    div.appendChild(tag);
-    const noteEditor = document.createElement("textarea");
-    noteEditor.className = "source-note-editor";
-    noteEditor.spellcheck = false;
-    noteEditor.wrap = "off";
-    noteEditor.placeholder = NOTE_PLACEHOLDER;
-    noteEditor.value = block.lines.join("\n");
-    noteEditor.addEventListener("input", () => updateNoteBlock(block, noteEditor));
-    noteEditor.addEventListener("keydown", (e) => handleNoteKeydown(e, block, noteEditor));
-    noteEditor.addEventListener("paste", (e) => handleNotePaste(e, noteEditor));
-    div.appendChild(noteEditor);
+    const tensEditor = document.createElement("textarea");
+    tensEditor.className = "source-tens-editor";
+    tensEditor.spellcheck = false;
+    tensEditor.wrap = "soft";
+    tensEditor.placeholder = TENS_PLACEHOLDER;
+    tensEditor.value = block.lines.join("\n");
+    tensEditor.addEventListener("focus", () => queueMicrotask(updateInsertTableState));
+    tensEditor.addEventListener("input", () => updateTensBlock(block, tensEditor));
+    tensEditor.addEventListener("keydown", (e) => handleTensKeydown(e, block, tensEditor));
+    div.appendChild(tensEditor);
     return div;
   });
-  noteLayer.replaceChildren(...boxes);
-  syncCodeBoxes();
-  restorePendingNoteFocus();
-}
-
-/// Contiguous non-note, non-blank line spans: the `.tens` code regions.
-function codeRegionsFromSource(source) {
-  const lines = source.split(/\r?\n/);
-  const inNote = new Array(lines.length).fill(false);
-  for (const block of noteBlocksFromSource(source)) {
-    for (let l = block.line; l <= block.endLine; l++) inNote[l - 1] = true;
-  }
-  // One frame per contiguous code paragraph: blank lines split regions so
-  // the frames hug the statements instead of wrapping the whole file.
-  const regions = [];
-  let start = null;
-  for (let i = 0; i <= lines.length; i++) {
-    const isCode = i < lines.length && !inNote[i] && lines[i].trim() !== "";
-    if (isCode) {
-      if (start === null) start = i + 1;
-      continue;
-    }
-    if (start !== null) {
-      regions.push({ line: start, endLine: i });
-      start = null;
-    }
-  }
-  return regions;
+  codeLayer.replaceChildren(...boxes);
+  syncSourceLayerScroll();
+  restorePendingTensFocus();
 }
 
 function syncCodeBoxes() {
-  const codeLayer = document.getElementById("code-layer");
-  codeLayer.style.left = `${gutter.offsetWidth}px`;
-  codeLayer.replaceChildren(
-    ...codeRegionsFromSource(editor.value).map((region) => {
-      const div = document.createElement("div");
-      div.className = "source-code-box";
-      div.style.top = `${rowTop(region.line) - 2}px`;
-      div.style.height = `${rowSpanHeight(region.line, region.endLine) + 4}px`;
-      const tag = document.createElement("span");
-      tag.className = "region-tag";
-      tag.textContent = "tens";
-      div.appendChild(tag);
-      return div;
-    }),
-  );
+  syncTensBoxes();
 }
 
-function updateNoteBlock(block, noteEditor) {
-  const current = currentNoteBlock(block) ?? block;
-  replaceNoteBlock(current, noteEditor.value);
+function updateTensBlock(block, tensEditor) {
+  const current = currentTensBlock(block) ?? block;
+  replaceTensBlock(current, tensEditor.value);
   localStorage.setItem("tensorforge.source.v3", editor.value);
-  syncGutter(new Set(), { syncNotes: false });
+  syncGutter(new Set(), { syncBlocks: false });
   // Reposition every box (without rebuilding, to keep focus): edits in this
-  // note shift the line spans of all notes below it.
-  repositionNoteBoxes();
+  // block shift the line spans of all blocks below it.
+  repositionTensBoxes();
   scheduleLiveRun();
 }
 
-function handleNoteKeydown(e, block, noteEditor) {
-  const empty = noteEditor.value.length === 0;
-  const collapsed = noteEditor.selectionStart === noteEditor.selectionEnd;
+function handleTensKeydown(e, block, tensEditor) {
+  const empty = tensEditor.value.length === 0;
+  const collapsed = tensEditor.selectionStart === tensEditor.selectionEnd;
   if (empty && collapsed && (e.key === "Backspace" || e.key === "Delete")) {
     e.preventDefault();
-    removeNoteBlock(block);
+    removeTensBlock(block);
   }
 }
 
-function replaceNoteBlock(block, markdown) {
+function replaceTensBlock(block, code) {
   // setRangeText (not a value assignment) keeps the main editor's undo
   // history intact and leaves the rest of the file byte-identical.
   const [start, end] = lineRangeOffsets(editor.value, block.line, block.endLine);
-  editor.setRangeText(`${NOTE_OPEN}\n${markdown}\n${NOTE_CLOSE}`, start, end, "preserve");
+  editor.setRangeText(`${TENS_OPEN}\n${code}\n${TENS_CLOSE}`, start, end, "preserve");
 }
 
-function removeNoteBlock(block) {
+function removeTensBlock(block) {
   // Re-resolve the block: the closure's line span goes stale while the
-  // note is being edited, and a stale span would delete following code.
-  const current = currentNoteBlock(block) ?? block;
+  // block is being edited, and a stale span would delete following text.
+  const current = currentTensBlock(block) ?? block;
   const start = offsetForLine(editor.value, current.line);
   const end = offsetForLine(editor.value, current.endLine + 1); // incl. newline
   editor.setRangeText("", start, end, "start");
@@ -886,38 +912,38 @@ function lineForOffset(source, offset) {
   return line;
 }
 
-function currentNoteBlock(block) {
-  return noteBlocksFromSource(editor.value).find((candidate) => candidate.line === block.line);
+function currentTensBlock(block) {
+  return tensBlocksFromSource(editor.value).find((candidate) => candidate.line === block.line);
 }
 
-/// Refresh position, size and the closure-shared block objects of all note
+/// Refresh position, size and the closure-shared block objects of all .tens
 /// boxes from the current source, without rebuilding the DOM (rebuilding
-/// would destroy the focused note editor). Falls back to doing nothing when
+/// would destroy the focused .tens editor). Falls back to doing nothing when
 /// the block count changed (a fence was typed); the next full sync rebuilds.
-function repositionNoteBoxes() {
-  const fresh = noteBlocksFromSource(editor.value);
-  const boxes = [...noteLayer.children];
+function repositionTensBoxes() {
+  const fresh = tensBlocksFromSource(editor.value);
+  const boxes = [...document.getElementById("code-layer").children];
   if (fresh.length !== boxes.length) return;
   boxes.forEach((box, i) => {
     const block = fresh[i];
     if (box._block) Object.assign(box._block, block);
     box.dataset.startLine = String(block.line);
-    box.style.top = `${rowTop(block.line) - 2}px`;
+    box.style.top = `${sourceLineTop(block.line) - 2}px`;
     box.style.height = `${rowSpanHeight(block.line, block.endLine, 3) + 4}px`;
   });
-  syncCodeBoxes();
+  syncSourceLayerScroll();
 }
 
-function isEditingNote() {
-  return document.activeElement?.classList?.contains("source-note-editor");
+function isEditingTens() {
+  return document.activeElement?.classList?.contains("source-tens-editor");
 }
 
-function restorePendingNoteFocus() {
-  if (!pendingNoteFocus) return;
-  const focus = pendingNoteFocus;
-  pendingNoteFocus = null;
-  const box = noteLayer.querySelector(
-    `.source-note-box[data-start-line="${focus.startLine}"] .source-note-editor`,
+function restorePendingTensFocus() {
+  if (!pendingTensFocus) return;
+  const focus = pendingTensFocus;
+  pendingTensFocus = null;
+  const box = document.getElementById("code-layer").querySelector(
+    `.source-code-box[data-start-line="${focus.startLine}"] .source-tens-editor`,
   );
   if (!box) return;
   const start = Math.min(focus.selectionStart, box.value.length);
@@ -928,7 +954,7 @@ function restorePendingNoteFocus() {
 
 // Pasted images are embedded as data-URL markdown so the .tens file stays
 // self-contained.
-function handleNotePaste(e, noteEditor) {
+function handleMarkdownPaste(e) {
   const item = [...(e.clipboardData?.items ?? [])].find((it) =>
     it.type.startsWith("image/"),
   );
@@ -939,30 +965,25 @@ function handleNotePaste(e, noteEditor) {
   const reader = new FileReader();
   reader.onload = () => {
     const md = `![pasted image](${reader.result})`;
-    noteEditor.setRangeText(md, noteEditor.selectionStart, noteEditor.selectionEnd, "end");
-    noteEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    editor.setRangeText(md, editor.selectionStart, editor.selectionEnd, "end");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
   };
   reader.readAsDataURL(file);
 }
 
 // ---- insert-table popover --------------------------------------------------
-// Enabled only while a note editor has focus. Opening the popover moves
-// focus into its inputs, so the target note and caret are captured (by
-// start line, which is stable while no edits happen) at open time.
+// Markdown is the default source mode, so table insertion targets the main
+// editor and is disabled only while the caret is inside a .tens block editor.
 let tableTarget = null;
 
 function updateInsertTableState() {
-  insertTableBtn.disabled = !isEditingNote();
+  insertTableBtn.disabled = isEditingTens();
 }
 
 function openTableMenu() {
-  const noteEditor = document.activeElement;
-  const box = noteEditor.closest(".source-note-box");
-  if (!box) return;
   tableTarget = {
-    startLine: Number(box.dataset.startLine),
-    selectionStart: noteEditor.selectionStart,
-    selectionEnd: noteEditor.selectionEnd,
+    selectionStart: editor.selectionStart,
+    selectionEnd: editor.selectionEnd,
   };
   tableMenu.classList.add("show");
 }
@@ -979,40 +1000,131 @@ function markdownTable(rows, cols, align) {
   return lines.join("\n");
 }
 
-function insertTableIntoNote() {
+function insertTableIntoMarkdown() {
   if (!tableTarget) return;
   const rows = Math.max(1, Number(document.getElementById("table-rows").value) || 2);
   const cols = Math.max(1, Number(document.getElementById("table-cols").value) || 3);
   const align = document.getElementById("table-align").value;
-  const block = noteBlocksFromSource(editor.value).find(
-    (b) => b.line === tableTarget.startLine,
-  );
-  if (!block) {
-    closeTableMenu();
-    return;
-  }
-  const body = block.lines.join("\n");
-  const s = Math.min(tableTarget.selectionStart, body.length);
-  const e = Math.min(tableTarget.selectionEnd, body.length);
-  const atLineStart = s === 0 || body[s - 1] === "\n";
+  const s = Math.min(tableTarget.selectionStart, editor.value.length);
+  const e = Math.min(tableTarget.selectionEnd, editor.value.length);
+  const atLineStart = s === 0 || editor.value[s - 1] === "\n";
   const table = `${atLineStart ? "" : "\n"}${markdownTable(rows, cols, align)}\n`;
-  replaceNoteBlock(block, body.slice(0, s) + table + body.slice(e));
+  editor.setRangeText(table, s, e, "end");
+  editor.focus();
   localStorage.setItem("tensorforge.source.v3", editor.value);
-  pendingNoteFocus = {
-    startLine: tableTarget.startLine,
-    selectionStart: s + table.length,
-    selectionEnd: s + table.length,
-  };
   tableTarget = null;
   closeTableMenu();
-  clearGutterErrors(); // full resync rebuilds boxes and restores focus
+  clearGutterErrors();
   scheduleLiveRun();
 }
 
-function jumpToSourceLine(line) {
+let scrollSyncSource = null;
+let scrollSyncFrame = null;
+
+function withScrollSyncSource(source, fn) {
+  scrollSyncSource = source;
+  fn();
+  requestAnimationFrame(() => {
+    if (scrollSyncSource === source) scrollSyncSource = null;
+  });
+}
+
+function blockAnchors() {
+  return [...output.querySelectorAll(".block[data-line]")]
+    .map((el) => ({ el, line: Number(el.dataset.line) }))
+    .filter((anchor) => Number.isFinite(anchor.line));
+}
+
+function lineAtEditorTop() {
+  const y = editor.scrollTop + 8;
+  let current = 1;
+  for (const row of gutter.children) {
+    if (row.offsetTop > y) break;
+    current = Number(row.dataset.line) || current;
+  }
+  return current;
+}
+
+function anchorForLine(line) {
+  const anchors = blockAnchors();
+  if (anchors.length === 0) return null;
+  let best = anchors[0];
+  for (const anchor of anchors) {
+    if (anchor.line > line) break;
+    best = anchor;
+  }
+  return best;
+}
+
+function anchorAtOutputTop() {
+  const anchors = blockAnchors();
+  if (anchors.length === 0) return null;
+  const top = output.scrollTop + 8;
+  let best = anchors[0];
+  for (const anchor of anchors) {
+    if (anchor.el.offsetTop > top) break;
+    best = anchor;
+  }
+  return best;
+}
+
+function syncOutputToEditor() {
+  if (scrollSyncSource === "output") return;
+  cancelAnimationFrame(scrollSyncFrame);
+  scrollSyncFrame = requestAnimationFrame(() => {
+    const anchor = anchorForLine(lineAtEditorTop());
+    if (!anchor) return;
+    withScrollSyncSource("editor", () => {
+      output.scrollTo({ top: Math.max(0, anchor.el.offsetTop - 12), behavior: "auto" });
+    });
+  });
+}
+
+function syncEditorToOutput() {
+  if (scrollSyncSource === "editor") return;
+  cancelAnimationFrame(scrollSyncFrame);
+  scrollSyncFrame = requestAnimationFrame(() => {
+    const anchor = anchorAtOutputTop();
+    if (!anchor) return;
+    withScrollSyncSource("output", () => {
+      scrollEditorToLine(anchor.line, { behavior: "auto", align: 0.12 });
+    });
+  });
+}
+
+function scrollEditorToLine(line, options = {}) {
   if (!line) return;
-  const target = Math.max(0, rowTop(line) + editor.scrollTop - editor.clientHeight / 3);
-  editor.scrollTo({ top: target, behavior: "smooth" });
+  const align = options.align ?? 1 / 3;
+  const behavior = options.behavior ?? "smooth";
+  const target = Math.max(0, rowTop(line) + editor.scrollTop - editor.clientHeight * align);
+  editor.scrollTo({ top: target, behavior });
+}
+
+function focusSourceLine(line) {
+  const tens = tensBlocksFromSource(editor.value).find(
+    (block) => line >= block.line && line <= block.endLine,
+  );
+  if (tens) {
+    if (!isEditingTens()) syncTensBoxes();
+    const box = document.getElementById("code-layer").querySelector(
+      `.source-code-box[data-start-line="${tens.line}"] .source-tens-editor`,
+    );
+    if (box) {
+      const bodyLine = Math.max(1, Math.min(tens.lines.length + 1, line - tens.line));
+      const offset = offsetForLine(box.value, bodyLine);
+      box.focus();
+      box.setSelectionRange(offset, offset);
+      return;
+    }
+  }
+  const offset = offsetForLine(editor.value, line);
+  editor.focus();
+  editor.setSelectionRange(offset, offset);
+}
+
+function jumpToSourceLine(line, options = {}) {
+  scrollEditorToLine(line, { behavior: options.behavior ?? "smooth" });
+  if (options.focus) focusSourceLine(line);
   const row = gutter.children[line - 1];
   if (row) {
     row.classList.add("jump");
@@ -1021,10 +1133,11 @@ function jumpToSourceLine(line) {
 }
 
 function makeBlockJump(el, line) {
+  if (line) el.dataset.line = String(line);
   el.title = `Click to jump to line ${line}`;
   el.addEventListener("click", (e) => {
     if (e.target.closest("button")) return; // copy buttons keep their job
-    jumpToSourceLine(line);
+    jumpToSourceLine(line, { focus: true, behavior: "auto" });
   });
 }
 
@@ -1074,7 +1187,7 @@ function renderOutputBlock(item) {
 function renderOutputs(outputs) {
   output.innerHTML = "";
   lastRenderedOutputs = outputs;
-  markGutterErrors(outputs, { syncNotes: !isEditingNote() });
+  markGutterErrors(outputs, { syncBlocks: !isEditingTens() });
   const blocks = [
     ...markdownBlocksFromSource(editor.value),
     ...outputs.map((item) => ({ kind: "output", ...item })),
@@ -1090,6 +1203,7 @@ function renderOutputs(outputs) {
       block.kind === "markdown" ? renderMarkdownBlock(block) : renderOutputBlock(block),
     );
   }
+  syncOutputToEditor();
 }
 
 async function run() {
@@ -1149,21 +1263,26 @@ editor.addEventListener("input", () => {
   clearGutterErrors();
   scheduleLiveRun();
 });
+editor.addEventListener("focus", updateInsertTableState);
+editor.addEventListener("paste", handleMarkdownPaste);
 editor.addEventListener("scroll", () => {
   gutter.scrollTop = editor.scrollTop;
-  // A full rebuild would destroy the focused note editor mid-edit.
-  if (isEditingNote()) repositionNoteBoxes();
-  else syncNoteBoxes();
+  syncSourceLayerScroll();
+  // A full rebuild would destroy the focused .tens editor mid-edit.
+  if (isEditingTens()) repositionTensBoxes();
+  else syncTensBoxes();
+  syncOutputToEditor();
 });
-// Leaving the note layer (blur to the main editor, a button, …) is the
-// moment to rebuild boxes so stale spans never survive an editing session.
-noteLayer.addEventListener("focusin", updateInsertTableState);
-noteLayer.addEventListener("focusout", (e) => {
-  // Focus moving into the table popover must not disable the button or
-  // rebuild the boxes mid-interaction.
+output.addEventListener("scroll", syncEditorToOutput);
+window.addEventListener("resize", refreshEditorGeometry);
+// Leaving a .tens editor is the moment to rebuild boxes so stale spans never
+// survive an editing session.
+document.getElementById("code-layer").addEventListener("focusin", () => queueMicrotask(updateInsertTableState));
+document.getElementById("code-layer").addEventListener("focusout", (e) => {
+  // Focus moving into the table popover must not rebuild boxes mid-interaction.
   if (tableMenu.contains(e.relatedTarget)) return;
   updateInsertTableState();
-  if (!noteLayer.contains(e.relatedTarget)) syncNoteBoxes();
+  if (!document.getElementById("code-layer").contains(e.relatedTarget)) syncTensBoxes();
 });
 // initial render on startup
 scheduleLiveRun();
@@ -1172,14 +1291,13 @@ runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
 saveBtn.addEventListener("click", () => saveFile());
 
-addNoteBtn.addEventListener("click", insertNoteBlock);
+addNoteBtn.addEventListener("click", insertTensBlock);
 exportBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleExportMenu();
 });
 exportMenu.addEventListener("click", (e) => e.stopPropagation());
-// pointerdown + preventDefault keeps the note editor focused while the
-// popover opens; without it the click would blur the note first.
+// pointerdown + preventDefault keeps focus stable while the popover opens.
 insertTableBtn.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   e.stopPropagation();
@@ -1189,13 +1307,14 @@ insertTableBtn.addEventListener("pointerdown", (e) => {
 });
 insertTableBtn.addEventListener("click", (e) => e.stopPropagation());
 tableMenu.addEventListener("click", (e) => e.stopPropagation());
-document.getElementById("table-insert").addEventListener("click", insertTableIntoNote);
+document.getElementById("table-insert").addEventListener("click", insertTableIntoMarkdown);
 exportMdBtn.addEventListener("click", exportMarkdown);
 exportPdfBtn.addEventListener("click", exportPdf);
 themeBtn.addEventListener("click", toggleTheme);
 document.addEventListener("click", () => {
   closeExportMenu();
   closeTableMenu();
+  updateInsertTableState();
 });
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;

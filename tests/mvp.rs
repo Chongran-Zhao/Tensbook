@@ -2,7 +2,7 @@
 //! 1. Scalar parses; 2. Tensor parses; 3. `C = F.T * F` parses;
 //! 4. C is inferred symmetric; 5. display(C, mode=symbol);
 //! 6. display(C, mode=components) is a 3x3 matrix; 7. export(C, format=latex);
-//! 8. the full neo_hookean.tens example runs end to end.
+//! 8. the full Mooney-Rivlin uniaxial example runs end to end.
 
 use tensorforge::interpreter::Value;
 use tensorforge::tensor::TensorExpr;
@@ -82,6 +82,44 @@ display(mu, mode=symbol)
         outputs[0].latex.contains("\\mu"),
         "got: {}",
         outputs[0].latex
+    );
+}
+
+#[test]
+fn tens_blocks_execute_inside_markdown_document() {
+    let src = r#"
+# Markdown first
+
+This prose is not TensorForge DSL.
+
+<!-- tensorforge:tens -->
+mu = Scalar("\mu")
+display(mu, mode=symbol)
+<!-- /tensorforge:tens -->
+
+More Markdown with $W = \mu I_1$.
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert!(
+        outputs[0].latex.contains("\\mu"),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
+fn unterminated_tens_block_is_a_parse_error() {
+    let src = r#"
+# Markdown first
+
+<!-- tensorforge:tens -->
+mu = Scalar("\mu")
+"#;
+    let err = run_source(src).unwrap_err();
+    assert!(
+        err.to_string().contains("unterminated tens block"),
+        "got: {err}"
     );
 }
 
@@ -260,30 +298,37 @@ display(I1, mode=symbol)
 }
 
 #[test]
-fn neo_hookean_example_runs_end_to_end() {
+fn mooney_rivlin_uniaxial_example_runs_end_to_end() {
     let src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/neo_hookean.tens"
+        "/examples/mooney_rivlin_uniaxial.tens"
     ))
     .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
-    assert_eq!(outputs.len(), 12);
+    assert_eq!(outputs.len(), 7);
 
-    // W is a scalar expression containing mu, lambda, log, det, tr.
+    // W is the incompressible Mooney-Rivlin scalar energy.
     match interp.get("W") {
         Some(Value::Scalar(_)) => {}
         other => panic!("expected W to be a Scalar, got {other:?}"),
     }
-    let w_out = outputs
+    let p11 = interp.get("P11").expect("P11 should be defined");
+    assert!(matches!(p11, Value::Scalar(_)));
+
+    let p11_out = outputs
         .iter()
-        .find(|o| o.header.starts_with("display W"))
+        .find(|o| o.header.starts_with("display P11"))
         .unwrap();
-    // J = det F and I1 = tr C are back-substituted in the display.
-    for needle in ["\\mu", "\\lambda", "\\log J", "I1"] {
+    assert!(
+        !p11_out.latex.contains("+ -"),
+        "P11 should render with subtraction: {}",
+        p11_out.latex
+    );
+    for needle in ["P_{11}", "C_1", "C_2", "{\\lambda}^{-3}"] {
         assert!(
-            w_out.latex.contains(needle),
+            p11_out.latex.contains(needle),
             "missing {needle} in: {}",
-            w_out.latex
+            p11_out.latex
         );
     }
 }

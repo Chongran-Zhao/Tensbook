@@ -1,0 +1,35 @@
+This is an example for unixial tension with Mooney-Rivlin 
+model, derive the first Piola-Kirchhoff stress $\bm P$, the deformation gradient reads
+
+<!-- tensorforge:tens -->
+lam = Var("\lambda")
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
+
+F = Tensor("\bm F", order=2, dim=3)
+F[1][1] = lam
+F[2][2] = lam^(-1/2)
+F[3][3] = lam^(-1/2)
+
+C = F.T * F
+
+I1 = Scalar("I_1")
+I2 = Scalar("I_2")
+I1 = lam^2 + 2 * lam^(-1)
+I2 = 2 * lam + lam^(-2)
+
+W = C1 * (I1 - 3) + C2 * (I2 - 3)
+
+P11 = Scalar("P_{11}")
+P11 = diff(W, lam)
+
+display(F, mode=matrix)
+display(C, mode=matrix)
+display(I1, mode=symbol)
+display(I2, mode=symbol)
+display(W, mode=symbol)
+display(P11, mode=symbol)
+export(P11, format=latex)
+
+<!-- /tensorforge:tens -->
+
