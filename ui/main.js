@@ -63,6 +63,7 @@ display(S, mode=symbol)
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 const NOTE_PLACEHOLDER = "Write Markdown here.";
+let pendingNoteFocus = null;
 
 const editor = document.getElementById("editor");
 const gutter = document.getElementById("gutter");
@@ -251,8 +252,9 @@ function noteBlocksFromSource(source) {
       block.lines.push(lines[i]);
       i++;
     }
-    block.endLine = i < lines.length ? i + 1 : lines.length;
     block.closed = i < lines.length;
+    if (!block.closed) continue;
+    block.endLine = i + 1;
     blocks.push(block);
   }
   return blocks;
@@ -398,28 +400,88 @@ function syncNoteBoxes() {
   const boxes = noteBlocksFromSource(editor.value).map((block) => {
     const div = document.createElement("div");
     div.className = "source-note-box";
-    div.style.setProperty("--line-height", `${lineHeight}px`);
+    div.dataset.startLine = String(block.line);
     const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
-    const height = (block.endLine - block.line + 1) * lineHeight + 4;
+    const height = Math.max(3, block.endLine - block.line + 1) * lineHeight + 4;
     div.style.top = `${top}px`;
     div.style.height = `${height}px`;
-    div.appendChild(noteMask("top"));
-    if (block.closed) div.appendChild(noteMask("bottom"));
-    if (!block.lines.join("\n").trim()) {
-      const placeholder = document.createElement("div");
-      placeholder.className = "source-note-placeholder";
-      placeholder.textContent = NOTE_PLACEHOLDER;
-      div.appendChild(placeholder);
-    }
+    const noteEditor = document.createElement("textarea");
+    noteEditor.className = "source-note-editor";
+    noteEditor.spellcheck = false;
+    noteEditor.wrap = "off";
+    noteEditor.placeholder = NOTE_PLACEHOLDER;
+    noteEditor.value = block.lines.join("\n");
+    noteEditor.addEventListener("input", () => updateNoteBlock(block, noteEditor));
+    noteEditor.addEventListener("keydown", (e) => handleNoteKeydown(e, block, noteEditor));
+    div.appendChild(noteEditor);
     return div;
   });
   noteLayer.replaceChildren(...boxes);
+  restorePendingNoteFocus();
 }
 
-function noteMask(position) {
-  const mask = document.createElement("div");
-  mask.className = `source-note-mask ${position}`;
-  return mask;
+function updateNoteBlock(block, noteEditor) {
+  pendingNoteFocus = {
+    startLine: block.line,
+    selectionStart: noteEditor.selectionStart,
+    selectionEnd: noteEditor.selectionEnd,
+  };
+  replaceNoteBlock(block, noteEditor.value);
+  localStorage.setItem("tensorforge.source.v3", editor.value);
+  clearGutterErrors();
+  scheduleLiveRun();
+}
+
+function handleNoteKeydown(e, block, noteEditor) {
+  const empty = noteEditor.value.length === 0;
+  const collapsed = noteEditor.selectionStart === noteEditor.selectionEnd;
+  if (empty && collapsed && (e.key === "Backspace" || e.key === "Delete")) {
+    e.preventDefault();
+    removeNoteBlock(block);
+  }
+}
+
+function replaceNoteBlock(block, markdown) {
+  const lines = editor.value.split(/\r?\n/);
+  const body = markdown.length > 0 ? markdown.split(/\r?\n/) : [""];
+  lines.splice(block.line - 1, block.endLine - block.line + 1, "```notes", ...body, "```");
+  editor.value = lines.join("\n");
+}
+
+function removeNoteBlock(block) {
+  const lines = editor.value.split(/\r?\n/);
+  lines.splice(block.line - 1, block.endLine - block.line + 1);
+  editor.value = lines.join("\n");
+  const cursor = offsetForLine(editor.value, block.line);
+  editor.focus();
+  editor.setSelectionRange(cursor, cursor);
+  localStorage.setItem("tensorforge.source.v3", editor.value);
+  clearGutterErrors();
+  scheduleLiveRun();
+}
+
+function offsetForLine(source, line) {
+  if (line <= 1) return 0;
+  let offset = 0;
+  const lines = source.split(/\r?\n/);
+  for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+    offset += lines[i].length + 1;
+  }
+  return offset;
+}
+
+function restorePendingNoteFocus() {
+  if (!pendingNoteFocus) return;
+  const focus = pendingNoteFocus;
+  pendingNoteFocus = null;
+  const box = noteLayer.querySelector(
+    `.source-note-box[data-start-line="${focus.startLine}"] .source-note-editor`,
+  );
+  if (!box) return;
+  const start = Math.min(focus.selectionStart, box.value.length);
+  const end = Math.min(focus.selectionEnd, box.value.length);
+  box.focus();
+  box.setSelectionRange(start, end);
 }
 
 function renderOutputBlock(item) {
