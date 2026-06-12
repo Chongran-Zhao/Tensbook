@@ -62,6 +62,7 @@ display(S, mode=symbol)
 `;
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
+const NOTE_PLACEHOLDER = "Write Markdown here.";
 
 const editor = document.getElementById("editor");
 const gutter = document.getElementById("gutter");
@@ -154,6 +155,11 @@ function syncGutter(errorLines = new Set()) {
   }
   for (const line of gutter.children) {
     line.classList.toggle("err", errorLines.has(Number(line.dataset.line)));
+    line.classList.remove("note-fence");
+  }
+  for (const block of noteBlocksFromSource(editor.value)) {
+    gutter.children[block.line - 1]?.classList.add("note-fence");
+    if (block.closed) gutter.children[block.endLine - 1]?.classList.add("note-fence");
   }
   gutter.scrollTop = editor.scrollTop;
   syncNoteBoxes();
@@ -239,13 +245,14 @@ function noteBlocksFromSource(source) {
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     if (!isNoteOpen(lines[i])) continue;
-    const block = { line: i + 1, endLine: i + 1, lines: [] };
+    const block = { line: i + 1, endLine: i + 1, closed: false, lines: [] };
     i++;
     while (i < lines.length && !isNoteClose(lines[i])) {
       block.lines.push(lines[i]);
       i++;
     }
     block.endLine = i < lines.length ? i + 1 : lines.length;
+    block.closed = i < lines.length;
     blocks.push(block);
   }
   return blocks;
@@ -375,13 +382,11 @@ function insertNoteBlock() {
   const end = editor.selectionEnd;
   const needsLeadingBreak = start > 0 && editor.value[start - 1] !== "\n";
   const needsTrailingBreak = end < editor.value.length && editor.value[end] !== "\n";
-  const body = "# Notes\n\nWrite Markdown here.\n\n$$\n\\bm E = \\sum_{a=1}^{3} E(\\lambda_a) \\bm N_a \\otimes \\bm N_a\n$$";
-  const block = `${needsLeadingBreak ? "\n" : ""}\`\`\`notes\n${body}\n\`\`\`\n${needsTrailingBreak ? "\n" : ""}`;
+  const block = `${needsLeadingBreak ? "\n" : ""}\`\`\`notes\n\n\`\`\`\n${needsTrailingBreak ? "\n" : ""}`;
   editor.setRangeText(block, start, end, "end");
   const selectStart = start + (needsLeadingBreak ? 1 : 0) + "```notes\n".length;
-  const selectEnd = selectStart + body.length;
   editor.focus();
-  editor.setSelectionRange(selectStart, selectEnd);
+  editor.setSelectionRange(selectStart, selectStart);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -393,13 +398,28 @@ function syncNoteBoxes() {
   const boxes = noteBlocksFromSource(editor.value).map((block) => {
     const div = document.createElement("div");
     div.className = "source-note-box";
+    div.style.setProperty("--line-height", `${lineHeight}px`);
     const top = paddingTop + (block.line - 1) * lineHeight - editor.scrollTop - 2;
     const height = (block.endLine - block.line + 1) * lineHeight + 4;
     div.style.top = `${top}px`;
     div.style.height = `${height}px`;
+    div.appendChild(noteMask("top"));
+    if (block.closed) div.appendChild(noteMask("bottom"));
+    if (!block.lines.join("\n").trim()) {
+      const placeholder = document.createElement("div");
+      placeholder.className = "source-note-placeholder";
+      placeholder.textContent = NOTE_PLACEHOLDER;
+      div.appendChild(placeholder);
+    }
     return div;
   });
   noteLayer.replaceChildren(...boxes);
+}
+
+function noteMask(position) {
+  const mask = document.createElement("div");
+  mask.className = `source-note-mask ${position}`;
+  return mask;
 }
 
 function renderOutputBlock(item) {

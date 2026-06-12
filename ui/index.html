@@ -99,6 +99,9 @@
   #gutter .ln.err {
     color: var(--error); font-weight: 600;
   }
+  #gutter .ln.note-fence {
+    color: transparent;
+  }
   #editor {
     position: relative; z-index: 1;
     flex: 1; resize: none; border: 0; outline: none;
@@ -109,13 +112,33 @@
   }
   #note-layer {
     position: absolute; top: 0; right: 0; bottom: 0;
-    overflow: hidden; pointer-events: none; z-index: 0;
+    overflow: hidden; pointer-events: none; z-index: 2;
   }
   .source-note-box {
     position: absolute; left: 8px; right: 8px;
     border: 1px solid var(--accent);
     background: var(--note-bg);
     border-radius: 8px;
+  }
+  .source-note-mask {
+    position: absolute; left: 1px; right: 1px;
+    height: var(--line-height);
+    background: var(--panel);
+  }
+  .source-note-mask.top {
+    top: 0; border-radius: 7px 7px 0 0;
+  }
+  .source-note-mask.bottom {
+    bottom: 0; border-radius: 0 0 7px 7px;
+  }
+  .source-note-placeholder {
+    position: absolute;
+    left: 12px;
+    top: calc(var(--line-height) + 1px);
+    color: var(--muted);
+    opacity: 0.55;
+    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre;
   }
   /* hidden mirror used to measure caret position */
   .cm-mirror {
