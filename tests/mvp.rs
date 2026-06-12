@@ -58,17 +58,42 @@ display(mu, mode=symbol)
 
 #[test]
 fn note_blocks_may_contain_fenced_code() {
-    // A markdown code fence inside a note: its closing bare ``` must not
-    // terminate the note block.
+    // New note sentinels do not collide with ordinary Markdown code fences.
     let src = r#"
-```notes
+<!-- tensorforge:note -->
 # Note with code
+
+```
+bare fence works too
+```
 
 ```rust
 let x = 1;
 ```
 
 more prose after the inner fence
+<!-- /tensorforge:note -->
+mu = Scalar("\mu")
+display(mu, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert!(
+        outputs[0].latex.contains("\\mu"),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
+fn legacy_note_blocks_still_parse() {
+    let src = r#"
+```notes
+# Legacy note
+
+```rust
+let x = 1;
+```
 ```
 mu = Scalar("\mu")
 display(mu, mode=symbol)

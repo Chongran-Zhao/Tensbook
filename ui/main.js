@@ -6,7 +6,10 @@ import { setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-const DEFAULT_SOURCE = `\`\`\`notes
+const NOTE_OPEN = "<!-- tensorforge:note -->";
+const NOTE_CLOSE = "<!-- /tensorforge:note -->";
+
+const DEFAULT_SOURCE = `${NOTE_OPEN}
 # Hill's class hyperelasticity
 
 Hand-written spectral strain with a symbolic Hill-CR scale function.
@@ -16,7 +19,7 @@ $$
 \\qquad
 \\bm E = \\sum_{a=1}^{3} E(\\lambda_a) \\, \\bm N_a \\otimes \\bm N_a.
 $$
-\`\`\`
+${NOTE_CLOSE}
 
 mu = Scalar("\\mu")
 kappa = Scalar("\\kappa")
@@ -29,24 +32,24 @@ N = VectorSet("\\bm N", dim=3)
 lam = Var("\\lambda")
 Ecr = (lam^m - lam^(-n))/(m + n)
 
-\`\`\`notes
+${NOTE_OPEN}
 ## Spectral strain
 
 The source expression mirrors the math directly:
 
 - \`&\` is the outer product.
 - \`Q = 2 * diff(E, C)\` builds the fourth-order tangent from the two spectral sums.
-\`\`\`
+${NOTE_CLOSE}
 
 C = sum(lambda[a]^2 * N[a] & N[a], a)
 E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
 Q = 2 * diff(E, C)
 
-\`\`\`notes
+${NOTE_OPEN}
 ## Energy and stress
 
 Hill's quadratic energy gives the thermodynamic force $\\bm T = \\partial W / \\partial \\bm E$.
-\`\`\`
+${NOTE_CLOSE}
 
 W = mu * ddot(E, E) + kappa/2 * tr(E)^2
 
@@ -395,19 +398,25 @@ function noteBlocksFromSource(source) {
   const blocks = [];
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    if (!isNoteOpen(lines[i])) continue;
-    const block = { line: i + 1, endLine: i + 1, closed: false, lines: [] };
-    // Fenced code blocks inside the note (```rust … ```): the inner bare
-    // ``` must not close the note. Mirrors strip_note_blocks in
-    // src/parser/mod.rs — keep the two in sync.
+    const kind = noteOpenKind(lines[i]);
+    if (!kind) continue;
+    const block = { line: i + 1, endLine: i + 1, closed: false, kind, lines: [] };
+    // Legacy ```notes blocks can contain fenced code only when the inner
+    // fence carries an info string (```rust … ```). New note blocks use
+    // HTML-comment sentinels, so ordinary Markdown fences never conflict.
+    // Mirrors strip_note_blocks in src/parser/mod.rs — keep the two in sync.
     let inInnerFence = false;
     i++;
     while (i < lines.length) {
-      if (inInnerFence) {
-        if (isNoteClose(lines[i])) inInnerFence = false;
-      } else if (isInnerFenceOpen(lines[i])) {
-        inInnerFence = true;
-      } else if (isNoteClose(lines[i])) {
+      if (kind === "backtick") {
+        if (inInnerFence) {
+          if (isLegacyNoteClose(lines[i])) inInnerFence = false;
+        } else if (isInnerFenceOpen(lines[i])) {
+          inInnerFence = true;
+        } else if (isNoteClose(lines[i], kind)) {
+          break;
+        }
+      } else if (isNoteClose(lines[i], kind)) {
         break;
       }
       block.lines.push(lines[i]);
@@ -421,11 +430,21 @@ function noteBlocksFromSource(source) {
   return blocks;
 }
 
-function isNoteOpen(line) {
-  return /^```notes\s*$/i.test(line.trim());
+function noteOpenKind(line) {
+  const trimmed = line.trim();
+  if (trimmed.toLowerCase() === NOTE_OPEN.toLowerCase()) return "html";
+  if (/^```notes\s*$/i.test(trimmed)) return "backtick";
+  return null;
 }
 
-function isNoteClose(line) {
+function isNoteClose(line, kind) {
+  const trimmed = line.trim();
+  return kind === "html"
+    ? trimmed.toLowerCase() === NOTE_CLOSE.toLowerCase()
+    : isLegacyNoteClose(trimmed);
+}
+
+function isLegacyNoteClose(line) {
   return /^```\s*$/.test(line.trim());
 }
 
@@ -442,7 +461,7 @@ function renderMarkdown(markdown) {
     if (isInnerFenceOpen(line)) {
       const code = [];
       i++;
-      while (i < lines.length && !isNoteClose(lines[i])) {
+      while (i < lines.length && !isLegacyNoteClose(lines[i])) {
         code.push(lines[i]);
         i++;
       }
@@ -692,7 +711,7 @@ function insertNoteBlock() {
   const end = editor.selectionEnd;
   const needsLeadingBreak = start > 0 && editor.value[start - 1] !== "\n";
   const needsTrailingBreak = end < editor.value.length && editor.value[end] !== "\n";
-  const block = `${needsLeadingBreak ? "\n" : ""}\`\`\`notes\n\n\`\`\`\n${needsTrailingBreak ? "\n" : ""}`;
+  const block = `${needsLeadingBreak ? "\n" : ""}${NOTE_OPEN}\n\n${NOTE_CLOSE}\n${needsTrailingBreak ? "\n" : ""}`;
   editor.setRangeText(block, start, end, "end");
   const openFenceOffset = start + (needsLeadingBreak ? 1 : 0);
   pendingNoteFocus = {
@@ -700,7 +719,7 @@ function insertNoteBlock() {
     selectionStart: 0,
     selectionEnd: 0,
   };
-  const selectStart = openFenceOffset + "```notes\n".length;
+  const selectStart = openFenceOffset + `${NOTE_OPEN}\n`.length;
   editor.focus();
   editor.setSelectionRange(selectStart, selectStart);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
@@ -822,7 +841,7 @@ function replaceNoteBlock(block, markdown) {
   // setRangeText (not a value assignment) keeps the main editor's undo
   // history intact and leaves the rest of the file byte-identical.
   const [start, end] = lineRangeOffsets(editor.value, block.line, block.endLine);
-  editor.setRangeText(`\`\`\`notes\n${markdown}\n\`\`\``, start, end, "preserve");
+  editor.setRangeText(`${NOTE_OPEN}\n${markdown}\n${NOTE_CLOSE}`, start, end, "preserve");
 }
 
 function removeNoteBlock(block) {

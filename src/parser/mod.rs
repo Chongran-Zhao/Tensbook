@@ -32,10 +32,12 @@ pub fn parse(src: &str) -> Result<Vec<Stmt>, Error> {
 fn strip_note_blocks(src: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(src.len());
     let mut in_note = false;
-    // A fenced code block *inside* a note (e.g. ```rust … ```): its closing
-    // bare ``` must not terminate the note. Mirrors noteBlocksFromSource in
-    // ui/main.js — keep the two in sync.
+    // Legacy ```notes blocks can contain fenced code only when the inner
+    // fence carries an info string (```rust … ```); new note blocks use
+    // HTML-comment sentinels so ordinary Markdown fences never conflict.
+    // Mirrors noteBlocksFromSource in ui/main.js — keep the two in sync.
     let mut in_inner_fence = false;
+    let mut note_kind = NoteFence::Html;
     let mut start_line = None;
 
     for (idx, line) in src.split_inclusive('\n').enumerate() {
@@ -45,22 +47,28 @@ fn strip_note_blocks(src: &str) -> Result<String, Error> {
 
         if in_note {
             out.push_str(blank_like(line));
-            if in_inner_fence {
-                if is_note_close(trimmed) {
-                    in_inner_fence = false;
+            if note_kind == NoteFence::Backtick {
+                if in_inner_fence {
+                    if is_legacy_note_close(trimmed) {
+                        in_inner_fence = false;
+                    }
+                } else if is_inner_fence_open(trimmed) {
+                    in_inner_fence = true;
+                } else if is_note_close(trimmed, note_kind) {
+                    in_note = false;
+                    start_line = None;
                 }
-            } else if is_inner_fence_open(trimmed) {
-                in_inner_fence = true;
-            } else if is_note_close(trimmed) {
+            } else if is_note_close(trimmed, note_kind) {
                 in_note = false;
                 start_line = None;
             }
             continue;
         }
 
-        if is_note_open(trimmed) {
+        if let Some(kind) = note_open_kind(trimmed) {
             in_note = true;
             in_inner_fence = false;
+            note_kind = kind;
             start_line = Some(line_no);
             out.push_str(blank_like(line));
             continue;
@@ -70,19 +78,35 @@ fn strip_note_blocks(src: &str) -> Result<String, Error> {
     }
 
     if in_note {
-        return Err(Error::new(
-            "unterminated notes block; expected closing ```",
-            start_line,
-        ));
+        return Err(Error::new("unterminated notes block", start_line));
     }
     Ok(out)
 }
 
-fn is_note_open(trimmed: &str) -> bool {
-    trimmed.eq_ignore_ascii_case("```notes")
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NoteFence {
+    Html,
+    Backtick,
 }
 
-fn is_note_close(trimmed: &str) -> bool {
+fn note_open_kind(trimmed: &str) -> Option<NoteFence> {
+    if trimmed.eq_ignore_ascii_case("<!-- tensorforge:note -->") {
+        Some(NoteFence::Html)
+    } else if trimmed.eq_ignore_ascii_case("```notes") {
+        Some(NoteFence::Backtick)
+    } else {
+        None
+    }
+}
+
+fn is_note_close(trimmed: &str, kind: NoteFence) -> bool {
+    match kind {
+        NoteFence::Html => trimmed.eq_ignore_ascii_case("<!-- /tensorforge:note -->"),
+        NoteFence::Backtick => is_legacy_note_close(trimmed),
+    }
+}
+
+fn is_legacy_note_close(trimmed: &str) -> bool {
     trimmed == "```"
 }
 
