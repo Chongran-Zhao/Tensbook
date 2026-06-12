@@ -72,6 +72,11 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
                 indexed_sym(latex, i, j)
             }
         }
+        TensorExpr::Filled { dim, entries, .. } => (*entries[i * dim + j]).clone(),
+        // (u ⊗ v)_{ij} = u_i v_j for component-filled vectors.
+        TensorExpr::Outer(a, b) if a.order() == 1 && b.order() == 1 => {
+            mul(entry1(a, i), entry1(b, j))
+        }
         TensorExpr::Transpose(t) => entry(t, j, i),
         TensorExpr::MatMul(a, b) => {
             let dim = expr.dim();
@@ -132,6 +137,9 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
             "component expansion of fourth-order identity tensors is not \
              supported in matrix mode; use mode=symbol",
         )),
+        TensorExpr::Outer(a, b) if a.order() == 1 && b.order() == 1 => {
+            expandable1(a).and_then(|_| expandable1(b))
+        }
         TensorExpr::Outer(..) => Err(Error::msg(
             "component expansion of outer products is not supported yet; use mode=symbol",
         )),
@@ -144,12 +152,36 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
              supported in matrix mode; use mode=symbol",
         )),
         TensorExpr::Var { .. } => Ok(()),
+        TensorExpr::Filled { order: 2, .. } => Ok(()),
+        TensorExpr::Filled { .. } => Err(Error::msg(
+            "matrix mode displays second-order tensors; this is not order 2",
+        )),
         TensorExpr::Transpose(t) | TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => {
             expandable(t)
         }
         TensorExpr::MatMul(a, b) | TensorExpr::Add(a, b) | TensorExpr::Sub(a, b) => {
             expandable(a).and_then(|_| expandable(b))
         }
+    }
+}
+
+/// Component `i` (0-based) of an order-1 component-filled vector.
+fn entry1(expr: &TensorExpr, i: usize) -> ScalarExpr {
+    match expr {
+        TensorExpr::Filled {
+            order: 1, entries, ..
+        } => (*entries[i]).clone(),
+        _ => unreachable!("expandable1() must screen first"),
+    }
+}
+
+fn expandable1(expr: &TensorExpr) -> Result<(), Error> {
+    match expr {
+        TensorExpr::Filled { order: 1, .. } => Ok(()),
+        _ => Err(Error::msg(
+            "component expansion of vectors requires component-filled vectors \
+             (e.g. from Spec_Decomp); use mode=symbol",
+        )),
     }
 }
 

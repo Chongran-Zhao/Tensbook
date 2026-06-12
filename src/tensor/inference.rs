@@ -48,6 +48,14 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         TensorExpr::BoxTimes(..) => false,
         // Set elements are opaque symbols; nothing is provable about them.
         TensorExpr::SetElem { .. } => false,
+        // A component-filled tensor is symmetric iff its entries are.
+        TensorExpr::Filled {
+            order: 2,
+            dim,
+            entries,
+            ..
+        } => (0..*dim).all(|i| (0..i).all(|j| entries[i * dim + j] == entries[j * dim + i])),
+        TensorExpr::Filled { .. } => false,
         // A sum of symmetric terms is symmetric.
         TensorExpr::SumIdx { body, .. } => is_symmetric(body),
     }

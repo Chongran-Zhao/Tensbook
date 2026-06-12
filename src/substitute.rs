@@ -392,6 +392,17 @@ fn rebuild_tensor(
             body: rt(body),
         }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(rt(a))),
+        TensorExpr::Filled {
+            latex,
+            order,
+            dim,
+            entries,
+        } => Rc::new(TensorExpr::Filled {
+            latex: latex.clone(),
+            order: *order,
+            dim: *dim,
+            entries: entries.iter().map(rs).collect(),
+        }),
     }
 }
 

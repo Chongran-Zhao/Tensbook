@@ -32,6 +32,10 @@ brew upgrade tensorforge
 | `A & B` | Tensor product `A \otimes B`. |
 | `dot(A, B)` | Single contraction / matrix product. |
 | `ddot(A, B)` | Double contraction `A : B`. |
+| `ScalarSet("\lambda", dim=3)`, `VectorSet("\bm N", dim=3)` | Indexed families; elements `lambda[a]`, `N[1]`. |
+| `sum(expr, a)` | Symbolic sum over a set index. |
+| `F[1][1] = expr` | Assign tensor components (unset entries are zero). |
+| `[c, N] = Spec_Decomp(C)` | Symbolic eigendecomposition of a diagonal component-filled tensor. |
 | `diff(expr, X)` | Symbolic derivative with respect to a scalar, tensor, compound tensor, or generalized strain. |
 | `simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
 | `display(expr, mode=...)` | Render in the app/CLI. Modes: `symbol`, `components`, `matrix`, `block_components`. |

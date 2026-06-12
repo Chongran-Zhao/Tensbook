@@ -25,6 +25,7 @@ const BUILTINS = [
   { name: "ScalarSet", sig: 'ScalarSet("\\lambda", dim=3)', doc: "declare an indexed scalar family lambda[a]" },
   { name: "VectorSet", sig: 'VectorSet("\\bm N", dim=3)', doc: "declare an indexed vector family N[a]" },
   { name: "sum", sig: "sum(expr, a)", doc: "indexed symbolic sum over the set index a" },
+  { name: "Spec_Decomp", sig: "[c, N] = Spec_Decomp(C)", doc: "symbolic eigendecomposition of a diagonal component-filled tensor into declared sets" },
   { name: "inv", sig: "inv(A)", doc: "symbolic tensor inverse" },
   { name: "dot", sig: "dot(A, B)", doc: "single contraction AB" },
   { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — infix `A : B` also works" },

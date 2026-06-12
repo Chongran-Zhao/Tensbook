@@ -276,7 +276,8 @@ fn tprec(expr: &TensorExpr) -> u8 {
         | TensorExpr::InverseTranspose(..)
         | TensorExpr::Diff { .. }
         | TensorExpr::Identity4 { .. }
-        | TensorExpr::SetElem { .. } => 3,
+        | TensorExpr::SetElem { .. }
+        | TensorExpr::Filled { .. } => 3,
         TensorExpr::SumIdx { .. } => 1,
     }
 }
@@ -295,6 +296,7 @@ fn render_tensor(expr: &TensorExpr) -> String {
         TensorExpr::SetElem { latex, index, .. } => {
             format!("{{{latex}}}_{{{}}}", index.latex())
         }
+        TensorExpr::Filled { latex, .. } => latex.clone(),
         TensorExpr::SumIdx {
             index,
             range,

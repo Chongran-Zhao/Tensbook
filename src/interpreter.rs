@@ -66,6 +66,10 @@ struct SetDecl {
     dim: usize,
     /// The decomposed tensor when declared via `eigvals(...)`/`eigvecs(...)`.
     base: Option<Rc<TensorExpr>>,
+    /// Concrete element values filled in by `[a, b] = Spec_Decomp(C)`:
+    /// scalar expressions for a ScalarSet, order-1 `Filled` vectors for a
+    /// VectorSet. `name[1]` resolves to the value; `name[a]` stays abstract.
+    values: Option<Vec<Value>>,
 }
 
 impl Interpreter {
@@ -157,6 +161,18 @@ impl Interpreter {
                 self.env.insert(name.clone(), value);
                 Ok(())
             }
+            Stmt::AssignComponent {
+                name,
+                indices,
+                expr,
+                ..
+            } => self.exec_assign_component(name, indices, expr),
+            Stmt::AssignPair {
+                first,
+                second,
+                expr,
+                ..
+            } => self.exec_assign_pair(first, second, expr),
             Stmt::Expr(
                 Expr::Call {
                     callee,
@@ -173,6 +189,188 @@ impl Interpreter {
                 Ok(())
             }
         }
+    }
+
+    /// `F[1][1] = expr` — set one component of a declared tensor, turning
+    /// it into (or updating) a component-filled tensor. Unassigned
+    /// components are zero.
+    fn exec_assign_component(
+        &mut self,
+        name: &str,
+        indices: &[Expr],
+        expr: &Expr,
+    ) -> Result<(), Error> {
+        let rhs = match self.eval(expr)? {
+            Value::Scalar(s) => s,
+            Value::Tensor(_) => {
+                return Err(Error::msg("a tensor component must be a scalar expression"))
+            }
+        };
+        let (latex, order, dim, mut entries) = match self.env.get(name) {
+            Some(Value::Tensor(t)) => match &**t {
+                TensorExpr::Var {
+                    latex, order, dim, ..
+                } if (1..=2).contains(order) => (
+                    latex.clone(),
+                    *order,
+                    *dim,
+                    (0..dim.pow(*order as u32))
+                        .map(|_| Rc::new(ScalarExpr::Num(0.0)))
+                        .collect(),
+                ),
+                TensorExpr::Filled {
+                    latex,
+                    order,
+                    dim,
+                    entries,
+                } => (latex.clone(), *order, *dim, entries.clone()),
+                _ => {
+                    return Err(Error::msg(format!(
+                        "`{name}` is a derived expression; components can only be \
+                         assigned on a declared Tensor"
+                    )))
+                }
+            },
+            Some(Value::Scalar(_)) => {
+                return Err(Error::msg(format!("`{name}` is a scalar, not a tensor")))
+            }
+            None => {
+                return Err(Error::msg(format!(
+                    "undefined tensor `{name}`; declare it first with Tensor(...)"
+                )))
+            }
+        };
+        if indices.len() != order {
+            return Err(Error::msg(format!(
+                "`{name}` has order {order} and takes {order} index group(s), got {}",
+                indices.len()
+            )));
+        }
+        let mut flat = 0usize;
+        for idx in indices {
+            let k = match idx {
+                Expr::Num(n) if n.fract() == 0.0 && *n >= 1.0 && (*n as usize) <= dim => {
+                    *n as usize
+                }
+                _ => {
+                    return Err(Error::msg(format!(
+                        "component indices must be integers in 1..={dim}"
+                    )))
+                }
+            };
+            flat = flat * dim + (k - 1);
+        }
+        entries[flat] = rhs;
+        self.env.insert(
+            name.to_string(),
+            Value::Tensor(Rc::new(TensorExpr::Filled {
+                latex,
+                order,
+                dim,
+                entries,
+            })),
+        );
+        Ok(())
+    }
+
+    /// `[a, b] = Spec_Decomp(C)` — symbolic eigendecomposition of a
+    /// component-filled (diagonal) tensor into two pre-declared sets.
+    fn exec_assign_pair(&mut self, first: &str, second: &str, expr: &Expr) -> Result<(), Error> {
+        let Expr::Call {
+            callee,
+            args,
+            kwargs,
+        } = expr
+        else {
+            return Err(Error::msg(
+                "`[a, b] = ...` expects Spec_Decomp(C) on the right-hand side",
+            ));
+        };
+        if callee != "Spec_Decomp" {
+            return Err(Error::msg(format!(
+                "`[a, b] = ...` expects Spec_Decomp(C), got `{callee}`"
+            )));
+        }
+        if args.len() != 1 || !kwargs.is_empty() {
+            return Err(Error::msg("`Spec_Decomp` takes exactly one tensor"));
+        }
+        let c = match self.eval(&args[0])? {
+            Value::Tensor(t) => t,
+            Value::Scalar(_) => return Err(Error::msg("`Spec_Decomp` requires a tensor argument")),
+        };
+        if c.order() != 2 {
+            return Err(Error::msg("`Spec_Decomp` requires a second-order tensor"));
+        }
+        let dim = c.dim();
+        // The targets must be pre-declared sets of matching dimension.
+        match self.sets.get(first) {
+            Some(d) if !d.vector && d.dim == dim => {}
+            Some(d) if d.vector => {
+                return Err(Error::msg(format!(
+                    "`{first}` must be a ScalarSet (the principal values)"
+                )))
+            }
+            Some(_) => return Err(Error::msg("set dimension does not match the tensor")),
+            None => {
+                return Err(Error::msg(format!(
+                    "declare `{first}` first: {first} = ScalarSet(\"<latex>\", dim={dim})"
+                )))
+            }
+        }
+        match self.sets.get(second) {
+            Some(d) if d.vector && d.dim == dim => {}
+            Some(d) if !d.vector => {
+                return Err(Error::msg(format!(
+                    "`{second}` must be a VectorSet (the principal directions)"
+                )))
+            }
+            Some(_) => return Err(Error::msg("set dimension does not match the tensor")),
+            None => {
+                return Err(Error::msg(format!(
+                    "declare `{second}` first: {second} = VectorSet(\"<latex>\", dim={dim})"
+                )))
+            }
+        }
+        // Compute the entries and check diagonality (in the working basis).
+        let mut diag = Vec::with_capacity(dim);
+        for i in 0..dim {
+            for j in 0..dim {
+                let e = simplify_scalar(
+                    &Rc::new(crate::renderer::components::component(&c, i, j)?),
+                    RuleSet::Continuum,
+                );
+                if i == j {
+                    diag.push(e);
+                } else if !matches!(&*e, ScalarExpr::Num(n) if *n == 0.0) {
+                    return Err(Error::msg(format!(
+                        "symbolic eigendecomposition currently requires a diagonal \
+                         tensor in the working basis; C_{{{}{}}} = {}",
+                        i + 1,
+                        j + 1,
+                        scalar_to_latex(&e)
+                    )));
+                }
+            }
+        }
+        // Eigenvalues: the diagonal entries. Eigenvectors: the standard basis.
+        let vec_latex = self.sets[second].latex.clone();
+        let basis: Vec<Value> = (0..dim)
+            .map(|k| {
+                let entries = (0..dim)
+                    .map(|i| Rc::new(ScalarExpr::Num(if i == k { 1.0 } else { 0.0 })))
+                    .collect();
+                Value::Tensor(Rc::new(TensorExpr::Filled {
+                    latex: format!("{{{vec_latex}}}_{{{}}}", k + 1),
+                    order: 1,
+                    dim,
+                    entries,
+                }))
+            })
+            .collect();
+        self.sets.get_mut(first).unwrap().values =
+            Some(diag.into_iter().map(Value::Scalar).collect());
+        self.sets.get_mut(second).unwrap().values = Some(basis);
+        Ok(())
     }
 
     // ---- evaluation ------------------------------------------------------
@@ -614,6 +812,7 @@ impl Interpreter {
                 vector: callee == "VectorSet",
                 dim,
                 base: None,
+                values: None,
             },
         );
         Ok(())
@@ -658,6 +857,7 @@ impl Interpreter {
                 vector: callee == "eigvecs",
                 dim: base.dim(),
                 base: Some(base),
+                values: None,
             },
         );
         Ok(())
@@ -701,6 +901,10 @@ impl Interpreter {
                 ))
             }
         };
+        // A concrete index on a valued set resolves to the stored value.
+        if let (crate::symbolic::SetIndex::Num(k), Some(values)) = (&idx, &decl.values) {
+            return Ok(values[*k - 1].clone());
+        }
         if decl.vector {
             Ok(Value::Tensor(Rc::new(TensorExpr::SetElem {
                 latex: decl.latex.clone(),
@@ -765,6 +969,202 @@ impl Interpreter {
                 })))
             }
         }
+    }
+
+    /// Look up the concrete value of a set element by its display latex.
+    fn set_value(&self, latex: &str, vector: bool, k: usize) -> Option<Value> {
+        self.sets
+            .values()
+            .find(|d| d.vector == vector && d.latex == latex && d.values.is_some())
+            .and_then(|d| d.values.as_ref().unwrap().get(k - 1).cloned())
+    }
+
+    /// Expand spectral sums into explicit term chains and resolve valued
+    /// set elements, for concrete (matrix-mode) display. `bound` maps
+    /// in-scope summation indices to their current concrete value.
+    fn instantiate_tensor(
+        &self,
+        t: &Rc<TensorExpr>,
+        bound: &HashMap<String, usize>,
+    ) -> Result<Rc<TensorExpr>, Error> {
+        use crate::symbolic::SetIndex;
+        Ok(match &**t {
+            TensorExpr::SumIdx {
+                index,
+                range,
+                exclude,
+                body,
+            } => {
+                let mut bound = bound.clone();
+                let mut acc: Option<Rc<TensorExpr>> = None;
+                for k in 1..=*range {
+                    if let Some(ex) = exclude {
+                        if bound.get(ex) == Some(&k) {
+                            continue;
+                        }
+                    }
+                    bound.insert(index.clone(), k);
+                    let term = self.instantiate_tensor(body, &bound)?;
+                    acc = Some(match acc {
+                        None => term,
+                        Some(prev) => Rc::new(TensorExpr::Add(prev, term)),
+                    });
+                }
+                acc.ok_or_else(|| Error::msg("empty spectral sum"))?
+            }
+            TensorExpr::SetElem {
+                latex,
+                order,
+                dim,
+                index,
+                set_dim,
+                base,
+            } => {
+                let k = match index {
+                    SetIndex::Num(k) => Some(*k),
+                    SetIndex::Sym(name) => bound.get(name).copied(),
+                };
+                match k {
+                    Some(k) => match self.set_value(latex, true, k) {
+                        Some(Value::Tensor(v)) => v,
+                        _ => Rc::new(TensorExpr::SetElem {
+                            latex: latex.clone(),
+                            order: *order,
+                            dim: *dim,
+                            index: SetIndex::Num(k),
+                            set_dim: *set_dim,
+                            base: base.clone(),
+                        }),
+                    },
+                    None => t.clone(),
+                }
+            }
+            TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::Filled { .. } => {
+                t.clone()
+            }
+            TensorExpr::Transpose(a) => {
+                Rc::new(TensorExpr::Transpose(self.instantiate_tensor(a, bound)?))
+            }
+            TensorExpr::Inverse(a) => {
+                Rc::new(TensorExpr::Inverse(self.instantiate_tensor(a, bound)?))
+            }
+            TensorExpr::InverseTranspose(a) => Rc::new(TensorExpr::InverseTranspose(
+                self.instantiate_tensor(a, bound)?,
+            )),
+            TensorExpr::Diff {
+                num,
+                den,
+                num_label,
+            } => Rc::new(TensorExpr::Diff {
+                num: self.instantiate_tensor(num, bound)?,
+                den: self.instantiate_tensor(den, bound)?,
+                num_label: num_label.clone(),
+            }),
+            TensorExpr::MatMul(a, b) => Rc::new(TensorExpr::MatMul(
+                self.instantiate_tensor(a, bound)?,
+                self.instantiate_tensor(b, bound)?,
+            )),
+            TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(
+                self.instantiate_tensor(a, bound)?,
+                self.instantiate_tensor(b, bound)?,
+            )),
+            TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(
+                self.instantiate_tensor(a, bound)?,
+                self.instantiate_tensor(b, bound)?,
+            )),
+            TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(
+                self.instantiate_tensor(a, bound)?,
+                self.instantiate_tensor(b, bound)?,
+            )),
+            TensorExpr::BoxTimes(a, b) => Rc::new(TensorExpr::BoxTimes(
+                self.instantiate_tensor(a, bound)?,
+                self.instantiate_tensor(b, bound)?,
+            )),
+            TensorExpr::ScalarMul(s, a) => Rc::new(TensorExpr::ScalarMul(
+                self.instantiate_scalar(s, bound)?,
+                self.instantiate_tensor(a, bound)?,
+            )),
+            TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(self.instantiate_tensor(a, bound)?)),
+        })
+    }
+
+    fn instantiate_scalar(
+        &self,
+        s: &Rc<ScalarExpr>,
+        bound: &HashMap<String, usize>,
+    ) -> Result<Rc<ScalarExpr>, Error> {
+        use crate::symbolic::SetIndex;
+        Ok(match &**s {
+            ScalarExpr::SetElem {
+                latex,
+                index,
+                set_dim,
+                eig,
+            } => {
+                let k = match index {
+                    SetIndex::Num(k) => Some(*k),
+                    SetIndex::Sym(name) => bound.get(name).copied(),
+                };
+                match k {
+                    Some(k) => match self.set_value(latex, false, k) {
+                        Some(Value::Scalar(v)) => v,
+                        _ => Rc::new(ScalarExpr::SetElem {
+                            latex: latex.clone(),
+                            index: SetIndex::Num(k),
+                            set_dim: *set_dim,
+                            eig: eig.clone(),
+                        }),
+                    },
+                    None => s.clone(),
+                }
+            }
+            ScalarExpr::SpecSum { body, index, dim } => {
+                let mut bound = bound.clone();
+                let mut acc: Option<Rc<ScalarExpr>> = None;
+                for k in 1..=*dim {
+                    bound.insert(index.clone(), k);
+                    let term = self.instantiate_scalar(body, &bound)?;
+                    acc = Some(match acc {
+                        None => term,
+                        Some(prev) => Rc::new(ScalarExpr::Add(prev, term)),
+                    });
+                }
+                acc.ok_or_else(|| Error::msg("empty spectral sum"))?
+            }
+            ScalarExpr::Sym { .. } | ScalarExpr::Num(_) => s.clone(),
+            ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(
+                self.instantiate_scalar(a, bound)?,
+                self.instantiate_scalar(b, bound)?,
+            )),
+            ScalarExpr::Sub(a, b) => Rc::new(ScalarExpr::Sub(
+                self.instantiate_scalar(a, bound)?,
+                self.instantiate_scalar(b, bound)?,
+            )),
+            ScalarExpr::Mul(a, b) => Rc::new(ScalarExpr::Mul(
+                self.instantiate_scalar(a, bound)?,
+                self.instantiate_scalar(b, bound)?,
+            )),
+            ScalarExpr::Div(a, b) => Rc::new(ScalarExpr::Div(
+                self.instantiate_scalar(a, bound)?,
+                self.instantiate_scalar(b, bound)?,
+            )),
+            ScalarExpr::Pow(a, b) => Rc::new(ScalarExpr::Pow(
+                self.instantiate_scalar(a, bound)?,
+                self.instantiate_scalar(b, bound)?,
+            )),
+            ScalarExpr::Neg(a) => Rc::new(ScalarExpr::Neg(self.instantiate_scalar(a, bound)?)),
+            ScalarExpr::Log(a) => Rc::new(ScalarExpr::Log(self.instantiate_scalar(a, bound)?)),
+            ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
+                name: name.clone(),
+                arg: self.instantiate_scalar(arg, bound)?,
+            }),
+            ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(self.instantiate_tensor(t, bound)?)),
+            ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(self.instantiate_tensor(t, bound)?)),
+            ScalarExpr::Ddot(a, b) => Rc::new(ScalarExpr::Ddot(
+                self.instantiate_tensor(a, bound)?,
+                self.instantiate_tensor(b, bound)?,
+            )),
+        })
     }
 
     /// The declared `Var` arguments that occur free in `body`.
@@ -1054,7 +1454,45 @@ impl Interpreter {
                 }
             }
             (Value::Tensor(t), "components" | "matrix") => {
-                Ok(format!("{lhs}{}", tensor_to_component_matrix(t)?))
+                // Spectral sums over valued sets expand to explicit,
+                // simplified entries; everything else uses the plain
+                // component expansion.
+                let inst = self.instantiate_tensor(t, &HashMap::new())?;
+                // Column-vector display for component-filled vectors.
+                if let TensorExpr::Filled {
+                    order: 1, entries, ..
+                } = &*inst
+                {
+                    let rows: Vec<String> = entries
+                        .iter()
+                        .map(|e| scalar_to_latex(&simplify_scalar(e, RuleSet::Continuum)))
+                        .collect();
+                    return Ok(format!(
+                        "{lhs}\\begin{{bmatrix}}\n{}\n\\end{{bmatrix}}",
+                        rows.join(" \\\\\n")
+                    ));
+                }
+                if inst != *t || contains_filled(&inst) {
+                    let dim = inst.dim();
+                    let mut rows = Vec::with_capacity(dim);
+                    for i in 0..dim {
+                        let mut row = Vec::with_capacity(dim);
+                        for j in 0..dim {
+                            let e = simplify_scalar(
+                                &Rc::new(crate::renderer::components::component(&inst, i, j)?),
+                                RuleSet::Continuum,
+                            );
+                            row.push(scalar_to_latex(&e));
+                        }
+                        rows.push(row.join(" & "));
+                    }
+                    Ok(format!(
+                        "{lhs}\\begin{{bmatrix}}\n{}\n\\end{{bmatrix}}",
+                        rows.join(" \\\\\n")
+                    ))
+                } else {
+                    Ok(format!("{lhs}{}", tensor_to_component_matrix(t)?))
+                }
             }
             (Value::Tensor(_), "block_components") => Err(Error::msg(
                 "block_components is only available for fourth-order derivative \
@@ -1127,6 +1565,27 @@ fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
 
 /// The family size of the (first) set element carrying abstract index
 /// `idx` inside a tensor expression, if any.
+/// Does the tree contain a component-filled tensor (whose entries should
+/// be simplified for matrix display)?
+fn contains_filled(t: &TensorExpr) -> bool {
+    match t {
+        TensorExpr::Filled { .. } => true,
+        TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => false,
+        TensorExpr::Transpose(a)
+        | TensorExpr::Inverse(a)
+        | TensorExpr::InverseTranspose(a)
+        | TensorExpr::Neg(a)
+        | TensorExpr::ScalarMul(_, a) => contains_filled(a),
+        TensorExpr::Diff { num, den, .. } => contains_filled(num) || contains_filled(den),
+        TensorExpr::MatMul(a, b)
+        | TensorExpr::Add(a, b)
+        | TensorExpr::Sub(a, b)
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => contains_filled(a) || contains_filled(b),
+        TensorExpr::SumIdx { body, .. } => contains_filled(body),
+    }
+}
+
 fn tensor_index_range(t: &TensorExpr, idx: &str) -> Option<usize> {
     use crate::symbolic::SetIndex;
     match t {
@@ -1136,6 +1595,9 @@ fn tensor_index_range(t: &TensorExpr, idx: &str) -> Option<usize> {
             ..
         } if i == idx => Some(*set_dim),
         TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => None,
+        TensorExpr::Filled { entries, .. } => {
+            entries.iter().find_map(|e| scalar_index_range(e, idx))
+        }
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)

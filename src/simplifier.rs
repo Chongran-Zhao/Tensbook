@@ -123,6 +123,17 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             exclude: exclude.clone(),
             body: tensor_pass(body, rules),
         }),
+        TensorExpr::Filled {
+            latex,
+            order,
+            dim,
+            entries,
+        } => Rc::new(TensorExpr::Filled {
+            latex: latex.clone(),
+            order: *order,
+            dim: *dim,
+            entries: entries.iter().map(|e| scalar_pass(e, rules)).collect(),
+        }),
         TensorExpr::Neg(a) => Rc::new(TensorExpr::Neg(tensor_pass(a, rules))),
     };
     rewrite_tensor(rebuilt, rules)
@@ -448,6 +459,8 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (_, ScalarExpr::Num(x)) if *x == 0.0 => Rc::new(ScalarExpr::Num(0.0)),
             (ScalarExpr::Num(x), _) if *x == 1.0 => b.clone(),
             (_, ScalarExpr::Num(x)) if *x == 1.0 => a.clone(),
+            (ScalarExpr::Num(x), _) if *x == -1.0 => Rc::new(ScalarExpr::Neg(b.clone())),
+            (_, ScalarExpr::Num(x)) if *x == -1.0 => Rc::new(ScalarExpr::Neg(a.clone())),
             (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x * y)),
             // (−x) · y → −(x y), x · (−y) → −(x y)
             (ScalarExpr::Neg(x), _) => Rc::new(ScalarExpr::Neg(Rc::new(ScalarExpr::Mul(

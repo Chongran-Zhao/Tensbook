@@ -506,6 +506,11 @@ fn collect_scalar_set_elems_tensor<'a>(
     out: &mut Vec<ScalarSetElemRef<'a>>,
 ) {
     match &**t {
+        TensorExpr::Filled { entries, .. } => {
+            for e in entries {
+                collect_scalar_set_elems(e, index, out);
+            }
+        }
         TensorExpr::ScalarMul(s, a) => {
             collect_scalar_set_elems(s, index, out);
             collect_scalar_set_elems_tensor(a, index, out);
@@ -688,6 +693,17 @@ fn rewrite_tensor_for_compound(
     let rwt = |e: &Rc<TensorExpr>| rewrite_tensor_for_compound(e, x, a);
     match &**t {
         TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Filled {
+            latex,
+            order,
+            dim,
+            entries,
+        } => Rc::new(TensorExpr::Filled {
+            latex: latex.clone(),
+            order: *order,
+            dim: *dim,
+            entries: entries.iter().map(rw).collect(),
+        }),
         TensorExpr::SetElem {
             latex,
             order,
@@ -793,6 +809,17 @@ fn replace_tensor(
     let rt = |e: &Rc<TensorExpr>| replace_tensor(e, target, replacement);
     match &**t {
         TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => t.clone(),
+        TensorExpr::Filled {
+            latex,
+            order,
+            dim,
+            entries,
+        } => Rc::new(TensorExpr::Filled {
+            latex: latex.clone(),
+            order: *order,
+            dim: *dim,
+            entries: entries.iter().map(rs).collect(),
+        }),
         TensorExpr::SetElem {
             latex,
             order,
@@ -850,6 +877,9 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
     }
     match &**t {
         TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => Ok(None),
+        TensorExpr::Filled { .. } => Err(Error::msg(
+            "differentiating a component-filled tensor is not supported yet",
+        )),
         TensorExpr::SetElem { .. } => Err(Error::msg(
             "the derivative of eigenvectors is not supported yet; write the \
              energy in terms of the eigenvalues",
@@ -1088,6 +1118,9 @@ fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExp
 fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
     match t {
         TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => false,
+        TensorExpr::Filled { entries, .. } => {
+            entries.iter().any(|e| scalar_mentions_scalar(e, name))
+        }
         TensorExpr::SetElem { base, .. } => base
             .as_ref()
             .is_some_and(|b| tensor_mentions_scalar(b, name)),
@@ -1142,7 +1175,7 @@ pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
 /// Collect the names of tensor variables appearing in `x`.
 fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
     match t {
-        TensorExpr::SetElem { .. } => {}
+        TensorExpr::SetElem { .. } | TensorExpr::Filled { .. } => {}
         TensorExpr::SumIdx { body, .. } => tensor_var_names(body, out),
         TensorExpr::Var { name, .. } => {
             if !out.contains(name) {
@@ -1220,6 +1253,12 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
     }
     match t {
         TensorExpr::Identity4 { .. } => Ok(()),
+        TensorExpr::Filled { entries, .. } => {
+            for e in entries {
+                walk_scalar(e, x, vars)?;
+            }
+            Ok(())
+        }
         TensorExpr::SetElem { base, .. } => match base {
             Some(b) => walk_tensor(b, x, vars),
             None => Ok(()),
@@ -1559,6 +1598,7 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
     }
     match t {
         TensorExpr::Var { .. } | TensorExpr::Identity4 { .. } => false,
+        TensorExpr::Filled { entries, .. } => entries.iter().any(|e| s_contains(e, x)),
         // An eigenvector element depends on its decomposed tensor.
         TensorExpr::SetElem { base, .. } => base.as_ref().is_some_and(|b| t_contains(b, x)),
         TensorExpr::SumIdx { body, .. } => t_contains(body, x),

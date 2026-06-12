@@ -133,6 +133,9 @@ function showError(message) {
   div.className = "error";
   div.textContent = String(message);
   output.appendChild(div);
+  // The output pane now holds only this error; a later live run must not
+  // treat it as good results and prepend a second parse banner on top.
+  lastGoodShown = false;
 }
 
 function copyButton(label, text) {

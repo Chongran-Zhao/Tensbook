@@ -86,6 +86,10 @@ pub fn abstract_component(
     counter: &mut usize,
 ) -> Result<Vec<Term>, Error> {
     match expr {
+        TensorExpr::Filled { .. } => Err(Error::msg(
+            "component-filled tensors have no abstract component form; use \
+             mode=matrix",
+        )),
         TensorExpr::Var { latex, props, .. } => {
             let mut t = Term::one();
             if props.identity {
@@ -257,6 +261,7 @@ fn scalar_depends(s: &ScalarExpr, base: &str) -> bool {
 fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
     match t {
         TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => false,
+        TensorExpr::Filled { entries, .. } => entries.iter().any(|e| scalar_depends(e, base)),
         TensorExpr::SumIdx { body, .. } => tensor_mentions(body, base),
         TensorExpr::Var { latex, .. } => component_base(latex) == base,
         TensorExpr::Transpose(a)

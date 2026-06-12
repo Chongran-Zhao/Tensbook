@@ -91,6 +91,16 @@ pub enum TensorExpr {
         exclude: Option<String>,
         body: Rc<TensorExpr>,
     },
+    /// A component-filled tensor (a "tensor function" of the scalars in its
+    /// entries): built by `F[1][1] = ...` assignments. Entries are row-major
+    /// (`order` 1 or 2); unassigned components are zero. Displays as `latex`
+    /// in symbol mode and as its entries in matrix mode.
+    Filled {
+        latex: String,
+        order: usize,
+        dim: usize,
+        entries: Vec<Rc<ScalarExpr>>,
+    },
 }
 
 impl TensorExpr {
@@ -108,6 +118,7 @@ impl TensorExpr {
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.order(),
             TensorExpr::SetElem { order, .. } => *order,
             TensorExpr::SumIdx { body, .. } => body.order(),
+            TensorExpr::Filled { order, .. } => *order,
         }
     }
 
@@ -125,6 +136,7 @@ impl TensorExpr {
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.dim(),
             TensorExpr::SetElem { dim, .. } => *dim,
             TensorExpr::SumIdx { body, .. } => body.dim(),
+            TensorExpr::Filled { dim, .. } => *dim,
         }
     }
 

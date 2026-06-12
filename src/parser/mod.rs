@@ -91,17 +91,90 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Stmt, Error> {
         let line = self.line();
-        // Lookahead: IDENT "=" starts an assignment (but IDENT "==" would not;
-        // the MVP grammar has no "==", so a single Eq is unambiguous).
+        // `[a, b] = expr` — destructuring assignment.
+        if matches!(self.peek(), Tok::LBracket) {
+            return self.parse_pair_assignment(line);
+        }
         if let Tok::Ident(name) = self.peek().clone() {
+            // Lookahead: IDENT "=" starts an assignment (but IDENT "==" would
+            // not; the MVP grammar has no "==", so a single Eq is unambiguous).
             if self.tokens[self.pos + 1].tok == Tok::Eq {
                 self.next(); // ident
                 self.next(); // =
                 let expr = self.parse_expr()?;
                 return Ok(Stmt::Assign { name, expr, line });
             }
+            // Tentative: IDENT ("[" expr "]")+ "=" is a component assignment;
+            // anything else falls back to an expression statement.
+            if self.tokens[self.pos + 1].tok == Tok::LBracket {
+                let saved = self.pos;
+                if let Some(stmt) = self.try_parse_component_assignment(name, line)? {
+                    return Ok(stmt);
+                }
+                self.pos = saved;
+            }
         }
         Ok(Stmt::Expr(self.parse_expr()?, line))
+    }
+
+    /// `[a, b] = expr`
+    fn parse_pair_assignment(&mut self, line: usize) -> Result<Stmt, Error> {
+        self.next(); // [
+        let first = match self.next() {
+            Tok::Ident(name) => name,
+            tok => {
+                return Err(Error::new(
+                    format!("expected a set name in `[a, b] = ...`, found {tok:?}"),
+                    Some(line),
+                ))
+            }
+        };
+        self.expect(&Tok::Comma, "`,`")?;
+        let second = match self.next() {
+            Tok::Ident(name) => name,
+            tok => {
+                return Err(Error::new(
+                    format!("expected a set name in `[a, b] = ...`, found {tok:?}"),
+                    Some(line),
+                ))
+            }
+        };
+        self.expect(&Tok::RBracket, "`]`")?;
+        self.expect(&Tok::Eq, "`=`")?;
+        let expr = self.parse_expr()?;
+        Ok(Stmt::AssignPair {
+            first,
+            second,
+            expr,
+            line,
+        })
+    }
+
+    /// `F[1][1] = expr` — returns `None` (caller rewinds) when the indexed
+    /// expression is not followed by `=`.
+    fn try_parse_component_assignment(
+        &mut self,
+        name: String,
+        line: usize,
+    ) -> Result<Option<Stmt>, Error> {
+        self.next(); // ident
+        let mut indices = Vec::new();
+        while matches!(self.peek(), Tok::LBracket) {
+            self.next();
+            indices.push(self.parse_expr()?);
+            self.expect(&Tok::RBracket, "`]`")?;
+        }
+        if self.peek() != &Tok::Eq {
+            return Ok(None);
+        }
+        self.next(); // =
+        let expr = self.parse_expr()?;
+        Ok(Some(Stmt::AssignComponent {
+            name,
+            indices,
+            expr,
+            line,
+        }))
     }
 
     fn parse_expr(&mut self) -> Result<Expr, Error> {
@@ -275,8 +348,14 @@ impl Parser {
                 kwargs.push((name, value));
             } else {
                 if !kwargs.is_empty() {
+                    let hint = match self.peek() {
+                        Tok::Ident(name) => {
+                            format!(" (flags are written `{name}=true`, not bare `{name}`)")
+                        }
+                        _ => String::new(),
+                    };
                     return Err(Error::new(
-                        "positional argument after keyword argument",
+                        format!("positional argument after keyword argument{hint}"),
                         Some(self.line()),
                     ));
                 }
