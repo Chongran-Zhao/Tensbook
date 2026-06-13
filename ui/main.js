@@ -66,8 +66,6 @@ ${TENS_CLOSE}
 `;
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
-const TENS_PLACEHOLDER = "Write TensorForge code here.";
-let pendingTensFocus = null;
 
 const editor = document.getElementById("editor");
 const editorWrap = document.getElementById("editor-wrap");
@@ -193,7 +191,7 @@ function syncGutter(errorLines = new Set(), options = {}) {
   }
   gutter.scrollTop = editor.scrollTop;
   syncSourceLayerScroll();
-  if (syncBlocks && !isEditingTens()) syncTensBoxes();
+  if (syncBlocks) syncTensBoxes();
 }
 
 function clearGutterErrors() {
@@ -289,8 +287,7 @@ const storedEditorWidth = Number(localStorage.getItem("tensorforge.editorWidth")
 if (storedEditorWidth >= 280) editorWrap.style.flexBasis = `${storedEditorWidth}px`;
 
 function refreshEditorGeometry() {
-  syncGutter(new Set(), { syncBlocks: !isEditingTens() });
-  if (isEditingTens()) repositionTensBoxes();
+  syncGutter();
 }
 
 function editorWidthBounds() {
@@ -781,6 +778,9 @@ async function printDocument(bodyHtml) {
   document.addEventListener("keydown", cleanup, { once: true });
 }
 
+// Insert an empty .tens block at the caret and place the cursor on its
+// (empty) body line, inside the main editor — there is no separate overlay
+// editor; the block is highlighted in place by syncTensBoxes.
 function insertTensBlock() {
   const start = editor.selectionStart;
   const end = editor.selectionEnd;
@@ -789,14 +789,9 @@ function insertTensBlock() {
   const block = `${needsLeadingBreak ? "\n" : ""}${TENS_OPEN}\n\n${TENS_CLOSE}\n${needsTrailingBreak ? "\n" : ""}`;
   editor.setRangeText(block, start, end, "end");
   const openFenceOffset = start + (needsLeadingBreak ? 1 : 0);
-  pendingTensFocus = {
-    startLine: lineForOffset(editor.value, openFenceOffset),
-    selectionStart: 0,
-    selectionEnd: 0,
-  };
-  const selectStart = openFenceOffset + `${TENS_OPEN}\n`.length;
+  const bodyOffset = openFenceOffset + `${TENS_OPEN}\n`.length;
   editor.focus();
-  editor.setSelectionRange(selectStart, selectStart);
+  editor.setSelectionRange(bodyOffset, bodyOffset);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -863,76 +858,31 @@ function syncSourceLayerScroll() {
   document.getElementById("code-layer").style.transform = y;
 }
 
+// Non-interactive highlight underlay for .tens blocks. The single main
+// <textarea> stays the only editor (scrolls and edits normally); these
+// boxes just paint a tinted background + left bar + "tens" tag behind the
+// text, so there is no overlay to intercept the wheel, drift, or hide the
+// sentinel lines. pointer-events:none lets clicks/scroll fall through.
 function syncTensBoxes() {
   const codeLayer = document.getElementById("code-layer");
   codeLayer.style.left = `${gutter.offsetWidth}px`;
   const boxes = tensBlocksFromSource(editor.value).map((block) => {
     const div = document.createElement("div");
     div.className = "source-code-box";
-    div._block = block; // shared with the closures; repositionTensBoxes refreshes it
-    div.dataset.startLine = String(block.line);
-    div.style.top = `${sourceLineTop(block.line) - 2}px`;
-    div.style.height = `${rowSpanHeight(block.line, block.endLine, 3) + 4}px`;
-    const tensEditor = document.createElement("textarea");
-    tensEditor.className = "source-tens-editor";
-    tensEditor.spellcheck = false;
-    tensEditor.wrap = "soft";
-    tensEditor.placeholder = TENS_PLACEHOLDER;
-    tensEditor.value = block.lines.join("\n");
-    tensEditor.addEventListener("focus", () => queueMicrotask(updateInsertTableState));
-    tensEditor.addEventListener("input", () => updateTensBlock(block, tensEditor));
-    tensEditor.addEventListener("keydown", (e) => handleTensKeydown(e, block, tensEditor));
-    div.appendChild(tensEditor);
+    div.style.top = `${sourceLineTop(block.line)}px`;
+    div.style.height = `${rowSpanHeight(block.line, block.endLine)}px`;
+    const tag = document.createElement("span");
+    tag.className = "region-tag";
+    tag.textContent = "tens";
+    div.appendChild(tag);
     return div;
   });
   codeLayer.replaceChildren(...boxes);
   syncSourceLayerScroll();
-  restorePendingTensFocus();
 }
 
 function syncCodeBoxes() {
   syncTensBoxes();
-}
-
-function updateTensBlock(block, tensEditor) {
-  const current = currentTensBlock(block) ?? block;
-  replaceTensBlock(current, tensEditor.value);
-  localStorage.setItem("tensorforge.source.v3", editor.value);
-  syncGutter(new Set(), { syncBlocks: false });
-  // Reposition every box (without rebuilding, to keep focus): edits in this
-  // block shift the line spans of all blocks below it.
-  repositionTensBoxes();
-  scheduleLiveRun();
-}
-
-function handleTensKeydown(e, block, tensEditor) {
-  const empty = tensEditor.value.length === 0;
-  const collapsed = tensEditor.selectionStart === tensEditor.selectionEnd;
-  if (empty && collapsed && (e.key === "Backspace" || e.key === "Delete")) {
-    e.preventDefault();
-    removeTensBlock(block);
-  }
-}
-
-function replaceTensBlock(block, code) {
-  // setRangeText (not a value assignment) keeps the main editor's undo
-  // history intact and leaves the rest of the file byte-identical.
-  const [start, end] = lineRangeOffsets(editor.value, block.line, block.endLine);
-  editor.setRangeText(`${TENS_OPEN}\n${code}\n${TENS_CLOSE}`, start, end, "preserve");
-}
-
-function removeTensBlock(block) {
-  // Re-resolve the block: the closure's line span goes stale while the
-  // block is being edited, and a stale span would delete following text.
-  const current = currentTensBlock(block) ?? block;
-  const start = offsetForLine(editor.value, current.line);
-  const end = offsetForLine(editor.value, current.endLine + 1); // incl. newline
-  editor.setRangeText("", start, end, "start");
-  editor.focus();
-  editor.setSelectionRange(start, start);
-  localStorage.setItem("tensorforge.source.v3", editor.value);
-  clearGutterErrors();
-  scheduleLiveRun();
 }
 
 // Character offset of the start of `line` (1-based).
@@ -963,44 +913,14 @@ function lineForOffset(source, offset) {
   return line;
 }
 
-function currentTensBlock(block) {
-  return tensBlocksFromSource(editor.value).find((candidate) => candidate.line === block.line);
-}
-
-/// Refresh position, size and the closure-shared block objects of all .tens
-/// boxes from the current source, without rebuilding the DOM (rebuilding
-/// would destroy the focused .tens editor). Falls back to doing nothing when
-/// the block count changed (a fence was typed); the next full sync rebuilds.
-function repositionTensBoxes() {
-  const fresh = tensBlocksFromSource(editor.value);
-  const boxes = [...document.getElementById("code-layer").children];
-  if (fresh.length !== boxes.length) return;
-  boxes.forEach((box, i) => {
-    const block = fresh[i];
-    if (box._block) Object.assign(box._block, block);
-    box.dataset.startLine = String(block.line);
-    box.style.top = `${sourceLineTop(block.line) - 2}px`;
-    box.style.height = `${rowSpanHeight(block.line, block.endLine, 3) + 4}px`;
-  });
-  syncSourceLayerScroll();
-}
-
-function isEditingTens() {
-  return document.activeElement?.classList?.contains("source-tens-editor");
-}
-
-function restorePendingTensFocus() {
-  if (!pendingTensFocus) return;
-  const focus = pendingTensFocus;
-  pendingTensFocus = null;
-  const box = document.getElementById("code-layer").querySelector(
-    `.source-code-box[data-start-line="${focus.startLine}"] .source-tens-editor`,
+// True when the main editor's caret sits inside a .tens block body — used
+// only to disable the Markdown table button there.
+function caretInTensBlock() {
+  if (document.activeElement !== editor) return false;
+  const line = lineForOffset(editor.value, editor.selectionStart);
+  return tensBlocksFromSource(editor.value).some(
+    (b) => line > b.line && line < b.endLine,
   );
-  if (!box) return;
-  const start = Math.min(focus.selectionStart, box.value.length);
-  const end = Math.min(focus.selectionEnd, box.value.length);
-  box.focus();
-  box.setSelectionRange(start, end);
 }
 
 // Pasted images are embedded as data-URL markdown so the .tens file stays
@@ -1028,7 +948,7 @@ function handleMarkdownPaste(e) {
 let tableTarget = null;
 
 function updateInsertTableState() {
-  insertTableBtn.disabled = isEditingTens();
+  insertTableBtn.disabled = caretInTensBlock();
 }
 
 function openTableMenu() {
@@ -1152,22 +1072,7 @@ function scrollEditorToLine(line, options = {}) {
 }
 
 function focusSourceLine(line) {
-  const tens = tensBlocksFromSource(editor.value).find(
-    (block) => line >= block.line && line <= block.endLine,
-  );
-  if (tens) {
-    if (!isEditingTens()) syncTensBoxes();
-    const box = document.getElementById("code-layer").querySelector(
-      `.source-code-box[data-start-line="${tens.line}"] .source-tens-editor`,
-    );
-    if (box) {
-      const bodyLine = Math.max(1, Math.min(tens.lines.length + 1, line - tens.line));
-      const offset = offsetForLine(box.value, bodyLine);
-      box.focus();
-      box.setSelectionRange(offset, offset);
-      return;
-    }
-  }
+  // Single editor now: just place the caret on the requested line.
   const offset = offsetForLine(editor.value, line);
   editor.focus();
   editor.setSelectionRange(offset, offset);
@@ -1238,7 +1143,7 @@ function renderOutputBlock(item) {
 function renderOutputs(outputs) {
   output.innerHTML = "";
   lastRenderedOutputs = outputs;
-  markGutterErrors(outputs, { syncBlocks: !isEditingTens() });
+  markGutterErrors(outputs);
   const blocks = [
     ...markdownBlocksFromSource(editor.value),
     ...outputs.map((item) => ({ kind: "output", ...item })),
@@ -1315,26 +1220,19 @@ editor.addEventListener("input", () => {
   scheduleLiveRun();
 });
 editor.addEventListener("focus", updateInsertTableState);
+// Keep the Table button's enabled state current as the caret moves in/out
+// of .tens blocks.
+editor.addEventListener("keyup", updateInsertTableState);
+editor.addEventListener("click", updateInsertTableState);
 editor.addEventListener("paste", handleMarkdownPaste);
 editor.addEventListener("scroll", () => {
+  // The highlight underlay follows by transform; no rebuild needed.
   gutter.scrollTop = editor.scrollTop;
   syncSourceLayerScroll();
-  // A full rebuild would destroy the focused .tens editor mid-edit.
-  if (isEditingTens()) repositionTensBoxes();
-  else syncTensBoxes();
   syncOutputToEditor();
 });
 output.addEventListener("scroll", syncEditorToOutput);
 window.addEventListener("resize", refreshEditorGeometry);
-// Leaving a .tens editor is the moment to rebuild boxes so stale spans never
-// survive an editing session.
-document.getElementById("code-layer").addEventListener("focusin", () => queueMicrotask(updateInsertTableState));
-document.getElementById("code-layer").addEventListener("focusout", (e) => {
-  // Focus moving into the table popover must not rebuild boxes mid-interaction.
-  if (tableMenu.contains(e.relatedTarget)) return;
-  updateInsertTableState();
-  if (!document.getElementById("code-layer").contains(e.relatedTarget)) syncTensBoxes();
-});
 // initial render on startup
 scheduleLiveRun();
 

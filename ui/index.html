@@ -202,30 +202,26 @@
     visibility: hidden; pointer-events: none; z-index: -1;
     white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
   }
+  /* Non-interactive highlight underlay: sits BELOW the editor text
+     (z-index 0 < #editor's 1) and never eats pointer/scroll events, so the
+     single textarea scrolls and edits normally. */
   #code-layer {
     position: absolute; top: 0; right: 0; bottom: 0;
-    overflow: hidden; pointer-events: none; z-index: 2;
+    overflow: hidden; pointer-events: none; z-index: 0;
     will-change: transform;
   }
   .source-code-box {
-    position: absolute; left: 8px; right: 8px;
-    border: 1px solid var(--tens-frame);
-    background: color-mix(in srgb, var(--panel) 94%, var(--tens-frame));
-    border-radius: 8px;
-    pointer-events: auto;
-    overflow: hidden;
+    position: absolute; left: 0; right: 0;
+    background: color-mix(in srgb, var(--tens-frame) 12%, transparent);
+    border-left: 3px solid var(--tens-frame);
+    pointer-events: none;
   }
-  .source-tens-editor {
-    display: block; width: 100%; height: 100%;
-    resize: none; border: 0; outline: none;
-    background: transparent; color: var(--text);
-    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
-    padding: 9px 12px; overflow: hidden;
-    white-space: pre-wrap; word-wrap: break-word; tab-size: 4;
-  }
-  .source-tens-editor::placeholder {
-    color: var(--muted);
-    opacity: 0.55;
+  .source-code-box .region-tag {
+    position: absolute; top: 0; right: 0;
+    font: 10px/1.6 -apple-system, "Segoe UI", sans-serif;
+    padding: 0 7px; border-radius: 0 0 0 6px;
+    background: var(--tens-frame); color: var(--accent-text);
+    pointer-events: none; user-select: none; opacity: 0.85;
   }
   /* hidden mirror used to measure caret position */
   .cm-mirror {
