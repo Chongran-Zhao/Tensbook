@@ -284,7 +284,7 @@ fn tprec(expr: &TensorExpr) -> u8 {
 
 fn superscripted(t: &TensorExpr, sup: &str) -> String {
     let base = match t {
-        TensorExpr::Var { .. } => render_tensor(t),
+        TensorExpr::Var { .. } | TensorExpr::Filled { .. } => render_tensor(t),
         _ => paren(render_tensor(t)),
     };
     format!("{base}^{{{sup}}}")

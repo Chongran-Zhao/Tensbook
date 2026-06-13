@@ -1,6 +1,7 @@
-// TensorForge frontend: send DSL source to the Rust engine, render the
-// returned LaTeX with KaTeX. `\bm` is mapped to `\boldsymbol` via a macro
-// because KaTeX does not ship the bm package.
+// TensorForge frontend. The visible editor is a small document/block editor:
+// Markdown is the default, TensorForge code lives in blue .tens blocks. The
+// saved/runner source is still the plain .tens text format with hidden
+// tensorforge:tens sentinels, so files stay backward compatible.
 
 import { setupCompletion } from "./completion.js";
 
@@ -8,12 +9,14 @@ const invoke = window.__TAURI__?.core?.invoke;
 
 const TENS_OPEN = "<!-- tensorforge:tens -->";
 const TENS_CLOSE = "<!-- /tensorforge:tens -->";
+const NOTE_OPEN = "<!-- tensorforge:note -->";
+const NOTE_CLOSE = "<!-- /tensorforge:note -->";
 
 const DEFAULT_SOURCE = `# Incompressible uniaxial tension
 
 This document derives the axial first Piola-Kirchhoff stress component for a
-Mooney-Rivlin material. Ordinary text is Markdown by default; only blue
-.tens blocks are executed.
+Mooney-Rivlin material. Ordinary text is Markdown by default; blue .tens blocks
+are executed.
 
 $$
 \\bm F = \\operatorname{diag}(\\lambda, \\lambda^{-1/2}, \\lambda^{-1/2})
@@ -52,7 +55,7 @@ P11 = Scalar("P_{11}")
 P11 = simplify(diff(W, lam))
 ${TENS_CLOSE}
 
-The first component of the first Piola-Kirchhoff stress is \(P_{11}=dW/d\\lambda\).
+The first component of the first Piola-Kirchhoff stress is \\(P_{11}=dW/d\\lambda\\).
 
 ${TENS_OPEN}
 display(F, mode=matrix)
@@ -67,27 +70,41 @@ ${TENS_CLOSE}
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 
-const editor = document.getElementById("editor");
+const editor = document.getElementById("editor"); // hidden serialized source
+const sourceEditor = document.getElementById("source-editor");
+const sourceGutter = document.getElementById("source-gutter");
 const editorWrap = document.getElementById("editor-wrap");
-const gutter = document.getElementById("gutter");
+const mainEl = document.querySelector("main");
 const output = document.getElementById("output");
 const splitResizer = document.getElementById("split-resizer");
 const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
 const saveBtn = document.getElementById("save");
 const fileRail = document.getElementById("file-rail");
+const railToggle = document.getElementById("rail-toggle");
 const railFolder = document.getElementById("rail-folder");
 const railFiles = document.getElementById("rail-files");
 const insertTableBtn = document.getElementById("insert-table");
 const tableMenu = document.getElementById("table-menu");
 const printRoot = document.getElementById("print-root");
-const addNoteBtn = document.getElementById("add-note");
+const addTensBtn = document.getElementById("add-note");
 const exportBtn = document.getElementById("export");
 const exportMenu = document.getElementById("export-menu");
 const exportMdBtn = document.getElementById("export-md");
 const exportPdfBtn = document.getElementById("export-pdf");
 const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
+
+let currentPath = null;
+let lastRenderedOutputs = [];
+let liveTimer = null;
+let lastGoodShown = false;
+let nextBlockId = 1;
+let docBlocks = [];
+let activeBlockId = null;
+let activeTextarea = null;
+let scrollSyncSource = null;
+let scrollSyncFrame = null;
 
 // ---- theme ----------------------------------------------------------------
 
@@ -98,17 +115,14 @@ function applyTheme(theme) {
 
 applyTheme(
   localStorage.getItem("tensorforge.theme") ??
-    (window.matchMedia?.("(prefers-color-scheme: light)").matches
-      ? "light"
-      : "dark"),
+    (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 );
 
 function toggleTheme() {
-  const cur = document.documentElement.dataset.theme;
-  applyTheme(cur === "dark" ? "light" : "dark");
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 }
 
-// ---- about dialog -----------------------------------------------------------
+// ---- about dialog ----------------------------------------------------------
 
 const aboutOverlay = document.getElementById("about-overlay");
 document.getElementById("about-btn").addEventListener("click", () => {
@@ -121,8 +135,6 @@ aboutOverlay.addEventListener("click", (e) => {
   if (e.target === aboutOverlay) aboutOverlay.classList.remove("show");
 });
 
-// External links: the Tauri webview blocks target=_blank popups, so route
-// them through the opener plugin (falls back to window.open in a browser).
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href^='http'], a[href^='mailto:']");
   if (!a) return;
@@ -132,97 +144,460 @@ document.addEventListener("click", (e) => {
   else window.open(a.href, "_blank");
 });
 
-// Path of the currently open file; null = unsaved buffer.
-let currentPath = null;
-let lastRenderedOutputs = [];
-
 function setCurrentPath(path) {
   currentPath = path;
   filenameEl.textContent = path ? path.split("/").pop() : "";
   filenameEl.title = path ?? "";
 }
 
-// v3 key: the bundled template changed to the hand-written spectral Hill
-// derivation; older cached sources are intentionally not migrated.
-editor.value = localStorage.getItem("tensorforge.source.v3") ?? DEFAULT_SOURCE;
-setupCompletion(editor);
+// ---- document model --------------------------------------------------------
 
-// ---- editor gutter -----------------------------------------------------------
-
-let gutterLineCount = 0;
-// Top offsets (incl. padding-top) of every logical line + a sentinel at
-// index n = content bottom; recomputed on content/width change. Declared
-// here, above syncGutter's first call, so recomputeLineMetrics never hits
-// the temporal dead zone during module init.
-let lineTopsCache = null;
-
-function syncGutter(errorLines = new Set(), options = {}) {
-  const syncBlocks = options.syncBlocks ?? true;
-  const sourceLines = editor.value.split("\n");
-  const count = sourceLines.length;
-  const needsRebuild = count !== gutterLineCount;
-  if (needsRebuild) {
-    gutter.replaceChildren(
-      ...Array.from({ length: count }, (_, i) => {
-        const line = i + 1;
-        const div = document.createElement("div");
-        div.className = "ln";
-        div.dataset.line = String(line);
-        div.textContent = String(line);
-        return div;
-      }),
-    );
-    gutterLineCount = count;
-  }
-  // Measure wrapping so each gutter row matches its (possibly multi-row)
-  // logical line; everything downstream reads sourceLineTop, so frames and
-  // scroll sync align automatically.
-  const tops = recomputeLineMetrics();
-  const cs = getComputedStyle(editor);
-  [...gutter.children].forEach((line, i) => {
-    line.classList.toggle("err", errorLines.has(Number(line.dataset.line)));
-    line.classList.remove("block-fence");
-    line.style.height = `${tops[i + 1] - tops[i]}px`;
-    line.style.lineHeight = cs.lineHeight; // keep the number on the first row
-  });
-  for (const block of tensBlocksFromSource(editor.value)) {
-    gutter.children[block.line - 1]?.classList.add("block-fence");
-    if (block.closed) gutter.children[block.endLine - 1]?.classList.add("block-fence");
-  }
-  gutter.scrollTop = editor.scrollTop;
-  syncSourceLayerScroll();
-  if (syncBlocks) syncTensBoxes();
+function makeBlock(kind, text, sourceLine = 1) {
+  if (kind === "markdown") text = cleanMarkdownText(text);
+  return { id: nextBlockId++, kind, text, sourceLine, sourceEndLine: sourceLine };
 }
 
-function clearGutterErrors() {
-  syncGutter();
+function trimOuterBlankLines(text) {
+  return text.replace(/^\s*\n/, "").replace(/\n\s*$/, "");
 }
 
-function markGutterErrors(outputs, options = {}) {
-  const lines = new Set(
-    outputs
-      .filter((item) => item.error && item.line)
-      .map((item) => Number(item.line)),
+function cleanMarkdownText(text) {
+  let lines = text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim().toLowerCase();
+      return ![
+        TENS_OPEN.toLowerCase(),
+        TENS_CLOSE.toLowerCase(),
+        NOTE_OPEN.toLowerCase(),
+        NOTE_CLOSE.toLowerCase(),
+      ].includes(trimmed);
+    });
+
+  // Older note UI sometimes stored an empty ```notes fenced wrapper. It was
+  // an editor implementation detail, not user-authored Markdown.
+  if (lines[0]?.trim().toLowerCase() === "```notes") {
+    const close = lines.findIndex((line, i) => i > 0 && /^```\s*$/.test(line.trim()));
+    if (close !== -1) lines = [...lines.slice(1, close), ...lines.slice(close + 1)];
+  }
+  return trimOuterBlankLines(lines.join("\n"));
+}
+
+function lineCount(text) {
+  return text.length === 0 ? 1 : text.split(/\r?\n/).length;
+}
+
+function isTensOpen(line) {
+  return line.trim().toLowerCase() === TENS_OPEN.toLowerCase();
+}
+
+function isTensClose(line) {
+  return line.trim().toLowerCase() === TENS_CLOSE.toLowerCase();
+}
+
+function isNoteOpen(line) {
+  return line.trim().toLowerCase() === NOTE_OPEN.toLowerCase();
+}
+
+function isNoteClose(line) {
+  return line.trim().toLowerCase() === NOTE_CLOSE.toLowerCase();
+}
+
+function looksLikeTensorForgeSource(source) {
+  return /^\s*(display|export|[A-Za-z_]\w*\s*=|[A-Za-z_]\w*\[[^\]]+\]\s*=)/m.test(source);
+}
+
+function makeFreeformBlock(text) {
+  const cleaned = trimOuterBlankLines(text);
+  if (!cleaned.trim()) return null;
+  return makeBlock(looksLikeTensorForgeSource(cleaned) ? "tens" : "markdown", cleaned);
+}
+
+function parseLegacyNoteDocument(source) {
+  const lines = source.split(/\r?\n/);
+  const blocks = [];
+  let start = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!isNoteOpen(lines[i])) continue;
+    const before = makeFreeformBlock(lines.slice(start, i).join("\n"));
+    if (before) blocks.push(before);
+    i++;
+    const noteStart = i;
+    while (i < lines.length && !isNoteClose(lines[i])) i++;
+    const note = trimOuterBlankLines(lines.slice(noteStart, i).join("\n"));
+    if (note.trim()) blocks.push(makeBlock("markdown", note));
+    start = i + 1;
+  }
+  const tail = makeFreeformBlock(lines.slice(start).join("\n"));
+  if (tail) blocks.push(tail);
+  return blocks.length ? blocks : [makeBlock("markdown", "")];
+}
+
+function parseSourceDocument(source) {
+  if (source.split(/\r?\n/).some(isNoteOpen)) return parseLegacyNoteDocument(source);
+
+  const lines = source.split(/\r?\n/);
+  const blocks = [];
+  let start = 0;
+  let sawTens = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!isTensOpen(lines[i])) continue;
+    sawTens = true;
+    const md = trimOuterBlankLines(lines.slice(start, i).join("\n"));
+    if (md.trim()) blocks.push(makeBlock("markdown", md));
+    i++;
+    const codeStart = i;
+    while (i < lines.length && !isTensClose(lines[i])) i++;
+    blocks.push(makeBlock("tens", lines.slice(codeStart, i).join("\n")));
+    start = i + 1;
+  }
+
+  if (sawTens) {
+    const tail = trimOuterBlankLines(lines.slice(start).join("\n"));
+    if (tail.trim()) blocks.push(makeBlock("markdown", tail));
+    return blocks.length ? blocks : [makeBlock("markdown", "")];
+  }
+
+  return [makeBlock(looksLikeTensorForgeSource(source) ? "tens" : "markdown", source)];
+}
+
+function serializeBlock(block) {
+  if (block.kind === "tens") return `${TENS_OPEN}\n${block.text}\n${TENS_CLOSE}`;
+  return block.text;
+}
+
+function serializeDocument(blocks) {
+  return blocks.map(serializeBlock).join("\n\n");
+}
+
+function recomputeSourceLines() {
+  let line = 1;
+  for (const block of docBlocks) {
+    block.sourceLine = line;
+    const count = block.kind === "tens" ? lineCount(block.text) + 2 : lineCount(block.text);
+    block.sourceEndLine = line + count - 1;
+    line += count + 2; // blank separator inserted by serializeDocument
+  }
+}
+
+function syncSourceFromBlocks() {
+  recomputeSourceLines();
+  editor.value = serializeDocument(docBlocks);
+  localStorage.setItem("tensorforge.source.v3", editor.value);
+}
+
+function setDocumentSource(source, options = {}) {
+  docBlocks = parseSourceDocument(source);
+  syncSourceFromBlocks();
+  renderSourceEditor();
+  if (options.run !== false) scheduleLiveRun();
+}
+
+function blockForSourceLine(line) {
+  return (
+    docBlocks.find((b) => line >= b.sourceLine && line <= b.sourceEndLine) ??
+    docBlocks[docBlocks.length - 1]
   );
-  syncGutter(lines, options);
 }
 
-syncGutter();
+// ---- source editor ---------------------------------------------------------
+
+function renderSourceEditor() {
+  sourceEditor.replaceChildren();
+  for (const block of docBlocks) sourceEditor.appendChild(renderSourceBlock(block));
+  renderSourceGutter();
+  resizeAllTextareas();
+  updateInsertTableState();
+}
+
+function renderSourceGutter() {
+  sourceGutter.replaceChildren(
+    ...docBlocks.map((block) => {
+      const section = document.createElement("section");
+      section.className = `gutter-block ${block.kind === "tens" ? "gutter-tens" : "gutter-markdown"}`;
+      const firstLine = block.kind === "tens" ? block.sourceLine + 1 : block.sourceLine;
+      const lines = lineCount(block.text);
+      for (let i = 0; i < lines; i++) {
+        const row = document.createElement("div");
+        row.className = "gutter-line";
+        row.textContent = String(firstLine + i);
+        section.appendChild(row);
+      }
+      return section;
+    }),
+  );
+}
+
+function renderSourceBlock(block) {
+  const section = document.createElement("section");
+  section.className = `source-block ${block.kind === "tens" ? "source-tens" : "source-markdown"}`;
+  section.dataset.blockId = String(block.id);
+  section.dataset.sourceLine = String(block.sourceLine);
+
+  const textarea = document.createElement("textarea");
+  textarea.className = "source-textarea";
+  textarea.spellcheck = block.kind === "markdown";
+  textarea.wrap = "soft";
+  textarea.value = block.text;
+  textarea.placeholder =
+    block.kind === "tens" ? "TensorForge code" : "Write Markdown here";
+
+  textarea.addEventListener("focus", () => {
+    activeBlockId = block.id;
+    activeTextarea = textarea;
+    updateInsertTableState();
+  });
+  textarea.addEventListener("input", (e) => {
+    if (block.kind === "tens" && splitTensBlockOnBlankGap(block, textarea)) return;
+    block.text = textarea.value;
+    if (
+      block.kind === "markdown" &&
+      e.inputType?.startsWith("delete") &&
+      collapseEmptyMarkdownBetweenTens(block)
+    ) {
+      return;
+    }
+    autoResize(textarea);
+    syncSourceFromBlocks();
+    refreshBlockLineAttributes();
+    scheduleLiveRun();
+  });
+  textarea.addEventListener("keydown", (e) => {
+    if (moveAcrossBlocksWithArrow(e, block, textarea)) return;
+    if (
+      block.kind === "tens" &&
+      textarea.value.trim() === "" &&
+      textarea.selectionStart === textarea.selectionEnd &&
+      (e.key === "Backspace" || e.key === "Delete")
+    ) {
+      if (removeEmptyTensBlock(block, e.key === "Backspace" ? -1 : 1)) e.preventDefault();
+      return;
+    }
+    if (
+      block.kind === "markdown" &&
+      textarea.value.trim() === "" &&
+      textarea.selectionStart === textarea.selectionEnd &&
+      (e.key === "Backspace" || e.key === "Delete")
+    ) {
+      if (collapseEmptyMarkdownBetweenTens(block)) e.preventDefault();
+    }
+  });
+  textarea.addEventListener("paste", (e) => {
+    if (block.kind === "markdown") handleMarkdownPaste(e, textarea, block);
+  });
+  textarea.addEventListener("click", updateInsertTableState);
+  textarea.addEventListener("keyup", updateInsertTableState);
+
+  section.appendChild(textarea);
+  if (block.kind === "tens") setupCompletion(textarea);
+  return section;
+}
+
+function moveAcrossBlocksWithArrow(e, block, textarea) {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return false;
+  if (textarea.selectionStart !== textarea.selectionEnd) return false;
+
+  const line = lineForOffset(textarea.value, textarea.selectionStart);
+  const lines = lineCount(textarea.value);
+  const direction = e.key === "ArrowDown" ? 1 : -1;
+  if ((direction > 0 && line < lines) || (direction < 0 && line > 1)) return false;
+
+  const idx = docBlocks.findIndex((b) => b.id === block.id);
+  const target = docBlocks[idx + direction];
+  if (!target) return false;
+
+  e.preventDefault();
+  focusBlockAtColumn(target, caretColumn(textarea.value, textarea.selectionStart), direction);
+  return true;
+}
+
+function focusBlockAtColumn(block, column, direction) {
+  const textarea = sourceEditor.querySelector(`[data-block-id="${block.id}"] textarea`);
+  if (!textarea) return;
+
+  const targetLine = direction > 0 ? 1 : lineCount(textarea.value);
+  const lineStart = offsetForLine(textarea.value, targetLine);
+  const lineEnd = offsetForLine(textarea.value, targetLine + 1);
+  const end = lineEnd > lineStart && textarea.value[lineEnd - 1] === "\n" ? lineEnd - 1 : lineEnd;
+  const offset = Math.min(lineStart + column, end);
+  textarea.focus();
+  textarea.setSelectionRange(offset, offset);
+}
+
+function lineForOffset(source, offset) {
+  return lineCount(source.slice(0, offset));
+}
+
+function caretColumn(source, offset) {
+  const lineStart = source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  return offset - lineStart;
+}
+
+function refreshBlockLineAttributes() {
+  for (const block of docBlocks) {
+    const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
+    if (section) section.dataset.sourceLine = String(block.sourceLine);
+  }
+  renderSourceGutter();
+}
+
+function autoResize(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.max(textarea.scrollHeight, 22)}px`;
+}
+
+function resizeAllTextareas() {
+  sourceEditor.querySelectorAll("textarea").forEach(autoResize);
+}
+
+function activeBlock() {
+  return docBlocks.find((b) => b.id === activeBlockId) ?? docBlocks[docBlocks.length - 1];
+}
+
+function insertTensBlock() {
+  const current = activeBlock();
+  const idx = Math.max(0, docBlocks.findIndex((b) => b.id === current?.id));
+  const block = makeBlock("tens", "");
+  docBlocks.splice(idx + 1, 0, block);
+  activeBlockId = block.id;
+  syncSourceFromBlocks();
+  renderSourceEditor();
+  const textarea = sourceEditor.querySelector(`[data-block-id="${block.id}"] textarea`);
+  textarea?.focus();
+}
+
+function splitTensBlockOnBlankGap(block, textarea) {
+  const match = textarea.value.match(/\n[ \t]*\n[ \t]*\n/);
+  if (!match) return false;
+
+  const idx = docBlocks.findIndex((b) => b.id === block.id);
+  if (idx === -1) return false;
+
+  const before = textarea.value.slice(0, match.index).replace(/\s+$/, "");
+  const after = textarea.value.slice(match.index + match[0].length).replace(/^\s+/, "");
+  if (!before && !after) return false;
+
+  const markdown = makeBlock("markdown", "");
+  const replacement = [];
+  if (before) replacement.push(makeBlock("tens", before));
+  replacement.push(markdown);
+  if (after) replacement.push(makeBlock("tens", after));
+
+  docBlocks.splice(idx, 1, ...replacement);
+  activeBlockId = markdown.id;
+  syncSourceFromBlocks();
+  renderSourceEditor();
+  sourceEditor.querySelector(`[data-block-id="${markdown.id}"] textarea`)?.focus();
+  scheduleLiveRun();
+  return true;
+}
+
+function removeEmptyTensBlock(block, direction = -1) {
+  if (block.kind !== "tens" || block.text.trim() !== "") return false;
+  const idx = docBlocks.findIndex((b) => b.id === block.id);
+  if (idx === -1) return false;
+
+  const focusTarget = docBlocks[idx + direction] ?? docBlocks[idx - direction];
+  docBlocks.splice(idx, 1);
+  if (docBlocks.length === 0) {
+    docBlocks.push(makeBlock("markdown", ""));
+  }
+
+  const target = focusTarget && docBlocks.includes(focusTarget) ? focusTarget : docBlocks[Math.min(idx, docBlocks.length - 1)];
+  activeBlockId = target.id;
+  syncSourceFromBlocks();
+  renderSourceEditor();
+
+  const textarea = sourceEditor.querySelector(`[data-block-id="${target.id}"] textarea`);
+  if (textarea) {
+    const offset = direction < 0 ? textarea.value.length : 0;
+    textarea.focus();
+    textarea.setSelectionRange(offset, offset);
+  }
+  scheduleLiveRun();
+  return true;
+}
+
+function collapseEmptyMarkdownBetweenTens(block) {
+  if (block.kind !== "markdown" || block.text.trim() !== "") return false;
+  const idx = docBlocks.findIndex((b) => b.id === block.id);
+  if (idx <= 0 || idx >= docBlocks.length - 1) return false;
+
+  const prev = docBlocks[idx - 1];
+  const next = docBlocks[idx + 1];
+  if (prev.kind !== "tens" || next.kind !== "tens") return false;
+
+  const before = prev.text.replace(/\s+$/, "");
+  const after = next.text.replace(/^\s+/, "");
+  const cursor = before.length + 2;
+  prev.text = [before, after].filter(Boolean).join("\n\n");
+  docBlocks.splice(idx, 2);
+  activeBlockId = prev.id;
+
+  syncSourceFromBlocks();
+  renderSourceEditor();
+  const textarea = sourceEditor.querySelector(`[data-block-id="${prev.id}"] textarea`);
+  if (textarea) {
+    textarea.focus();
+    textarea.setSelectionRange(Math.min(cursor, textarea.value.length), Math.min(cursor, textarea.value.length));
+  }
+  scheduleLiveRun();
+  return true;
+}
+
+function focusSourceLine(line) {
+  const block = blockForSourceLine(line);
+  const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
+  const textarea = section?.querySelector("textarea");
+  if (!textarea) return;
+  const innerLine =
+    block.kind === "tens"
+      ? Math.max(1, line - block.sourceLine)
+      : Math.max(1, line - block.sourceLine + 1);
+  const offset = offsetForLine(textarea.value, innerLine);
+  textarea.focus();
+  textarea.setSelectionRange(offset, offset);
+}
+
+function offsetForLine(source, line) {
+  let offset = 0;
+  for (let l = 1; l < line; l++) {
+    const nl = source.indexOf("\n", offset);
+    if (nl === -1) return source.length;
+    offset = nl + 1;
+  }
+  return offset;
+}
+
+function scrollEditorToLine(line, options = {}) {
+  const block = blockForSourceLine(line);
+  const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
+  if (!section) return;
+  const align = options.align ?? 0.18;
+  const behavior = options.behavior ?? "smooth";
+  const target = Math.max(0, section.offsetTop - sourceEditor.clientHeight * align);
+  sourceEditor.scrollTo({ top: target, behavior });
+}
+
+function jumpToSourceLine(line, options = {}) {
+  scrollEditorToLine(line, { behavior: options.behavior ?? "smooth" });
+  if (options.focus) focusSourceLine(line);
+}
+
+// ---- files -----------------------------------------------------------------
 
 async function openFile() {
   if (!invoke) return;
   const opened = await invoke("open_tens").catch(showError);
-  if (!opened) return; // cancelled
+  if (!opened) return;
   loadOpenedFile(opened);
 }
 
 function loadOpenedFile(opened) {
-  editor.value = opened.source;
   setCurrentPath(opened.path);
-  localStorage.setItem("tensorforge.source.v3", editor.value);
+  setDocumentSource(opened.source);
   renderFileRail(opened.folder, opened.files);
-  clearGutterErrors();
-  scheduleLiveRun();
 }
 
 function renderFileRail(folder, files) {
@@ -249,20 +624,70 @@ function renderFileRail(folder, files) {
   );
 }
 
-// Restore the last-used folder listing on startup.
 async function restoreFileRail() {
   const folder = localStorage.getItem("tensorforge.folder");
   if (!invoke || !folder) return;
   const files = await invoke("list_folder", { path: folder }).catch(() => null);
   if (files) renderFileRail(folder, files);
 }
-restoreFileRail();
 
-// ---- rail resizer ----
+async function switchToFile(path) {
+  if (!invoke || path === currentPath) return;
+  syncSourceFromBlocks();
+  if (currentPath) {
+    await invoke("save_tens", { source: editor.value, path: currentPath }).catch(showError);
+  }
+  const opened = await invoke("read_tens", { path }).catch(showError);
+  if (opened) loadOpenedFile(opened);
+}
+
+async function saveFile() {
+  if (!invoke) return;
+  syncSourceFromBlocks();
+  const path = await invoke("save_tens", {
+    source: editor.value,
+    path: currentPath,
+  }).catch(showError);
+  if (path) {
+    setCurrentPath(path);
+    await refreshFolderListing(path);
+  }
+}
+
+async function refreshFolderListing(path) {
+  if (!invoke || !path) return;
+  const opened = await invoke("read_tens", { path }).catch(() => null);
+  if (opened) renderFileRail(opened.folder, opened.files);
+}
+
+// ---- layout ----------------------------------------------------------------
+
 const railResizer = document.getElementById("rail-resizer");
 const storedRailWidth = Number(localStorage.getItem("tensorforge.railWidth"));
 if (storedRailWidth >= 90) fileRail.style.flexBasis = `${storedRailWidth}px`;
+applyRailCollapsed(localStorage.getItem("tensorforge.railCollapsed") === "true", { persist: false });
+railToggle.addEventListener("click", () => {
+  applyRailCollapsed(!mainEl.classList.contains("rail-collapsed"));
+});
+
+function applyRailCollapsed(collapsed, options = {}) {
+  if (collapsed && fileRail.offsetWidth > 60) {
+    localStorage.setItem("tensorforge.railWidth", String(fileRail.offsetWidth));
+  } else if (!collapsed) {
+    const width = Number(localStorage.getItem("tensorforge.railWidth"));
+    fileRail.style.flexBasis = `${width >= 90 ? width : 160}px`;
+  }
+  mainEl.classList.toggle("rail-collapsed", collapsed);
+  railToggle.textContent = collapsed ? "›" : "‹";
+  railToggle.title = collapsed ? "Expand file sidebar" : "Collapse file sidebar";
+  railToggle.setAttribute("aria-label", railToggle.title);
+  if (options.persist !== false) {
+    localStorage.setItem("tensorforge.railCollapsed", String(collapsed));
+  }
+}
+
 railResizer.addEventListener("pointerdown", (e) => {
+  if (mainEl.classList.contains("rail-collapsed")) return;
   e.preventDefault();
   railResizer.setPointerCapture(e.pointerId);
   railResizer.classList.add("dragging");
@@ -282,18 +707,13 @@ railResizer.addEventListener("pointerdown", (e) => {
   );
 });
 
-// ---- editor/output resizer ----
 const storedEditorWidth = Number(localStorage.getItem("tensorforge.editorWidth"));
 if (storedEditorWidth >= 280) editorWrap.style.flexBasis = `${storedEditorWidth}px`;
-
-function refreshEditorGeometry() {
-  syncGutter();
-}
 
 function editorWidthBounds() {
   const mainRect = document.querySelector("main").getBoundingClientRect();
   const left = editorWrap.getBoundingClientRect().left;
-  const minEditor = 280;
+  const minEditor = 300;
   const minOutput = 360;
   const maxEditor = Math.max(minEditor, mainRect.right - left - minOutput);
   return { minEditor, maxEditor };
@@ -304,19 +724,16 @@ function setEditorWidthFromClientX(clientX) {
   const left = editorWrap.getBoundingClientRect().left;
   const width = Math.min(maxEditor, Math.max(minEditor, clientX - left));
   editorWrap.style.flexBasis = `${width}px`;
-  requestAnimationFrame(refreshEditorGeometry);
+  requestAnimationFrame(resizeAllTextareas);
 }
 
 let splitDragActive = false;
-
 splitResizer.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   splitDragActive = true;
   splitResizer.setPointerCapture(e.pointerId);
   splitResizer.classList.add("dragging");
-  const move = (ev) => {
-    setEditorWidthFromClientX(ev.clientX);
-  };
+  const move = (ev) => setEditorWidthFromClientX(ev.clientX);
   splitResizer.addEventListener("pointermove", move);
   splitResizer.addEventListener(
     "pointerup",
@@ -325,7 +742,6 @@ splitResizer.addEventListener("pointerdown", (e) => {
       splitResizer.removeEventListener("pointermove", move);
       splitResizer.classList.remove("dragging");
       localStorage.setItem("tensorforge.editorWidth", String(editorWrap.offsetWidth));
-      refreshEditorGeometry();
     },
     { once: true },
   );
@@ -342,178 +758,12 @@ splitResizer.addEventListener("mousedown", (e) => {
     document.removeEventListener("mousemove", move);
     splitResizer.classList.remove("dragging");
     localStorage.setItem("tensorforge.editorWidth", String(editorWrap.offsetWidth));
-    refreshEditorGeometry();
   };
   document.addEventListener("mousemove", move);
   document.addEventListener("mouseup", up, { once: true });
 });
 
-async function switchToFile(path) {
-  if (!invoke || path === currentPath) return;
-  // Notebook-style: persist the current file before switching away.
-  if (currentPath) {
-    await invoke("save_tens", {
-      source: editor.value,
-      path: currentPath,
-    }).catch(showError);
-  }
-  const opened = await invoke("read_tens", { path }).catch(showError);
-  if (opened) loadOpenedFile(opened);
-}
-
-async function saveFile() {
-  if (!invoke) return;
-  localStorage.setItem("tensorforge.source.v3", editor.value);
-  // No path yet (scratch buffer): Save behaves as Save As.
-  const path = await invoke("save_tens", {
-    source: editor.value,
-    path: currentPath,
-  }).catch(showError);
-  if (path) {
-    setCurrentPath(path);
-    await refreshFolderListing(path);
-  }
-}
-
-// Re-list the folder of `path` so the rail picks up new files.
-async function refreshFolderListing(path) {
-  if (!invoke || !path) return;
-  const opened = await invoke("read_tens", { path }).catch(() => null);
-  if (opened) renderFileRail(opened.folder, opened.files);
-}
-
-async function exportMarkdown() {
-  closeExportMenu();
-  const markdown = buildExportMarkdown();
-  if (!markdown.trim()) {
-    showError("Nothing to export yet. Add Markdown or display(...) output first.");
-    return;
-  }
-  if (invoke) {
-    await invoke("export_text", {
-      content: markdown,
-      defaultFilename: defaultExportName("md"),
-      filterName: "Markdown",
-      extensions: ["md", "markdown"],
-    }).catch(showError);
-    return;
-  }
-  downloadText(markdown, defaultExportName("md"), "text/markdown");
-}
-
-function exportPdf() {
-  closeExportMenu();
-  const body = buildPrintableBody();
-  if (!body) {
-    showError("Nothing to export yet. Add Markdown or display(...) output first.");
-    return;
-  }
-  printDocument(body);
-}
-
-function defaultExportName(ext) {
-  const base = currentPath
-    ? currentPath.split("/").pop().replace(/\.[^.]+$/, "")
-    : "tensorforge-export";
-  return `${base}.${ext}`;
-}
-
-function downloadText(text, filename, type) {
-  const blob = new Blob([text], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function toggleExportMenu() {
-  exportMenu.classList.toggle("show");
-}
-
-function closeExportMenu() {
-  exportMenu.classList.remove("show");
-}
-
-function showError(message) {
-  output.innerHTML = "";
-  clearGutterErrors();
-  const div = document.createElement("div");
-  div.className = "error";
-  div.textContent = String(message);
-  output.appendChild(div);
-  // The output pane now holds only this error; a later live run must not
-  // treat it as good results and prepend a second parse banner on top.
-  lastGoodShown = false;
-}
-
-function copyButton(label, text) {
-  const btn = document.createElement("button");
-  btn.className = "copy-btn";
-  btn.textContent = label;
-  btn.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(text);
-    btn.textContent = "✓ copied";
-    btn.classList.add("copied");
-    setTimeout(() => {
-      btn.textContent = label;
-      btn.classList.remove("copied");
-    }, 1200);
-  });
-  return btn;
-}
-
-function markdownBlocksFromSource(source) {
-  const tens = tensBlocksFromSource(source);
-  if (tens.length === 0) {
-    const markdown = source.trim();
-    return markdown ? [{ kind: "markdown", line: 1, markdown }] : [];
-  }
-  const lines = source.split(/\r?\n/);
-  const blocks = [];
-  let start = 1;
-  for (const block of tens) {
-    pushMarkdownBlock(blocks, lines, start, block.line - 1);
-    start = block.endLine + 1;
-  }
-  pushMarkdownBlock(blocks, lines, start, lines.length);
-  return blocks;
-}
-
-function pushMarkdownBlock(blocks, lines, startLine, endLine) {
-  if (endLine < startLine) return;
-  const markdown = lines.slice(startLine - 1, endLine).join("\n").trim();
-  if (markdown) blocks.push({ kind: "markdown", line: startLine, markdown });
-}
-
-function tensBlocksFromSource(source) {
-  const blocks = [];
-  const lines = source.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (!isTensOpen(lines[i])) continue;
-    const block = { line: i + 1, endLine: i + 1, closed: false, lines: [] };
-    i++;
-    while (i < lines.length) {
-      if (isTensClose(lines[i])) break;
-      block.lines.push(lines[i]);
-      i++;
-    }
-    block.closed = i < lines.length;
-    if (!block.closed) continue;
-    block.endLine = i + 1;
-    blocks.push(block);
-  }
-  return blocks;
-}
-
-function isTensOpen(line) {
-  return line.trim().toLowerCase() === TENS_OPEN.toLowerCase();
-}
-
-function isTensClose(line) {
-  return line.trim().toLowerCase() === TENS_CLOSE.toLowerCase();
-}
+// ---- markdown rendering ----------------------------------------------------
 
 function isInnerFenceOpen(line) {
   const trimmed = line.trim();
@@ -617,11 +867,11 @@ function tableAlignments(sepLine) {
 function renderTable(header, rows, aligns) {
   const cell = (tag, content, k) =>
     `<${tag} style="text-align:${aligns[k] ?? "left"}">${inlineMarkdown(content.trim())}</${tag}>`;
-  const head = `<thead><tr>${header.map((c, k) => cell("th", c, k)).join("")}</tr></thead>`;
-  const body = rows
+  return `<table class="md-table"><thead><tr>${header
+    .map((c, k) => cell("th", c, k))
+    .join("")}</tr></thead><tbody>${rows
     .map((r) => `<tr>${r.map((c, k) => cell("td", c, k)).join("")}</tr>`)
-    .join("");
-  return `<table class="md-table">${head}<tbody>${body}</tbody></table>`;
+    .join("")}</tbody></table>`;
 }
 
 function inlineMarkdown(text) {
@@ -662,7 +912,6 @@ function findInlineMathEnd(text, start) {
 }
 
 function renderInlinePlain(text) {
-  // Pasted images: only data:image/ URLs are honored (no remote loads).
   const parts = [];
   let rest = text;
   const img = /!\[([^\]]*)\]\((data:image\/[a-zA-Z+.-]+;base64,[A-Za-z0-9+/=]+)\)/;
@@ -688,413 +937,39 @@ function renderMath(tex, displayMode) {
       macros: KATEX_MACROS,
       throwOnError: true,
     });
-  } catch (e) {
+  } catch {
     return `<code>${escapeHtml(tex)}</code>`;
   }
 }
 
 function escapeHtml(text) {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// ---- output/export ---------------------------------------------------------
+
+function copyButton(label, text) {
+  const btn = document.createElement("button");
+  btn.className = "copy-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "copied";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = label;
+      btn.classList.remove("copied");
+    }, 1200);
+  });
+  return btn;
 }
 
 function renderMarkdownBlock(block) {
   const el = document.createElement("div");
   el.className = "block markdown-doc";
-  el.innerHTML = renderMarkdown(block.markdown);
-  makeBlockJump(el, block.line);
+  el.innerHTML = renderMarkdown(block.text);
+  makeBlockJump(el, block.sourceLine);
   return el;
-}
-
-function exportBlocks() {
-  // Error outputs are working-state, not document content: exports carry
-  // Error outputs are working-state, not document content: exports carry
-  // only Markdown and rendered results.
-  return [
-    ...markdownBlocksFromSource(editor.value),
-    ...lastRenderedOutputs
-      .filter((item) => !item.error)
-      .map((item) => ({ kind: "output", ...item })),
-  ].sort((a, b) => a.line - b.line || (a.kind === "markdown" ? -1 : 1));
-}
-
-function buildExportMarkdown() {
-  return exportBlocks()
-    .map((block) => {
-      if (block.kind === "markdown") return block.markdown.trim();
-      return `### ${block.header}\n\n$$\n${stripDisplayMath(block.latex)}\n$$`;
-    })
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function buildPrintableBody() {
-  const blocks = exportBlocks();
-  if (blocks.length === 0) return "";
-  return blocks
-    .map((block) => {
-      if (block.kind === "markdown") {
-        return `<section class="doc-block markdown-doc">${renderMarkdown(block.markdown)}</section>`;
-      }
-      return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
-    })
-    .join("\n");
-}
-
-function stripDisplayMath(latex) {
-  return latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
-}
-
-// Print through the main window: WKWebView ignores print() on iframe
-// content windows, but wry hooks window.print() on the top window. The
-// printable DOM lives in #print-root and @media print hides the app shell.
-async function printDocument(bodyHtml) {
-  printRoot.innerHTML = bodyHtml;
-  document.body.classList.add("printing");
-  const cleanup = () => {
-    document.body.classList.remove("printing");
-    printRoot.innerHTML = "";
-    window.scrollTo(0, 0);
-  };
-  try {
-    if (invoke) {
-      // window.print() is not wired up in WKWebView; the Rust side calls
-      // the native print operation on the webview.
-      await invoke("print_window");
-    } else {
-      window.print();
-    }
-  } catch (e) {
-    showError(`Print failed: ${e}`);
-  }
-  // The invoke may resolve while the native dialog is still open, and an
-  // early cleanup would blank the printed pages. #print-root is invisible
-  // on screen anyway, so defer cleanup until the user is demonstrably back
-  // in the app (or a real afterprint fires).
-  window.addEventListener("afterprint", cleanup, { once: true });
-  document.addEventListener("pointerdown", cleanup, { once: true });
-  document.addEventListener("keydown", cleanup, { once: true });
-}
-
-// Insert an empty .tens block at the caret and place the cursor on its
-// (empty) body line, inside the main editor — there is no separate overlay
-// editor; the block is highlighted in place by syncTensBoxes.
-function insertTensBlock() {
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
-  const needsLeadingBreak = start > 0 && editor.value[start - 1] !== "\n";
-  const needsTrailingBreak = end < editor.value.length && editor.value[end] !== "\n";
-  const block = `${needsLeadingBreak ? "\n" : ""}${TENS_OPEN}\n\n${TENS_CLOSE}\n${needsTrailingBreak ? "\n" : ""}`;
-  editor.setRangeText(block, start, end, "end");
-  const openFenceOffset = start + (needsLeadingBreak ? 1 : 0);
-  const bodyOffset = openFenceOffset + `${TENS_OPEN}\n`.length;
-  editor.focus();
-  editor.setSelectionRange(bodyOffset, bodyOffset);
-  editor.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
-function recomputeLineMetrics() {
-  const cs = getComputedStyle(editor);
-  let mirror = document.getElementById("wrap-mirror");
-  if (!mirror) {
-    mirror = document.createElement("div");
-    mirror.id = "wrap-mirror";
-    editorWrap.appendChild(mirror);
-  }
-  // Match the editor's text box so the mirror wraps identically.
-  mirror.style.font = cs.font;
-  mirror.style.lineHeight = cs.lineHeight;
-  mirror.style.letterSpacing = cs.letterSpacing;
-  mirror.style.tabSize = cs.tabSize;
-  const padTop = Number.parseFloat(cs.paddingTop);
-  const padLeft = Number.parseFloat(cs.paddingLeft);
-  const padRight = Number.parseFloat(cs.paddingRight);
-  mirror.style.width = `${editor.clientWidth - padLeft - padRight}px`;
-
-  const lines = editor.value.split("\n");
-  mirror.replaceChildren(
-    ...lines.map((text) => {
-      const d = document.createElement("div");
-      // A zero-width char keeps empty lines one visual row tall.
-      d.textContent = text.length ? text : "​";
-      return d;
-    }),
-  );
-  const tops = new Array(lines.length + 1);
-  for (let i = 0; i < lines.length; i++) {
-    tops[i] = padTop + mirror.children[i].offsetTop;
-  }
-  tops[lines.length] = padTop + mirror.scrollHeight;
-  lineTopsCache = tops;
-  return tops;
-}
-
-function sourceLineTop(line) {
-  const tops = lineTopsCache;
-  if (tops && line >= 1 && line <= tops.length) return tops[line - 1];
-  const style = getComputedStyle(editor);
-  return (
-    Number.parseFloat(style.paddingTop) +
-    (line - 1) * Number.parseFloat(style.lineHeight)
-  );
-}
-
-function rowTop(line) {
-  return sourceLineTop(line) - editor.scrollTop;
-}
-
-// Pixel height covering startLine..endLine inclusive, accounting for wrapped
-// lines via the measured offsets; never below `minLines` single rows.
-function rowSpanHeight(startLine, endLine, minLines = 1) {
-  const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight);
-  const span = sourceLineTop(endLine + 1) - sourceLineTop(startLine);
-  return Math.max(span, minLines * lineHeight);
-}
-
-function syncSourceLayerScroll() {
-  const y = `translateY(${-editor.scrollTop}px)`;
-  document.getElementById("code-layer").style.transform = y;
-}
-
-// Non-interactive highlight underlay for .tens blocks. The single main
-// <textarea> stays the only editor (scrolls and edits normally); these
-// boxes just paint a tinted background + left bar + "tens" tag behind the
-// text, so there is no overlay to intercept the wheel, drift, or hide the
-// sentinel lines. pointer-events:none lets clicks/scroll fall through.
-function syncTensBoxes() {
-  const codeLayer = document.getElementById("code-layer");
-  codeLayer.style.left = `${gutter.offsetWidth}px`;
-  const boxes = tensBlocksFromSource(editor.value).map((block) => {
-    const div = document.createElement("div");
-    div.className = "source-code-box";
-    div.style.top = `${sourceLineTop(block.line)}px`;
-    div.style.height = `${rowSpanHeight(block.line, block.endLine)}px`;
-    const tag = document.createElement("span");
-    tag.className = "region-tag";
-    tag.textContent = "tens";
-    div.appendChild(tag);
-    return div;
-  });
-  codeLayer.replaceChildren(...boxes);
-  syncSourceLayerScroll();
-}
-
-function syncCodeBoxes() {
-  syncTensBoxes();
-}
-
-// Character offset of the start of `line` (1-based).
-function offsetForLine(source, line) {
-  let offset = 0;
-  for (let l = 1; l < line; l++) {
-    const nl = source.indexOf("\n", offset);
-    if (nl === -1) return source.length;
-    offset = nl + 1;
-  }
-  return offset;
-}
-
-// [start, end) covering lines startLine..=endLine, excluding the trailing
-// newline of endLine.
-function lineRangeOffsets(source, startLine, endLine) {
-  const start = offsetForLine(source, startLine);
-  let end = offsetForLine(source, endLine + 1);
-  if (end > start && source[end - 1] === "\n") end -= 1;
-  return [start, end];
-}
-
-function lineForOffset(source, offset) {
-  let line = 1;
-  for (let i = 0; i < Math.min(offset, source.length); i++) {
-    if (source[i] === "\n") line++;
-  }
-  return line;
-}
-
-// True when the main editor's caret sits inside a .tens block body — used
-// only to disable the Markdown table button there.
-function caretInTensBlock() {
-  if (document.activeElement !== editor) return false;
-  const line = lineForOffset(editor.value, editor.selectionStart);
-  return tensBlocksFromSource(editor.value).some(
-    (b) => line > b.line && line < b.endLine,
-  );
-}
-
-// Pasted images are embedded as data-URL markdown so the .tens file stays
-// self-contained.
-function handleMarkdownPaste(e) {
-  const item = [...(e.clipboardData?.items ?? [])].find((it) =>
-    it.type.startsWith("image/"),
-  );
-  if (!item) return;
-  e.preventDefault();
-  const file = item.getAsFile();
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const md = `![pasted image](${reader.result})`;
-    editor.setRangeText(md, editor.selectionStart, editor.selectionEnd, "end");
-    editor.dispatchEvent(new Event("input", { bubbles: true }));
-  };
-  reader.readAsDataURL(file);
-}
-
-// ---- insert-table popover --------------------------------------------------
-// Markdown is the default source mode, so table insertion targets the main
-// editor and is disabled only while the caret is inside a .tens block editor.
-let tableTarget = null;
-
-function updateInsertTableState() {
-  insertTableBtn.disabled = caretInTensBlock();
-}
-
-function openTableMenu() {
-  tableTarget = {
-    selectionStart: editor.selectionStart,
-    selectionEnd: editor.selectionEnd,
-  };
-  tableMenu.classList.add("show");
-}
-
-function closeTableMenu() {
-  tableMenu.classList.remove("show");
-}
-
-function markdownTable(rows, cols, align) {
-  const sep = { left: "---", center: ":---:", right: "---:" }[align] ?? "---";
-  const cells = (fill) => `| ${Array.from({ length: cols }, () => fill).join(" | ")} |`;
-  const lines = [cells("   "), cells(sep)];
-  for (let r = 0; r < rows; r++) lines.push(cells("   "));
-  return lines.join("\n");
-}
-
-function insertTableIntoMarkdown() {
-  if (!tableTarget) return;
-  const rows = Math.max(1, Number(document.getElementById("table-rows").value) || 2);
-  const cols = Math.max(1, Number(document.getElementById("table-cols").value) || 3);
-  const align = document.getElementById("table-align").value;
-  const s = Math.min(tableTarget.selectionStart, editor.value.length);
-  const e = Math.min(tableTarget.selectionEnd, editor.value.length);
-  const atLineStart = s === 0 || editor.value[s - 1] === "\n";
-  const table = `${atLineStart ? "" : "\n"}${markdownTable(rows, cols, align)}\n`;
-  editor.setRangeText(table, s, e, "end");
-  editor.focus();
-  localStorage.setItem("tensorforge.source.v3", editor.value);
-  tableTarget = null;
-  closeTableMenu();
-  clearGutterErrors();
-  scheduleLiveRun();
-}
-
-let scrollSyncSource = null;
-let scrollSyncFrame = null;
-
-function withScrollSyncSource(source, fn) {
-  scrollSyncSource = source;
-  fn();
-  requestAnimationFrame(() => {
-    if (scrollSyncSource === source) scrollSyncSource = null;
-  });
-}
-
-function blockAnchors() {
-  return [...output.querySelectorAll(".block[data-line]")]
-    .map((el) => ({ el, line: Number(el.dataset.line) }))
-    .filter((anchor) => Number.isFinite(anchor.line));
-}
-
-function lineAtEditorTop() {
-  const y = editor.scrollTop + 8;
-  let current = 1;
-  for (const row of gutter.children) {
-    if (row.offsetTop > y) break;
-    current = Number(row.dataset.line) || current;
-  }
-  return current;
-}
-
-function anchorForLine(line) {
-  const anchors = blockAnchors();
-  if (anchors.length === 0) return null;
-  let best = anchors[0];
-  for (const anchor of anchors) {
-    if (anchor.line > line) break;
-    best = anchor;
-  }
-  return best;
-}
-
-function anchorAtOutputTop() {
-  const anchors = blockAnchors();
-  if (anchors.length === 0) return null;
-  const top = output.scrollTop + 8;
-  let best = anchors[0];
-  for (const anchor of anchors) {
-    if (anchor.el.offsetTop > top) break;
-    best = anchor;
-  }
-  return best;
-}
-
-function syncOutputToEditor() {
-  if (scrollSyncSource === "output") return;
-  cancelAnimationFrame(scrollSyncFrame);
-  scrollSyncFrame = requestAnimationFrame(() => {
-    const anchor = anchorForLine(lineAtEditorTop());
-    if (!anchor) return;
-    withScrollSyncSource("editor", () => {
-      output.scrollTo({ top: Math.max(0, anchor.el.offsetTop - 12), behavior: "auto" });
-    });
-  });
-}
-
-function syncEditorToOutput() {
-  if (scrollSyncSource === "editor") return;
-  cancelAnimationFrame(scrollSyncFrame);
-  scrollSyncFrame = requestAnimationFrame(() => {
-    const anchor = anchorAtOutputTop();
-    if (!anchor) return;
-    withScrollSyncSource("output", () => {
-      scrollEditorToLine(anchor.line, { behavior: "auto", align: 0.12 });
-    });
-  });
-}
-
-function scrollEditorToLine(line, options = {}) {
-  if (!line) return;
-  const align = options.align ?? 1 / 3;
-  const behavior = options.behavior ?? "smooth";
-  const target = Math.max(0, rowTop(line) + editor.scrollTop - editor.clientHeight * align);
-  editor.scrollTo({ top: target, behavior });
-}
-
-function focusSourceLine(line) {
-  // Single editor now: just place the caret on the requested line.
-  const offset = offsetForLine(editor.value, line);
-  editor.focus();
-  editor.setSelectionRange(offset, offset);
-}
-
-function jumpToSourceLine(line, options = {}) {
-  scrollEditorToLine(line, { behavior: options.behavior ?? "smooth" });
-  if (options.focus) focusSourceLine(line);
-  const row = gutter.children[line - 1];
-  if (row) {
-    row.classList.add("jump");
-    setTimeout(() => row.classList.remove("jump"), 1200);
-  }
-}
-
-function makeBlockJump(el, line) {
-  if (line) el.dataset.line = String(line);
-  el.title = `Click to jump to line ${line}`;
-  el.addEventListener("click", (e) => {
-    if (e.target.closest("button")) return; // copy buttons keep their job
-    jumpToSourceLine(line, { focus: true, behavior: "auto" });
-  });
 }
 
 function renderOutputBlock(item) {
@@ -1115,14 +990,10 @@ function renderOutputBlock(item) {
   }
 
   head.textContent = `[${header}]`;
+  const tex = stripDisplayMath(latex);
   const bar = document.createElement("span");
   bar.className = "copy-bar";
-  // export(..., format=markdown) wraps in $$...$$; strip for rendering.
-  const tex = latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
-  bar.append(
-    copyButton("copy latex", tex),
-    copyButton("copy markdown", `$$\n${tex}\n$$`),
-  );
+  bar.append(copyButton("copy latex", tex), copyButton("copy markdown", `$$\n${tex}\n$$`));
   head.appendChild(bar);
 
   const math = document.createElement("div");
@@ -1134,7 +1005,7 @@ function renderOutputBlock(item) {
       throwOnError: true,
     });
   } catch (e) {
-    math.innerHTML = `<div class="error">KaTeX: ${e.message}</div><pre>${tex}</pre>`;
+    math.innerHTML = `<div class="error">KaTeX: ${escapeHtml(e.message)}</div><pre>${escapeHtml(tex)}</pre>`;
   }
   block.append(head, math);
   return block;
@@ -1143,27 +1014,36 @@ function renderOutputBlock(item) {
 function renderOutputs(outputs) {
   output.innerHTML = "";
   lastRenderedOutputs = outputs;
-  markGutterErrors(outputs);
   const blocks = [
-    ...markdownBlocksFromSource(editor.value),
+    ...docBlocks.filter((b) => b.kind === "markdown" && b.text.trim()).map((b) => ({ kind: "markdown", ...b })),
     ...outputs.map((item) => ({ kind: "output", ...item })),
-  ].sort((a, b) => a.line - b.line || (a.kind === "markdown" ? -1 : 1));
+  ].sort((a, b) => {
+    const la = a.kind === "markdown" ? a.sourceLine : a.line;
+    const lb = b.kind === "markdown" ? b.sourceLine : b.line;
+    return la - lb || (a.kind === "markdown" ? -1 : 1);
+  });
 
   if (blocks.length === 0) {
-    output.innerHTML =
-      '<div class="placeholder">No output yet — add display(...) or export(...) statements.</div>';
+    output.innerHTML = '<div class="placeholder">No output yet. Add display(...) or export(...).</div>';
     return;
   }
   for (const block of blocks) {
-    output.appendChild(
-      block.kind === "markdown" ? renderMarkdownBlock(block) : renderOutputBlock(block),
-    );
+    output.appendChild(block.kind === "markdown" ? renderMarkdownBlock(block) : renderOutputBlock(block));
   }
   syncOutputToEditor();
 }
 
+function showError(message) {
+  output.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "error";
+  div.textContent = String(message);
+  output.appendChild(div);
+  lastGoodShown = false;
+}
+
 async function run() {
-  localStorage.setItem("tensorforge.source.v3", editor.value);
+  syncSourceFromBlocks();
   if (!invoke) {
     renderOutputs([]);
     return;
@@ -1176,24 +1056,14 @@ async function run() {
   renderOutputs(result.outputs);
 }
 
-// ---- live rendering ---------------------------------------------------------
-// Re-run automatically as the user types (debounced). The engine recovers
-// per statement, so a broken line shows one error block while everything
-// else keeps rendering. Parse errors (whole-file) keep the previous output
-// to avoid flickering away good results mid-edit.
-
-let liveTimer = null;
-let lastGoodShown = false;
-
 async function liveRun() {
-  localStorage.setItem("tensorforge.source.v3", editor.value);
+  syncSourceFromBlocks();
   if (!invoke) {
     renderOutputs([]);
     return;
   }
   const result = await invoke("run_tens", { source: editor.value });
   if (!result.ok) {
-    // Whole-file parse error: show it only if we have nothing better.
     if (!lastGoodShown) showError(result.error);
     else {
       let banner = output.querySelector(".parse-banner");
@@ -1215,38 +1085,247 @@ function scheduleLiveRun() {
   liveTimer = setTimeout(liveRun, 350);
 }
 
-editor.addEventListener("input", () => {
-  clearGutterErrors();
+function stripDisplayMath(latex) {
+  return latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
+}
+
+function exportBlocks() {
+  return [
+    ...docBlocks.filter((b) => b.kind === "markdown" && b.text.trim()).map((b) => ({ kind: "markdown", ...b })),
+    ...lastRenderedOutputs.filter((item) => !item.error).map((item) => ({ kind: "output", ...item })),
+  ].sort((a, b) => {
+    const la = a.kind === "markdown" ? a.sourceLine : a.line;
+    const lb = b.kind === "markdown" ? b.sourceLine : b.line;
+    return la - lb || (a.kind === "markdown" ? -1 : 1);
+  });
+}
+
+function buildExportMarkdown() {
+  return exportBlocks()
+    .map((block) => {
+      if (block.kind === "markdown") return block.text.trim();
+      return `### ${block.header}\n\n$$\n${stripDisplayMath(block.latex)}\n$$`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildPrintableBody() {
+  const blocks = exportBlocks();
+  if (blocks.length === 0) return "";
+  return blocks
+    .map((block) => {
+      if (block.kind === "markdown") {
+        return `<section class="doc-block markdown-doc">${renderMarkdown(block.text)}</section>`;
+      }
+      return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
+    })
+    .join("\n");
+}
+
+async function exportMarkdown() {
+  closeExportMenu();
+  const markdown = buildExportMarkdown();
+  if (!markdown.trim()) {
+    showError("Nothing to export yet. Add Markdown or display(...) output first.");
+    return;
+  }
+  if (invoke) {
+    await invoke("export_text", {
+      content: markdown,
+      defaultFilename: defaultExportName("md"),
+      filterName: "Markdown",
+      extensions: ["md", "markdown"],
+    }).catch(showError);
+    return;
+  }
+  downloadText(markdown, defaultExportName("md"), "text/markdown");
+}
+
+function exportPdf() {
+  closeExportMenu();
+  const body = buildPrintableBody();
+  if (!body) {
+    showError("Nothing to export yet. Add Markdown or display(...) output first.");
+    return;
+  }
+  printDocument(body);
+}
+
+function defaultExportName(ext) {
+  const base = currentPath ? currentPath.split("/").pop().replace(/\.[^.]+$/, "") : "tensorforge-export";
+  return `${base}.${ext}`;
+}
+
+function downloadText(text, filename, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function printDocument(bodyHtml) {
+  printRoot.innerHTML = bodyHtml;
+  document.body.classList.add("printing");
+  const cleanup = () => {
+    document.body.classList.remove("printing");
+    printRoot.innerHTML = "";
+    window.scrollTo(0, 0);
+  };
+  try {
+    if (invoke) invoke("print_window").catch(showError);
+    else window.print();
+  } catch (e) {
+    showError(`Print failed: ${e}`);
+  }
+  window.addEventListener("afterprint", cleanup, { once: true });
+  document.addEventListener("pointerdown", cleanup, { once: true });
+  document.addEventListener("keydown", cleanup, { once: true });
+}
+
+// ---- table and paste -------------------------------------------------------
+
+function currentIsMarkdown() {
+  return activeBlock()?.kind === "markdown";
+}
+
+function updateInsertTableState() {
+  insertTableBtn.disabled = !currentIsMarkdown();
+}
+
+function openTableMenu() {
+  if (!currentIsMarkdown()) return;
+  tableMenu.classList.add("show");
+}
+
+function closeTableMenu() {
+  tableMenu.classList.remove("show");
+}
+
+function markdownTable(rows, cols, align) {
+  const sep = { left: "---", center: ":---:", right: "---:" }[align] ?? "---";
+  const cells = (fill) => `| ${Array.from({ length: cols }, () => fill).join(" | ")} |`;
+  const lines = [cells("   "), cells(sep)];
+  for (let r = 0; r < rows; r++) lines.push(cells("   "));
+  return lines.join("\n");
+}
+
+function insertTableIntoMarkdown() {
+  const block = activeBlock();
+  const textarea = activeTextarea;
+  if (!block || block.kind !== "markdown" || !textarea) return;
+  const rows = Math.max(1, Number(document.getElementById("table-rows").value) || 2);
+  const cols = Math.max(1, Number(document.getElementById("table-cols").value) || 3);
+  const align = document.getElementById("table-align").value;
+  const s = Math.min(textarea.selectionStart, textarea.value.length);
+  const e = Math.min(textarea.selectionEnd, textarea.value.length);
+  const atLineStart = s === 0 || textarea.value[s - 1] === "\n";
+  textarea.setRangeText(`${atLineStart ? "" : "\n"}${markdownTable(rows, cols, align)}\n`, s, e, "end");
+  block.text = textarea.value;
+  autoResize(textarea);
+  syncSourceFromBlocks();
+  closeTableMenu();
   scheduleLiveRun();
-});
-editor.addEventListener("focus", updateInsertTableState);
-// Keep the Table button's enabled state current as the caret moves in/out
-// of .tens blocks.
-editor.addEventListener("keyup", updateInsertTableState);
-editor.addEventListener("click", updateInsertTableState);
-editor.addEventListener("paste", handleMarkdownPaste);
-editor.addEventListener("scroll", () => {
-  // The highlight underlay follows by transform; no rebuild needed.
-  gutter.scrollTop = editor.scrollTop;
-  syncSourceLayerScroll();
-  syncOutputToEditor();
-});
-output.addEventListener("scroll", syncEditorToOutput);
-window.addEventListener("resize", refreshEditorGeometry);
-// initial render on startup
-scheduleLiveRun();
+}
+
+function handleMarkdownPaste(e, textarea, block) {
+  const item = [...(e.clipboardData?.items ?? [])].find((it) => it.type.startsWith("image/"));
+  if (!item) return;
+  e.preventDefault();
+  const file = item.getAsFile();
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    textarea.setRangeText(`![pasted image](${reader.result})`, textarea.selectionStart, textarea.selectionEnd, "end");
+    block.text = textarea.value;
+    autoResize(textarea);
+    syncSourceFromBlocks();
+    scheduleLiveRun();
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---- scroll linking --------------------------------------------------------
+
+function withScrollSyncSource(source, fn) {
+  scrollSyncSource = source;
+  fn();
+  requestAnimationFrame(() => {
+    if (scrollSyncSource === source) scrollSyncSource = null;
+  });
+}
+
+function scrollRatio(el) {
+  const max = el.scrollHeight - el.clientHeight;
+  return max <= 0 ? 0 : el.scrollTop / max;
+}
+
+function syncOutputToEditor() {
+  if (scrollSyncSource === "output") return;
+  cancelAnimationFrame(scrollSyncFrame);
+  scrollSyncFrame = requestAnimationFrame(() => {
+    const targetMax = output.scrollHeight - output.clientHeight;
+    if (targetMax <= 0) return;
+    withScrollSyncSource("editor", () => {
+      output.scrollTo({
+        top: Math.max(0, Math.min(targetMax, scrollRatio(sourceEditor) * targetMax)),
+        behavior: "auto",
+      });
+    });
+  });
+}
+
+function syncEditorToOutput() {
+  if (scrollSyncSource === "editor") return;
+  cancelAnimationFrame(scrollSyncFrame);
+  scrollSyncFrame = requestAnimationFrame(() => {
+    const targetMax = sourceEditor.scrollHeight - sourceEditor.clientHeight;
+    if (targetMax <= 0) return;
+    withScrollSyncSource("output", () => {
+      sourceEditor.scrollTo({
+        top: Math.max(0, Math.min(targetMax, scrollRatio(output) * targetMax)),
+        behavior: "auto",
+      });
+    });
+  });
+}
+
+function makeBlockJump(el, line) {
+  if (line) el.dataset.line = String(line);
+  el.title = `Click to jump to source`;
+  el.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    jumpToSourceLine(line, { focus: true, behavior: "auto" });
+  });
+}
+
+// ---- menus/events ----------------------------------------------------------
+
+function toggleExportMenu() {
+  exportMenu.classList.toggle("show");
+}
+
+function closeExportMenu() {
+  exportMenu.classList.remove("show");
+}
 
 runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
-saveBtn.addEventListener("click", () => saveFile());
+saveBtn.addEventListener("click", saveFile);
+addTensBtn.addEventListener("click", insertTensBlock);
+themeBtn.addEventListener("click", toggleTheme);
 
-addNoteBtn.addEventListener("click", insertTensBlock);
 exportBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   toggleExportMenu();
 });
 exportMenu.addEventListener("click", (e) => e.stopPropagation());
-// pointerdown + preventDefault keeps focus stable while the popover opens.
+exportMdBtn.addEventListener("click", exportMarkdown);
+exportPdfBtn.addEventListener("click", exportPdf);
+
 insertTableBtn.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   e.stopPropagation();
@@ -1257,9 +1336,14 @@ insertTableBtn.addEventListener("pointerdown", (e) => {
 insertTableBtn.addEventListener("click", (e) => e.stopPropagation());
 tableMenu.addEventListener("click", (e) => e.stopPropagation());
 document.getElementById("table-insert").addEventListener("click", insertTableIntoMarkdown);
-exportMdBtn.addEventListener("click", exportMarkdown);
-exportPdfBtn.addEventListener("click", exportPdf);
-themeBtn.addEventListener("click", toggleTheme);
+
+sourceEditor.addEventListener("scroll", () => {
+  sourceGutter.scrollTop = sourceEditor.scrollTop;
+  syncOutputToEditor();
+});
+output.addEventListener("scroll", syncEditorToOutput);
+window.addEventListener("resize", resizeAllTextareas);
+
 document.addEventListener("click", () => {
   closeExportMenu();
   closeTableMenu();
@@ -1272,9 +1356,15 @@ document.addEventListener("keydown", (e) => {
     run();
   } else if (mod && e.key === "s") {
     e.preventDefault();
-    saveFile(e.shiftKey);
+    saveFile();
   } else if (mod && e.key === "o") {
     e.preventDefault();
     openFile();
   }
 });
+
+// ---- boot ------------------------------------------------------------------
+
+setDocumentSource(localStorage.getItem("tensorforge.source.v3") ?? DEFAULT_SOURCE, { run: false });
+restoreFileRail();
+scheduleLiveRun();

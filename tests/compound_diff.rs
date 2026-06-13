@@ -26,6 +26,29 @@ fn diff_by_compound_tensor() {
 }
 
 #[test]
+fn diff_mooney_rivlin_invariants_by_c() {
+    // I2 = 1/2((tr C)^2 - tr(C C)) needs the trace product chain rule:
+    // d tr(C C)/dC = C + C.
+    let src = r#"
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
+I1 = tr(C)
+I2 = 0.5 * ((tr(C))^2 - tr(C*C))
+Psi = C1 * (I1 - 3) + C2 * (I2 - 3)
+S = 2 * diff(Psi, C)
+export(S, format=latex)
+"#;
+    let outputs = run_source(src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(latex.contains("C_1"), "missing C1 term: {latex}");
+    assert!(latex.contains("C_2"), "missing C2 term: {latex}");
+    assert!(latex.contains("\\bm I"), "missing identity contribution: {latex}");
+    assert!(latex.contains("\\bm C + \\bm C"), "missing d tr(CC)/dC contribution: {latex}");
+}
+
+#[test]
 fn diff_by_compound_log_det() {
     // ∂log(det C)/∂C = C^{-T}
     let src = format!("{PRELUDE}\nW = log(det(C))\nS = diff(W, C)\nexport(S, format=latex)");

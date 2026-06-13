@@ -48,6 +48,11 @@ pub struct Interpreter {
     /// Definitions for display-time back-substitution, in insertion order:
     /// `C = F.T * F` lets later displays show `\bm C` instead of `FᵀF`.
     defs: Vec<crate::substitute::Def>,
+    /// Direct symbol-display values before continuum simplification. This
+    /// preserves user-facing definitions such as `C = F.T * F` even when the
+    /// computational value simplifies `F.T` to `F` for a component-filled
+    /// symmetric `F`.
+    display_values: HashMap<String, Value>,
     /// Symbol names declared as function arguments via `Var("...")`, in
     /// declaration order. A scalar expression mentioning exactly one of
     /// these is a function of it and can be applied with call syntax.
@@ -127,6 +132,7 @@ impl Interpreter {
                     }
                 }
                 let value = self.eval(expr)?;
+                let display_value = self.eval_display_value(expr).ok();
                 // A direct Scalar("...")/Tensor("...") declaration also
                 // registers the display label for this variable name.
                 if let Expr::Call { callee, args, .. } = expr {
@@ -157,6 +163,13 @@ impl Interpreter {
                             value: value.clone(),
                         });
                     }
+                }
+                if let Some(display_value) =
+                    display_value.filter(|v| !is_leaf && value_contains_transpose(v))
+                {
+                    self.display_values.insert(name.clone(), display_value);
+                } else {
+                    self.display_values.remove(name);
                 }
                 self.env.insert(name.clone(), value);
                 Ok(())
@@ -414,6 +427,83 @@ impl Interpreter {
                 args,
                 kwargs,
             } => self.eval_call(callee, args, kwargs),
+        }
+    }
+
+    fn eval_display_value(&mut self, expr: &Expr) -> Result<Value, Error> {
+        match expr {
+            Expr::Field { target, name } => {
+                let value = self.eval_display_value(target)?;
+                match (value, name.as_str()) {
+                    (Value::Tensor(t), "T") => {
+                        Ok(Value::Tensor(Rc::new(TensorExpr::transpose(t)?)))
+                    }
+                    (Value::Scalar(_), "T") => Err(Error::msg("`.T` is not defined for scalars")),
+                    (_, other) => Err(Error::msg(format!("unknown property `.{other}`"))),
+                }
+            }
+            Expr::Unary {
+                op: UnOp::Neg,
+                expr,
+            } => match self.eval_display_value(expr)? {
+                Value::Scalar(s) => Ok(Value::Scalar(Rc::new(ScalarExpr::Neg(s)))),
+                Value::Tensor(t) => Ok(Value::Tensor(Rc::new(TensorExpr::Neg(t)))),
+            },
+            Expr::Binary { op, lhs, rhs } => {
+                let l = self.eval_display_value(lhs)?;
+                let r = self.eval_display_value(rhs)?;
+                self.eval_binary_display(*op, l, r)
+            }
+            _ => self.eval(expr),
+        }
+    }
+
+    fn eval_binary_display(&self, op: BinOp, l: Value, r: Value) -> Result<Value, Error> {
+        use BinOp::*;
+        match (op, l, r) {
+            (Mul, Value::Tensor(a), Value::Tensor(b)) => {
+                Ok(Value::Tensor(Rc::new(TensorExpr::matmul(a, b)?)))
+            }
+            (Add, Value::Tensor(a), Value::Tensor(b)) => {
+                Ok(Value::Tensor(Rc::new(TensorExpr::add(a, b)?)))
+            }
+            (Sub, Value::Tensor(a), Value::Tensor(b)) => {
+                Ok(Value::Tensor(Rc::new(TensorExpr::sub(a, b)?)))
+            }
+            (Mul, Value::Scalar(s), Value::Tensor(t))
+            | (Mul, Value::Tensor(t), Value::Scalar(s)) => {
+                Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(s, t))))
+            }
+            (Div, Value::Tensor(t), Value::Scalar(s)) => {
+                Ok(Value::Tensor(Rc::new(TensorExpr::ScalarMul(
+                    Rc::new(ScalarExpr::Div(Rc::new(ScalarExpr::Num(1.0)), s)),
+                    t,
+                ))))
+            }
+            (Ddot, Value::Tensor(a), Value::Tensor(b)) => match (a.order(), b.order()) {
+                (2, 2) => Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b)))),
+                (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
+                (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                (oa, ob) => Err(Error::msg(format!(
+                    "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
+                     {oa} and {ob}"
+                ))),
+            },
+            (Outer, Value::Tensor(a), Value::Tensor(b)) => {
+                Ok(Value::Tensor(Rc::new(TensorExpr::outer(a, b)?)))
+            }
+            (op, Value::Scalar(a), Value::Scalar(b)) => {
+                let node = match op {
+                    Add => ScalarExpr::Add(a, b),
+                    Sub => ScalarExpr::Sub(a, b),
+                    Mul => ScalarExpr::Mul(a, b),
+                    Div => ScalarExpr::Div(a, b),
+                    Pow => ScalarExpr::Pow(a, b),
+                    Outer | Ddot => unreachable!("handled above"),
+                };
+                Ok(Value::Scalar(Rc::new(node)))
+            }
+            (op, l, r) => self.eval_binary(op, l, r),
         }
     }
 
@@ -1354,8 +1444,6 @@ impl Interpreter {
             }
         }
 
-        let value = self.eval(&args[0])?;
-
         let mut mode = "symbol".to_string();
         let mut format = "latex".to_string();
         for (key, raw) in kwargs {
@@ -1374,6 +1462,17 @@ impl Interpreter {
                 }
             }
         }
+
+        let value = self.eval(&args[0])?;
+        let value = if callee == "display" && mode == "symbol" {
+            subject
+                .as_deref()
+                .and_then(|name| self.display_values.get(name))
+                .cloned()
+                .unwrap_or(value)
+        } else {
+            value
+        };
 
         // Back-substitute registered definitions (most recent first) so the
         // display shows \bm C rather than the expanded FᵀF. Internal values
@@ -1584,6 +1683,37 @@ fn contains_filled(t: &TensorExpr) -> bool {
         | TensorExpr::Outer(a, b)
         | TensorExpr::BoxTimes(a, b) => contains_filled(a) || contains_filled(b),
         TensorExpr::SumIdx { body, .. } => contains_filled(body),
+    }
+}
+
+fn value_contains_transpose(value: &Value) -> bool {
+    match value {
+        Value::Tensor(t) => tensor_contains_transpose(t),
+        Value::Scalar(_) => false,
+    }
+}
+
+fn tensor_contains_transpose(t: &TensorExpr) -> bool {
+    match t {
+        TensorExpr::Transpose(_) | TensorExpr::InverseTranspose(_) => true,
+        TensorExpr::Var { .. }
+        | TensorExpr::Filled { .. }
+        | TensorExpr::Identity4 { .. }
+        | TensorExpr::SetElem { .. } => false,
+        TensorExpr::Inverse(a)
+        | TensorExpr::Neg(a)
+        | TensorExpr::ScalarMul(_, a)
+        | TensorExpr::SumIdx { body: a, .. } => tensor_contains_transpose(a),
+        TensorExpr::Diff { num, den, .. } => {
+            tensor_contains_transpose(num) || tensor_contains_transpose(den)
+        }
+        TensorExpr::MatMul(a, b)
+        | TensorExpr::Add(a, b)
+        | TensorExpr::Sub(a, b)
+        | TensorExpr::Outer(a, b)
+        | TensorExpr::BoxTimes(a, b) => {
+            tensor_contains_transpose(a) || tensor_contains_transpose(b)
+        }
     }
 }
 

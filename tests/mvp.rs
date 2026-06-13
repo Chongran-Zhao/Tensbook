@@ -245,6 +245,25 @@ fn display_symbol_mode() {
 }
 
 #[test]
+fn symbol_display_preserves_transpose_in_user_definition() {
+    let src = r#"
+lam = Var("\lambda")
+F = Tensor("\bm F", order=2, dim=3)
+F[1][1] = lam
+F[2][2] = lam^(-1/2)
+F[3][3] = lam^(-1/2)
+C = F.T * F
+display(C, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    assert!(
+        outputs[0].latex.contains("\\bm F^{\\mathsf{T}} \\bm F"),
+        "got: {}",
+        outputs[0].latex
+    );
+}
+
+#[test]
 fn display_components_mode_is_3x3() {
     let src = format!("{PRELUDE}\ndisplay(C, mode=components)");
     let outputs = run_source(&src).unwrap();
@@ -305,30 +324,29 @@ fn mooney_rivlin_uniaxial_example_runs_end_to_end() {
     ))
     .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
-    assert_eq!(outputs.len(), 7);
+    assert_eq!(outputs.len(), 5);
 
-    // W is the incompressible Mooney-Rivlin scalar energy.
-    match interp.get("W") {
+    match interp.get("Psi") {
         Some(Value::Scalar(_)) => {}
-        other => panic!("expected W to be a Scalar, got {other:?}"),
+        other => panic!("expected Psi to be a Scalar, got {other:?}"),
     }
-    let p11 = interp.get("P11").expect("P11 should be defined");
-    assert!(matches!(p11, Value::Scalar(_)));
+    let s = interp.get("S").expect("S should be defined");
+    assert!(matches!(s, Value::Tensor(_)));
 
-    let p11_out = outputs
+    let s_out = outputs
         .iter()
-        .find(|o| o.header.starts_with("display P11"))
+        .find(|o| o.header.starts_with("display S"))
         .unwrap();
     assert!(
-        !p11_out.latex.contains("+ -"),
-        "P11 should render with subtraction: {}",
-        p11_out.latex
+        !s_out.latex.contains("\\partial"),
+        "S should be derived instead of displayed as an unevaluated derivative: {}",
+        s_out.latex
     );
-    for needle in ["P_{11}", "C_1", "C_2", "{\\lambda}^{-3}"] {
+    for needle in ["\\bm S", "C_1", "C_2", "\\bm I", "\\bm C"] {
         assert!(
-            p11_out.latex.contains(needle),
+            s_out.latex.contains(needle),
             "missing {needle} in: {}",
-            p11_out.latex
+            s_out.latex
         );
     }
 }

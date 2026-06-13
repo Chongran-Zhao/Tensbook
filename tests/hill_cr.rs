@@ -185,7 +185,7 @@ fn shipped_example_runs_end_to_end() {
     ))
     .unwrap();
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs.len(), 7);
+    assert_eq!(outputs.len(), 5);
     assert!(outputs.iter().all(|o| o.error.is_none()));
-    assert!(outputs.iter().any(|o| o.header.starts_with("display P11")));
+    assert!(outputs.iter().any(|o| o.header.starts_with("display S")));
 }

@@ -962,6 +962,14 @@ fn outer_scaled(a: Rc<TensorExpr>, b: Rc<TensorExpr>) -> Result<Rc<TensorExpr>, 
     Ok(Rc::new(TensorExpr::outer(a, b)?))
 }
 
+fn trace_partner(t: Rc<TensorExpr>) -> Rc<TensorExpr> {
+    if t.is_symmetric() {
+        t
+    } else {
+        Rc::new(TensorExpr::Transpose(t))
+    }
+}
+
 /// `f'(arg)` for the named univariate functions.
 fn func_derivative(name: &str, arg: &Rc<ScalarExpr>) -> Result<Rc<ScalarExpr>, Error> {
     let f = |n: &str| {
@@ -1457,7 +1465,7 @@ fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExp
         _ if t == x => Ok(Some(identity_like(x))),
         TensorExpr::Transpose(inner) if inner == x => Ok(Some(identity_like(x))),
         TensorExpr::MatMul(a, b) => {
-            // ∂tr(XᵀX)/∂X = 2X and ∂tr(XXᵀ)/∂X = 2X
+            // Closed forms that avoid differentiating a transpose node.
             if let TensorExpr::Transpose(inner) = &**a {
                 if inner == b && b == x {
                     return Ok(Some(smul(Rc::new(ScalarExpr::Num(2.0)), x.clone())));
@@ -1468,16 +1476,34 @@ fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExp
                     return Ok(Some(smul(Rc::new(ScalarExpr::Num(2.0)), x.clone())));
                 }
             }
-            // ∂tr(AX)/∂X = ∂tr(XA)/∂X = Aᵀ for X-independent A
             if a == x && !t_contains(b, x) {
                 return Ok(Some(Rc::new(TensorExpr::Transpose(b.clone()))));
             }
             if b == x && !t_contains(a, x) {
                 return Ok(Some(Rc::new(TensorExpr::Transpose(a.clone()))));
             }
-            Err(Error::msg(
-                "∂tr(AB)/∂X is only supported for AᵀA, AAᵀ, AX, XA forms in this phase",
-            ))
+
+            // d tr(A B) = tr(dA B) + tr(A dB). With the derivative
+            // convention (∂A/∂X)_{ijmn}, this is Bᵀ : ∂A/∂X + Aᵀ : ∂B/∂X.
+            let da = d_tensor(a, x)?;
+            let db = d_tensor(b, x)?;
+            let term_a = if let Some(da) = da {
+                Some(Rc::new(TensorExpr::ddot_tq(
+                    trace_partner(b.clone()),
+                    da,
+                )?))
+            } else {
+                None
+            };
+            let term_b = if let Some(db) = db {
+                Some(Rc::new(TensorExpr::ddot_tq(
+                    trace_partner(a.clone()),
+                    db,
+                )?))
+            } else {
+                None
+            };
+            Ok(tadd(term_a, term_b))
         }
         TensorExpr::Add(a, b) => Ok(tadd(d_trace(a, x)?, d_trace(b, x)?)),
         TensorExpr::Sub(a, b) => Ok(tsub(d_trace(a, x)?, d_trace(b, x)?)),

@@ -1,66 +1,85 @@
-# Incompressible uniaxial tension
+# Calibration for Incompressible Hyperplasticity 
 
-This example derives the first Piola-Kirchhoff stress component \(P_{11}\)
-for an incompressible Mooney-Rivlin material.
+Consider the strain energy in the form of 
+$$
+\Psi(\bm C) = \Psi_\mathrm{ich}(\bar{\bm C})+ \Psi_\mathrm{vol}(J).
+$$
+Here, $J:=\det(\bm C)$ is the volume ratio and $\bar{\bm C} := J^{-2/3}\bm C$ is the modified right Cauchy-Green deformation tensor.
 
-The deformation gradient is
+The constitutive relation gives the following stress formula,
 
 $$
-\bm F = \operatorname{diag}(\lambda, \lambda^{-1/2}, \lambda^{-1/2}).
+\bm S:= 2\frac{\partial \Psi}{\partial \bm C}=\bm S_\mathrm{ich} + Jp\bm C^{-1}
+\quad\text{with}\quad
+\bm S_\mathrm{ich}:= 2\frac{\partial \Psi_\mathrm{ich}(\bar{\bm C})}{\partial \bm C},
+\quad
+p:= \frac{d\Psi_\mathrm{vol}(J)}{dJ}
 $$
+
+You may refer to chapter 6.4 of *Holzapfel, G. A. (2002). Nonlinear Solid Mechanics: A Continuum Approach for Engineering Science* for detailed derivation.
+
+Then, the first Piola-Kirichoff stress $\bm P$ is determined by $\bm P=\bm F\bm S$.
+
+Next, we will consider a very simple case, uniaxial tension, the corresponding deforamtion gradient is predescribed by the stretch variable $\lambda$, as
 
 <!-- tensorforge:tens -->
 lam = Var("\lambda")
-C1 = Scalar("C_1")
-C2 = Scalar("C_2")
 
 F = Tensor("\bm F", order=2, dim=3)
 F[1][1] = lam
 F[2][2] = lam^(-1/2)
 F[3][3] = lam^(-1/2)
-
-C = F.T * F
+display(F, mode=matrix)
 <!-- /tensorforge:tens -->
 
-For this uniaxial deformation, the invariants are
-
-$$
-I_1 = \lambda^2 + 2\lambda^{-1},
-\qquad
-I_2 = 2\lambda + \lambda^{-2}.
-$$
-
-The Mooney-Rivlin strain-energy density is
-
-$$
-W = C_1(I_1 - 3) + C_2(I_2 - 3).
-$$
+The corresponding right Cauchy-Green deformation tensor is
 
 <!-- tensorforge:tens -->
+C = F.T * F
+display(C, mode=symbol)
+display(C, mode=components)
+<!-- /tensorforge:tens -->
+
+and the corresponding pricipal invariants are defined as
+
+<!-- tensorforge:tens -->
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
 I1 = Scalar("I_1")
 I2 = Scalar("I_2")
-I1 = lam^2 + 2 * lam^(-1)
-I2 = 2 * lam + lam^(-2)
-
-W = C1 * (I1 - 3) + C2 * (I2 - 3)
-
-P11 = Scalar("P_{11}")
-P11 = simplify(diff(W, lam))
+I1 = tr(C)
+I2 = 0.5 * ((tr(C))^2 - tr(C*C))
+display(I1)
+display(I2)
 <!-- /tensorforge:tens -->
 
-The axial nominal stress is the first component of the first
-Piola-Kirchhoff stress:
+The Mooney-Rivlin model is defined as the function of $I_1$ and $I_2$, as
 
-$$
-P_{11} = \frac{dW}{d\lambda}.
-$$
 
 <!-- tensorforge:tens -->
-display(F, mode=matrix)
-display(C, mode=matrix)
-display(I1, mode=symbol)
-display(I2, mode=symbol)
-display(W, mode=symbol)
-display(P11, mode=symbol)
-export(P11, format=latex)
+Psi = Scalar("\Psi_\mathrm{ich}")
+Psi = C1 * (I1 - 3) + C2 * (I2 - 3)
+display(Psi)
+<!-- /tensorforge:tens -->
+
+Then, we can derive the second Piola-Kirichoff stress $\bm S$ by the definition of $\bm S:= 2\partial \Psi/\partial \bm C$, as
+
+
+
+
+
+<!-- tensorforge:tens -->
+S = 2 * diff(Psi, C)
+display(S)
+
+<!-- /tensorforge:tens -->
+
+and the first Piola-Kirichhoff stress
+
+
+
+
+<!-- tensorforge:tens -->
+P = F * S
+display(P)
 <!-- /tensorforge:tens -->
