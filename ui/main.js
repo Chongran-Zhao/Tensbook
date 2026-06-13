@@ -171,12 +171,17 @@ function syncGutter(errorLines = new Set(), options = {}) {
     );
     gutterLineCount = count;
   }
-  for (const line of gutter.children) {
+  // Measure wrapping so each gutter row matches its (possibly multi-row)
+  // logical line; everything downstream reads sourceLineTop, so frames and
+  // scroll sync align automatically.
+  const tops = recomputeLineMetrics();
+  const cs = getComputedStyle(editor);
+  [...gutter.children].forEach((line, i) => {
     line.classList.toggle("err", errorLines.has(Number(line.dataset.line)));
     line.classList.remove("block-fence");
-    line.style.height = "";
-    line.style.lineHeight = "";
-  }
+    line.style.height = `${tops[i + 1] - tops[i]}px`;
+    line.style.lineHeight = cs.lineHeight; // keep the number on the first row
+  });
   for (const block of tensBlocksFromSource(editor.value)) {
     gutter.children[block.line - 1]?.classList.add("block-fence");
     if (block.closed) gutter.children[block.endLine - 1]?.classList.add("block-fence");
@@ -790,7 +795,50 @@ function insertTensBlock() {
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+// Top offsets (relative to the editor content box, including padding-top)
+// of every logical line, plus a sentinel = content bottom at index n.
+// Recomputed by recomputeLineMetrics whenever content or width changes.
+let lineTopsCache = null;
+
+function recomputeLineMetrics() {
+  const cs = getComputedStyle(editor);
+  let mirror = document.getElementById("wrap-mirror");
+  if (!mirror) {
+    mirror = document.createElement("div");
+    mirror.id = "wrap-mirror";
+    editorWrap.appendChild(mirror);
+  }
+  // Match the editor's text box so the mirror wraps identically.
+  mirror.style.font = cs.font;
+  mirror.style.lineHeight = cs.lineHeight;
+  mirror.style.letterSpacing = cs.letterSpacing;
+  mirror.style.tabSize = cs.tabSize;
+  const padTop = Number.parseFloat(cs.paddingTop);
+  const padLeft = Number.parseFloat(cs.paddingLeft);
+  const padRight = Number.parseFloat(cs.paddingRight);
+  mirror.style.width = `${editor.clientWidth - padLeft - padRight}px`;
+
+  const lines = editor.value.split("\n");
+  mirror.replaceChildren(
+    ...lines.map((text) => {
+      const d = document.createElement("div");
+      // A zero-width char keeps empty lines one visual row tall.
+      d.textContent = text.length ? text : "​";
+      return d;
+    }),
+  );
+  const tops = new Array(lines.length + 1);
+  for (let i = 0; i < lines.length; i++) {
+    tops[i] = padTop + mirror.children[i].offsetTop;
+  }
+  tops[lines.length] = padTop + mirror.scrollHeight;
+  lineTopsCache = tops;
+  return tops;
+}
+
 function sourceLineTop(line) {
+  const tops = lineTopsCache;
+  if (tops && line >= 1 && line <= tops.length) return tops[line - 1];
   const style = getComputedStyle(editor);
   return (
     Number.parseFloat(style.paddingTop) +
@@ -802,9 +850,12 @@ function rowTop(line) {
   return sourceLineTop(line) - editor.scrollTop;
 }
 
+// Pixel height covering startLine..endLine inclusive, accounting for wrapped
+// lines via the measured offsets; never below `minLines` single rows.
 function rowSpanHeight(startLine, endLine, minLines = 1) {
   const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight);
-  return Math.max(minLines, endLine - startLine + 1) * lineHeight;
+  const span = sourceLineTop(endLine + 1) - sourceLineTop(startLine);
+  return Math.max(span, minLines * lineHeight);
 }
 
 function syncSourceLayerScroll() {
