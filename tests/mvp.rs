@@ -238,7 +238,7 @@ fn display_symbol_mode() {
         outputs[0].latex
     );
     assert!(
-        outputs[0].latex.contains("\\bm F^{\\mathsf{T}} \\bm F"),
+        outputs[0].latex.contains("\\bm F^{\\mathsf{T}} \\, \\bm F"),
         "got: {}",
         outputs[0].latex
     );
@@ -257,7 +257,7 @@ display(C, mode=symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
-        outputs[0].latex.contains("\\bm F^{\\mathsf{T}} \\bm F"),
+        outputs[0].latex.contains("\\bm F^{\\mathsf{T}} \\, \\bm F"),
         "got: {}",
         outputs[0].latex
     );
@@ -290,7 +290,7 @@ fn export_latex() {
     let src = format!("{PRELUDE}\nexport(C, format=latex)");
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs[0].header, "export C, format=latex");
-    assert_eq!(outputs[0].latex, "\\bm F^{\\mathsf{T}} \\bm F");
+    assert_eq!(outputs[0].latex, "\\bm F^{\\mathsf{T}} \\, \\bm F");
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn mooney_rivlin_uniaxial_example_runs_end_to_end() {
     ))
     .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
-    assert_eq!(outputs.len(), 5);
+    assert_eq!(outputs.len(), 8);
 
     match interp.get("Psi") {
         Some(Value::Scalar(_)) => {}

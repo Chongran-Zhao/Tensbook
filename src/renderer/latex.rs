@@ -346,7 +346,9 @@ fn render_tensor(expr: &TensorExpr) -> String {
             } else {
                 render_tensor(b)
             };
-            format!("{lhs} {rhs}")
+            // Thin space so adjacent bold tensors (F S, C C) read as a
+            // product rather than one glued-together symbol "FS"/"CC".
+            format!("{lhs} \\, {rhs}")
         }
         TensorExpr::Outer(a, b) => {
             let lhs = if tprec(a) < 2 {

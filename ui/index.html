@@ -131,14 +131,16 @@
     position: relative;
   }
   #rail-toggle {
-    align-self: flex-end; margin: 0 6px 6px 0;
+    align-self: flex-end; margin: 2px 6px 4px 0;
     width: 22px; height: 22px; padding: 0;
-    border-radius: 6px; font-size: 13px; line-height: 1;
-    color: var(--muted); background: transparent;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 6px;
+    background: transparent; color: var(--muted);
+    font-size: 15px; line-height: 1; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
   }
-  #rail-toggle:hover {
-    color: var(--text); background: var(--panel);
-  }
+  #rail-toggle:hover { background: var(--panel); color: var(--accent); }
+  #rail-toggle:active { transform: translateY(0.5px); }
   #rail-resizer {
     flex: 0 0 4px; cursor: col-resize;
     background: var(--border); opacity: 0.6;
@@ -170,7 +172,7 @@
     display: none;
   }
   main.rail-collapsed #rail-toggle {
-    margin-right: 6px;
+    align-self: center; margin: 4px 0 0;
   }
   main.rail-collapsed #file-rail .rail-head,
   main.rail-collapsed #rail-files {

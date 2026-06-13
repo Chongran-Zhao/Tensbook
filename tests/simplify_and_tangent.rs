@@ -40,7 +40,7 @@ fn simplify_transpose_of_symmetric() {
     // Cᵀ → C because C = FᵀF is provably symmetric
     let src = format!("{PRELUDE}\nX = simplify(C.T)\nexport(X, format=latex)");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "\\bm F^{\\mathsf{T}} \\bm F");
+    assert_eq!(outputs[0].latex, "\\bm F^{\\mathsf{T}} \\, \\bm F");
 }
 
 #[test]

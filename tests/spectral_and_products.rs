@@ -63,7 +63,7 @@ fn outer_of_same_tensor_is_symmetric() {
 fn dot_is_single_contraction() {
     let src = format!("{PRELUDE}\nD = dot(F, G)\nexport(D, format=latex)");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "\\bm F \\bm G");
+    assert_eq!(outputs[0].latex, "\\bm F \\, \\bm G");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn ddot_is_scalar_double_contraction() {
 fn markdown_export_wraps_display_math() {
     let src = format!("{PRELUDE}\nexport(C, format=markdown)");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "$$\n\\bm F^{\\mathsf{T}} \\bm F\n$$");
+    assert_eq!(outputs[0].latex, "$$\n\\bm F^{\\mathsf{T}} \\, \\bm F\n$$");
 }
 
 // ---- isotropic tensor functions sqrt/log/exp --------------------------------

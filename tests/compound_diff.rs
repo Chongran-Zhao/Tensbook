@@ -44,8 +44,14 @@ export(S, format=latex)
     let latex = &outputs[0].latex;
     assert!(latex.contains("C_1"), "missing C1 term: {latex}");
     assert!(latex.contains("C_2"), "missing C2 term: {latex}");
-    assert!(latex.contains("\\bm I"), "missing identity contribution: {latex}");
-    assert!(latex.contains("\\bm C + \\bm C"), "missing d tr(CC)/dC contribution: {latex}");
+    assert!(
+        latex.contains("\\bm I"),
+        "missing identity contribution: {latex}"
+    );
+    assert!(
+        latex.contains("\\bm C + \\bm C"),
+        "missing d tr(CC)/dC contribution: {latex}"
+    );
 }
 
 #[test]

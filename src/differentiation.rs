@@ -1488,18 +1488,12 @@ fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExp
             let da = d_tensor(a, x)?;
             let db = d_tensor(b, x)?;
             let term_a = if let Some(da) = da {
-                Some(Rc::new(TensorExpr::ddot_tq(
-                    trace_partner(b.clone()),
-                    da,
-                )?))
+                Some(Rc::new(TensorExpr::ddot_tq(trace_partner(b.clone()), da)?))
             } else {
                 None
             };
             let term_b = if let Some(db) = db {
-                Some(Rc::new(TensorExpr::ddot_tq(
-                    trace_partner(a.clone()),
-                    db,
-                )?))
+                Some(Rc::new(TensorExpr::ddot_tq(trace_partner(a.clone()), db)?))
             } else {
                 None
             };
