@@ -152,6 +152,11 @@ setupCompletion(editor);
 // ---- editor gutter -----------------------------------------------------------
 
 let gutterLineCount = 0;
+// Top offsets (incl. padding-top) of every logical line + a sentinel at
+// index n = content bottom; recomputed on content/width change. Declared
+// here, above syncGutter's first call, so recomputeLineMetrics never hits
+// the temporal dead zone during module init.
+let lineTopsCache = null;
 
 function syncGutter(errorLines = new Set(), options = {}) {
   const syncBlocks = options.syncBlocks ?? true;
@@ -794,11 +799,6 @@ function insertTensBlock() {
   editor.setSelectionRange(selectStart, selectStart);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
-
-// Top offsets (relative to the editor content box, including padding-top)
-// of every logical line, plus a sentinel = content bottom at index n.
-// Recomputed by recomputeLineMetrics whenever content or width changes.
-let lineTopsCache = null;
 
 function recomputeLineMetrics() {
   const cs = getComputedStyle(editor);
