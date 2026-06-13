@@ -529,6 +529,7 @@ fn collect_scalar_set_elems_tensor<'a>(
             collect_scalar_set_elems_tensor(a, index, out);
             collect_scalar_set_elems_tensor(b, index, out);
         }
+        TensorExpr::Power { base, .. } => collect_scalar_set_elems_tensor(base, index, out),
         TensorExpr::Var { .. }
         | TensorExpr::Identity4 { .. }
         | TensorExpr::SetElem { .. }
@@ -730,6 +731,10 @@ fn rewrite_tensor_for_compound(
             num_label: num_label.clone(),
         }),
         TensorExpr::MatMul(p, q) => Rc::new(TensorExpr::MatMul(rwt(p), rwt(q))),
+        TensorExpr::Power { base, exp } => Rc::new(TensorExpr::Power {
+            base: rwt(base),
+            exp: *exp,
+        }),
         TensorExpr::Add(p, q) => Rc::new(TensorExpr::Add(rwt(p), rwt(q))),
         TensorExpr::Sub(p, q) => Rc::new(TensorExpr::Sub(rwt(p), rwt(q))),
         TensorExpr::Outer(p, q) => Rc::new(TensorExpr::Outer(rwt(p), rwt(q))),
@@ -846,6 +851,10 @@ fn replace_tensor(
             num_label: num_label.clone(),
         }),
         TensorExpr::MatMul(a, b) => Rc::new(TensorExpr::MatMul(rt(a), rt(b))),
+        TensorExpr::Power { base, exp } => Rc::new(TensorExpr::Power {
+            base: rt(base),
+            exp: *exp,
+        }),
         TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(rt(a), rt(b))),
         TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
         TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),
@@ -882,6 +891,9 @@ fn d_tensor(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
             "the derivative of eigenvectors is not supported yet; write the \
              energy in terms of the eigenvalues",
         )),
+        // Aⁿ differentiates as its expanded product; the matrix-product
+        // rules below take over.
+        TensorExpr::Power { base, exp } => d_tensor(&TensorExpr::expand_power(base, *exp), x),
         TensorExpr::Add(a, b) => Ok(tadd(d_tensor(a, x)?, d_tensor(b, x)?)),
         TensorExpr::Sub(a, b) => Ok(tsub(d_tensor(a, x)?, d_tensor(b, x)?)),
         TensorExpr::Neg(a) => Ok(d_tensor(a, x)?.map(tneg)),
@@ -1130,6 +1142,7 @@ fn tensor_mentions_scalar(t: &TensorExpr, name: &str) -> bool {
         TensorExpr::SetElem { base, .. } => base
             .as_ref()
             .is_some_and(|b| tensor_mentions_scalar(b, name)),
+        TensorExpr::Power { base, .. } => tensor_mentions_scalar(base, name),
         TensorExpr::SumIdx { body, .. } => tensor_mentions_scalar(body, name),
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)
@@ -1182,6 +1195,7 @@ pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
 fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
     match t {
         TensorExpr::SetElem { .. } | TensorExpr::Filled { .. } => {}
+        TensorExpr::Power { base, .. } => tensor_var_names(base, out),
         TensorExpr::SumIdx { body, .. } => tensor_var_names(body, out),
         TensorExpr::Var { name, .. } => {
             if !out.contains(name) {
@@ -1269,6 +1283,7 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
             Some(b) => walk_tensor(b, x, vars),
             None => Ok(()),
         },
+        TensorExpr::Power { base, .. } => walk_tensor(base, x, vars),
         TensorExpr::SumIdx { body, .. } => walk_tensor(body, x, vars),
         TensorExpr::Var { name, .. } => {
             if vars.contains(name) {
@@ -1464,6 +1479,8 @@ fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExp
         // ∂tr(X)/∂X = ∂tr(Xᵀ)/∂X = I
         _ if t == x => Ok(Some(identity_like(x))),
         TensorExpr::Transpose(inner) if inner == x => Ok(Some(identity_like(x))),
+        // tr(Aⁿ): expand to tr(A A … A) and reuse the product rule.
+        TensorExpr::Power { base, exp } => d_trace(&TensorExpr::expand_power(base, *exp), x),
         TensorExpr::MatMul(a, b) => {
             // Closed forms that avoid differentiating a transpose node.
             if let TensorExpr::Transpose(inner) = &**a {
@@ -1619,6 +1636,7 @@ pub fn t_contains(t: &TensorExpr, x: &TensorExpr) -> bool {
         TensorExpr::Filled { entries, .. } => entries.iter().any(|e| s_contains(e, x)),
         // An eigenvector element depends on its decomposed tensor.
         TensorExpr::SetElem { base, .. } => base.as_ref().is_some_and(|b| t_contains(b, x)),
+        TensorExpr::Power { base, .. } => t_contains(base, x),
         TensorExpr::SumIdx { body, .. } => t_contains(body, x),
         TensorExpr::Transpose(a)
         | TensorExpr::Inverse(a)

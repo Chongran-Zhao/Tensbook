@@ -130,6 +130,9 @@ pub fn abstract_component(
             });
             Ok(vec![t])
         }
+        TensorExpr::Power { base, exp } => {
+            abstract_component(&TensorExpr::expand_power(base, *exp), i, j, counter)
+        }
         TensorExpr::MatMul(a, b) => {
             let k = fresh_bound(counter);
             let lhs = abstract_component(a, i, &k, counter)?;
@@ -262,6 +265,7 @@ fn tensor_mentions(t: &TensorExpr, base: &str) -> bool {
     match t {
         TensorExpr::Identity4 { .. } | TensorExpr::SetElem { .. } => false,
         TensorExpr::Filled { entries, .. } => entries.iter().any(|e| scalar_depends(e, base)),
+        TensorExpr::Power { base: b, .. } => tensor_mentions(b, base),
         TensorExpr::SumIdx { body, .. } => tensor_mentions(body, base),
         TensorExpr::Var { latex, .. } => component_base(latex) == base,
         TensorExpr::Transpose(a)

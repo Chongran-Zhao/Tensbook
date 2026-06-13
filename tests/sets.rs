@@ -99,7 +99,7 @@ fn indexing_a_non_set_errors() {
     let src = "mu = Scalar(\"\\mu\")\nx = mu[1]\ndisplay(x)";
     let err = run_source(src).unwrap_err();
     assert!(
-        err.message.contains("not a declared set"),
+        err.message.contains("requires a tensor"),
         "got: {}",
         err.message
     );

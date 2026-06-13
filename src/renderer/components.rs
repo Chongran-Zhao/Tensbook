@@ -78,6 +78,7 @@ fn entry(expr: &TensorExpr, i: usize, j: usize) -> ScalarExpr {
             mul(entry1(a, i), entry1(b, j))
         }
         TensorExpr::Transpose(t) => entry(t, j, i),
+        TensorExpr::Power { base, exp } => entry(&TensorExpr::expand_power(base, *exp), i, j),
         TensorExpr::MatMul(a, b) => {
             let dim = expr.dim();
             let mut sum: Option<ScalarExpr> = None;
@@ -152,6 +153,7 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
              supported in matrix mode; use mode=symbol",
         )),
         TensorExpr::Var { .. } => Ok(()),
+        TensorExpr::Power { base, .. } => expandable(base),
         TensorExpr::Filled { order: 2, .. } => Ok(()),
         TensorExpr::Filled { .. } => Err(Error::msg(
             "matrix mode displays second-order tensors; this is not order 2",

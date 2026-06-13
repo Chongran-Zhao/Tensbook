@@ -92,6 +92,10 @@ fn tensor_pass(t: &Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             tensor_pass(a, rules),
             tensor_pass(b, rules),
         )),
+        TensorExpr::Power { base, exp } => Rc::new(TensorExpr::Power {
+            base: tensor_pass(base, rules),
+            exp: *exp,
+        }),
         TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(
             tensor_pass(a, rules),
             tensor_pass(b, rules),
@@ -187,8 +191,22 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             if cancels {
                 return identity(a.dim());
             }
+            // Note: A·A is NOT merged into a power here — that would dissolve a
+            // named compound (e.g. C = FᵀF) and break differentiation by C.
+            // The square is shown at render time instead (see latex.rs).
             t
         }
+        // (Aᵐ)ⁿ → Aᵐⁿ; A¹ → A is handled by the constructor.
+        TensorExpr::Power { base, exp } => match &**base {
+            TensorExpr::Power {
+                base: inner,
+                exp: m,
+            } => Rc::new(TensorExpr::Power {
+                base: inner.clone(),
+                exp: m * exp,
+            }),
+            _ => t,
+        },
         TensorExpr::Add(a, b) => factor_common_tensor_scalar(a, b, false).unwrap_or(t),
         TensorExpr::Sub(a, b) => factor_common_tensor_scalar(a, b, true).unwrap_or(t),
         // 0 · A handled at ScalarMul; -(-A) → A

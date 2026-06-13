@@ -58,6 +58,8 @@ pub fn is_symmetric(expr: &TensorExpr) -> bool {
         TensorExpr::Filled { .. } => false,
         // A sum of symmetric terms is symmetric.
         TensorExpr::SumIdx { body, .. } => is_symmetric(body),
+        // Aⁿ is symmetric when A is.
+        TensorExpr::Power { base, .. } => is_symmetric(base),
     }
 }
 

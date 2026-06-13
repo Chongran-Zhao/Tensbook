@@ -54,6 +54,13 @@ pub enum TensorExpr {
     },
     /// Second-order tensor product (single contraction), `A * B` -> `AB`.
     MatMul(Rc<TensorExpr>, Rc<TensorExpr>),
+    /// Integer matrix power `A^n` (n ≥ 2) of a second-order tensor. `A^1`
+    /// folds to `A`; `A^0` is not represented (use the identity). Produced by
+    /// `A^2` syntax and by collapsing `A * A` in the simplifier.
+    Power {
+        base: Rc<TensorExpr>,
+        exp: u32,
+    },
     /// Tensor (outer) product `A ⊗ B`; order = a.order() + b.order().
     Outer(Rc<TensorExpr>, Rc<TensorExpr>),
     /// Non-standard fourth-order product `A ⊠ B` of two second-order
@@ -114,6 +121,7 @@ impl TensorExpr {
             TensorExpr::Outer(a, b) => a.order() + b.order(),
             TensorExpr::BoxTimes(..) | TensorExpr::Identity4 { .. } => 4,
             TensorExpr::MatMul(a, _) => a.order(), // 2 in MVP
+            TensorExpr::Power { base, .. } => base.order(),
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.order(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.order(),
             TensorExpr::SetElem { order, .. } => *order,
@@ -132,6 +140,7 @@ impl TensorExpr {
             TensorExpr::Outer(a, _) | TensorExpr::BoxTimes(a, _) => a.dim(),
             TensorExpr::Identity4 { dim } => *dim,
             TensorExpr::MatMul(a, _) => a.dim(),
+            TensorExpr::Power { base, .. } => base.dim(),
             TensorExpr::Add(a, _) | TensorExpr::Sub(a, _) => a.dim(),
             TensorExpr::ScalarMul(_, t) | TensorExpr::Neg(t) => t.dim(),
             TensorExpr::SetElem { dim, .. } => *dim,
@@ -226,6 +235,37 @@ impl TensorExpr {
             return Err(Error::msg("dimension mismatch in T : Q"));
         }
         contract_second_fourth(second, fourth)
+    }
+
+    /// `A^n` for a second-order tensor and integer `n ≥ 1`. `n == 1` returns
+    /// `A` unchanged; `n == 0` is rejected (write the identity instead).
+    pub fn power(base: Rc<TensorExpr>, exp: u32) -> Result<TensorExpr, Error> {
+        if base.order() != 2 {
+            return Err(Error::msg(format!(
+                "`^` (matrix power) requires a second-order tensor, got order {}",
+                base.order()
+            )));
+        }
+        if exp == 0 {
+            return Err(Error::msg(
+                "tensor power 0 is not supported; use the identity tensor",
+            ));
+        }
+        if exp == 1 {
+            return Ok((*base).clone());
+        }
+        Ok(TensorExpr::Power { base, exp })
+    }
+
+    /// Expand `A^n` into the left-folded product `((A A) A) …` (n factors).
+    /// Used by component expansion and differentiation, which only know
+    /// `MatMul`.
+    pub fn expand_power(base: &Rc<TensorExpr>, exp: u32) -> Rc<TensorExpr> {
+        let mut acc = base.clone();
+        for _ in 1..exp {
+            acc = Rc::new(TensorExpr::MatMul(acc, base.clone()));
+        }
+        acc
     }
 
     pub fn matmul(a: Rc<TensorExpr>, b: Rc<TensorExpr>) -> Result<TensorExpr, Error> {

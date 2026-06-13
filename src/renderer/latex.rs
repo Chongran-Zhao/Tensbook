@@ -277,6 +277,7 @@ fn tprec(expr: &TensorExpr) -> u8 {
         | TensorExpr::Diff { .. }
         | TensorExpr::Identity4 { .. }
         | TensorExpr::SetElem { .. }
+        | TensorExpr::Power { .. }
         | TensorExpr::Filled { .. } => 3,
         TensorExpr::SumIdx { .. } => 1,
     }
@@ -297,6 +298,15 @@ fn render_tensor(expr: &TensorExpr) -> String {
             format!("{{{latex}}}_{{{}}}", index.latex())
         }
         TensorExpr::Filled { latex, .. } => latex.clone(),
+        TensorExpr::Power { base, exp } => {
+            // A^n; wrap non-atomic bases so e.g. (F^T)^2 stays unambiguous.
+            let b = if tprec(base) >= 3 {
+                render_tensor(base)
+            } else {
+                paren(render_tensor(base))
+            };
+            format!("{{{b}}}^{{{exp}}}")
+        }
         TensorExpr::SumIdx {
             index,
             range,
@@ -330,6 +340,16 @@ fn render_tensor(expr: &TensorExpr) -> String {
                 "\\frac{{\\partial {num_tex}}}{{\\partial {}}}",
                 render_tensor(den)
             )
+        }
+        // A · A renders as A² (display only; the structure stays a product so
+        // differentiation by A still works).
+        TensorExpr::MatMul(a, b) if a == b => {
+            let base = if tprec(a) >= 3 {
+                render_tensor(a)
+            } else {
+                paren(render_tensor(a))
+            };
+            format!("{{{base}}}^{{2}}")
         }
         TensorExpr::MatMul(a, b) => {
             // Outer-product operands must be parenthesized: matrix products

@@ -559,6 +559,18 @@ impl Interpreter {
             (Mul, Value::Tensor(a), Value::Tensor(b)) => {
                 Ok(simplified_tensor_value(Rc::new(TensorExpr::matmul(a, b)?)))
             }
+            // A^n — integer matrix power.
+            (Pow, Value::Tensor(a), Value::Scalar(s)) => {
+                let exp = match &*s {
+                    ScalarExpr::Num(n) if n.fract() == 0.0 && *n >= 1.0 && *n < 64.0 => *n as u32,
+                    _ => {
+                        return Err(Error::msg(
+                            "tensor `^` requires a small positive integer exponent (A^2, A^3)",
+                        ))
+                    }
+                };
+                Ok(simplified_tensor_value(Rc::new(TensorExpr::power(a, exp)?)))
+            }
             (Add, Value::Tensor(a), Value::Tensor(b)) => {
                 Ok(simplified_tensor_value(Rc::new(TensorExpr::add(a, b)?)))
             }
@@ -963,11 +975,36 @@ impl Interpreter {
 
     /// `lambda[a]` / `N[1]` — a set element.
     fn eval_index(&mut self, target: &Expr, index: &Expr) -> Result<Value, Error> {
-        let Expr::Ident(set_name) = target else {
-            return Err(Error::msg(
-                "only declared sets can be indexed (e.g. lambda[a])",
-            ));
+        // Flatten an index chain: `P[1][1]` -> base = P, idxs = [1, 1];
+        // `lambda[a]` -> base = lambda, idxs = [a].
+        let mut idx_exprs = vec![index];
+        let mut base = target;
+        while let Expr::Index {
+            target: inner,
+            index: i,
+        } = base
+        {
+            idx_exprs.push(i);
+            base = inner;
+        }
+        idx_exprs.reverse();
+
+        // A declared set takes exactly one index; anything else is a tensor
+        // component read `T[i][j]`.
+        let is_set = matches!(base, Expr::Ident(name) if self.sets.contains_key(name));
+        if !is_set {
+            return self.eval_component_read(base, &idx_exprs);
+        }
+        let Expr::Ident(set_name) = base else {
+            unreachable!("is_set guarantees an Ident");
         };
+        if idx_exprs.len() != 1 {
+            return Err(Error::msg(format!(
+                "set `{set_name}` takes a single index, got {}",
+                idx_exprs.len()
+            )));
+        }
+        let index = idx_exprs[0];
         let decl = self.sets.get(set_name).ok_or_else(|| {
             Error::msg(format!(
                 "`{set_name}` is not a declared set; declare it with \
@@ -1020,6 +1057,38 @@ impl Interpreter {
                 eig,
             })))
         }
+    }
+
+    /// `T[i][j]` — read a component of a tensor expression as a scalar.
+    fn eval_component_read(&mut self, base: &Expr, idx_exprs: &[&Expr]) -> Result<Value, Error> {
+        let t = match self.eval(base)? {
+            Value::Tensor(t) => t,
+            Value::Scalar(_) => {
+                return Err(Error::msg(
+                    "component indexing `[i][j]` requires a tensor (or a declared set)",
+                ))
+            }
+        };
+        let order = t.order();
+        if idx_exprs.len() != order {
+            return Err(Error::msg(format!(
+                "a tensor of order {order} needs {order} component index(es), got {}",
+                idx_exprs.len()
+            )));
+        }
+        if order != 2 {
+            return Err(Error::msg(
+                "component read currently supports second-order tensors",
+            ));
+        }
+        let dim = t.dim();
+        let i = component_index(idx_exprs[0], dim)?;
+        let j = component_index(idx_exprs[1], dim)?;
+        let entry = crate::renderer::components::component(&t, i - 1, j - 1)?;
+        Ok(Value::Scalar(simplify_scalar(
+            &Rc::new(entry),
+            RuleSet::Continuum,
+        )))
     }
 
     /// `sum(body, a)` — sum the body over the abstract set index `a`.
@@ -1154,6 +1223,10 @@ impl Interpreter {
                 self.instantiate_tensor(a, bound)?,
                 self.instantiate_tensor(b, bound)?,
             )),
+            TensorExpr::Power { base, exp } => Rc::new(TensorExpr::Power {
+                base: self.instantiate_tensor(base, bound)?,
+                exp: *exp,
+            }),
             TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(
                 self.instantiate_tensor(a, bound)?,
                 self.instantiate_tensor(b, bound)?,
@@ -1675,7 +1748,8 @@ fn contains_filled(t: &TensorExpr) -> bool {
         | TensorExpr::Inverse(a)
         | TensorExpr::InverseTranspose(a)
         | TensorExpr::Neg(a)
-        | TensorExpr::ScalarMul(_, a) => contains_filled(a),
+        | TensorExpr::ScalarMul(_, a)
+        | TensorExpr::Power { base: a, .. } => contains_filled(a),
         TensorExpr::Diff { num, den, .. } => contains_filled(num) || contains_filled(den),
         TensorExpr::MatMul(a, b)
         | TensorExpr::Add(a, b)
@@ -1703,7 +1777,8 @@ fn tensor_contains_transpose(t: &TensorExpr) -> bool {
         TensorExpr::Inverse(a)
         | TensorExpr::Neg(a)
         | TensorExpr::ScalarMul(_, a)
-        | TensorExpr::SumIdx { body: a, .. } => tensor_contains_transpose(a),
+        | TensorExpr::SumIdx { body: a, .. }
+        | TensorExpr::Power { base: a, .. } => tensor_contains_transpose(a),
         TensorExpr::Diff { num, den, .. } => {
             tensor_contains_transpose(num) || tensor_contains_transpose(den)
         }
@@ -1743,6 +1818,7 @@ fn tensor_index_range(t: &TensorExpr, idx: &str) -> Option<usize> {
         | TensorExpr::BoxTimes(a, b) => {
             tensor_index_range(a, idx).or_else(|| tensor_index_range(b, idx))
         }
+        TensorExpr::Power { base, .. } => tensor_index_range(base, idx),
         TensorExpr::SumIdx { index, body, .. } => {
             // An inner sum over the same index binds it.
             if index == idx {
@@ -1813,6 +1889,17 @@ fn expect_usize(expr: &Expr, what: &str) -> Result<usize, Error> {
         _ => Err(Error::msg(format!(
             "`{what}` must be a non-negative integer"
         ))),
+    }
+}
+
+/// A 1-based component index literal, validated against the tensor dim.
+fn component_index(expr: &Expr, dim: usize) -> Result<usize, Error> {
+    match expr {
+        Expr::Num(n) if n.fract() == 0.0 && *n >= 1.0 && (*n as usize) <= dim => Ok(*n as usize),
+        Expr::Num(n) => Err(Error::msg(format!(
+            "component index {n} is out of range (1..={dim})"
+        ))),
+        _ => Err(Error::msg("a component index must be an integer literal")),
     }
 }
 

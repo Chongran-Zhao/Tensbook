@@ -372,6 +372,10 @@ fn rebuild_tensor(
             num_label: num_label.clone(),
         }),
         TensorExpr::MatMul(a, b) => Rc::new(TensorExpr::MatMul(rt(a), rt(b))),
+        TensorExpr::Power { base, exp } => Rc::new(TensorExpr::Power {
+            base: rt(base),
+            exp: *exp,
+        }),
         TensorExpr::Add(a, b) => Rc::new(TensorExpr::Add(rt(a), rt(b))),
         TensorExpr::Sub(a, b) => Rc::new(TensorExpr::Sub(rt(a), rt(b))),
         TensorExpr::Outer(a, b) => Rc::new(TensorExpr::Outer(rt(a), rt(b))),

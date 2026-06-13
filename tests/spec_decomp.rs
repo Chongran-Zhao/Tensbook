@@ -116,3 +116,32 @@ fn bare_flag_error_suggests_keyword_form() {
         err.message
     );
 }
+
+#[test]
+fn tensor_component_read() {
+    // C = diag(λ², λ⁻¹, λ⁻¹); read individual components as scalars.
+    let src = format!("{PRELUDE}\nx = C[1][1]\nexport(x, format=latex)\ny = C[2][2]\nexport(y, format=latex)\nz = C[1][2]\nexport(z, format=latex)");
+    let outputs = run_source(&src).unwrap();
+    assert_eq!(
+        outputs[0].latex, "{\\lambda}^{2}",
+        "got: {}",
+        outputs[0].latex
+    );
+    assert_eq!(
+        outputs[1].latex, "{\\lambda}^{-1}",
+        "got: {}",
+        outputs[1].latex
+    );
+    assert_eq!(
+        outputs[2].latex, "0",
+        "off-diagonal is zero: {}",
+        outputs[2].latex
+    );
+}
+
+#[test]
+fn component_index_out_of_range_errors() {
+    let src = format!("{PRELUDE}\nx = C[4][1]\ndisplay(x)");
+    let err = run_source(&src).unwrap_err();
+    assert!(err.message.contains("out of range"), "got: {}", err.message);
+}
