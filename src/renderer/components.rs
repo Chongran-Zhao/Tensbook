@@ -26,6 +26,33 @@ pub fn tensor_to_component_matrix(expr: &TensorExpr) -> Result<String, Error> {
     ))
 }
 
+/// Render an order-4 tensor as a dim × dim matrix of second-order blocks.
+/// The block columns/rows fix the last two indices `(m,n)`; each block leaves
+/// `(i,j)` free, matching the existing derivative block display convention.
+pub fn tensor_to_block_component_matrix(expr: &TensorExpr) -> Result<String, Error> {
+    if expr.order() != 4 {
+        return Err(Error::msg(format!(
+            "block component expansion requires an order-4 tensor, got order {}",
+            expr.order()
+        )));
+    }
+    let dim = expr.dim();
+    let mut rows = Vec::with_capacity(dim);
+    for m in 1..=dim {
+        let mut row = Vec::with_capacity(dim);
+        for n in 1..=dim {
+            let fixed = [("m", m), ("n", n)];
+            let entry = fourth_component_latex(expr, "i", "j", "m", "n", &fixed)?;
+            row.push(format!("\\left[ {entry} \\right]_{{ij}}"));
+        }
+        rows.push(row.join(" & "));
+    }
+    Ok(format!(
+        "\\begin{{bmatrix}}\n{}\n\\end{{bmatrix}}",
+        rows.join(" \\\\\n")
+    ))
+}
+
 /// Component expression for entry (i, j) of a second-order tensor expression.
 pub fn component(expr: &TensorExpr, i: usize, j: usize) -> Result<ScalarExpr, Error> {
     if expr.order() != 2 {
@@ -224,4 +251,255 @@ fn add(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
         (ScalarExpr::Num(x), ScalarExpr::Num(y)) => ScalarExpr::Num(x + y),
         _ => ScalarExpr::Add(Rc::new(a), Rc::new(b)),
     }
+}
+
+fn fourth_component_latex(
+    expr: &TensorExpr,
+    i: &str,
+    j: &str,
+    m: &str,
+    n: &str,
+    fixed: &[(&str, usize)],
+) -> Result<String, Error> {
+    match expr {
+        TensorExpr::Identity4 { .. } => Ok(format!(
+            "{} \\, {}",
+            delta_latex(i, m, fixed),
+            delta_latex(j, n, fixed)
+        )),
+        TensorExpr::Diff {
+            num,
+            den,
+            num_label,
+        } => {
+            let num_tex = num_label
+                .clone()
+                .unwrap_or_else(|| crate::renderer::latex::tensor_to_latex(num));
+            Ok(format!(
+                "\\frac{{\\partial {}_{{{i}{j}}}}}{{\\partial {}_{{{}{}}}}}",
+                component_base_latex(&num_tex),
+                component_base_latex(&crate::renderer::latex::tensor_to_latex(den)),
+                instantiate_index(m, fixed),
+                instantiate_index(n, fixed)
+            ))
+        }
+        TensorExpr::Outer(a, b) if a.order() == 2 && b.order() == 2 => Ok(join_product([
+            second_component_latex(a, i, j, fixed)?,
+            second_component_latex(b, m, n, fixed)?,
+        ])),
+        TensorExpr::BoxTimes(a, b) => Ok(join_product([
+            second_component_latex(a, i, m, fixed)?,
+            second_component_latex(b, j, n, fixed)?,
+        ])),
+        TensorExpr::ScalarMul(s, t) => Ok(join_product([
+            scalar_to_latex(s),
+            paren_if_sum(fourth_component_latex(t, i, j, m, n, fixed)?),
+        ])),
+        TensorExpr::Add(a, b) => Ok(format!(
+            "{} + {}",
+            fourth_component_latex(a, i, j, m, n, fixed)?,
+            fourth_component_latex(b, i, j, m, n, fixed)?
+        )),
+        TensorExpr::Sub(a, b) => Ok(format!(
+            "{} - {}",
+            fourth_component_latex(a, i, j, m, n, fixed)?,
+            paren_if_sum(fourth_component_latex(b, i, j, m, n, fixed)?)
+        )),
+        TensorExpr::Neg(t) => Ok(format!(
+            "-{}",
+            paren_if_sum(fourth_component_latex(t, i, j, m, n, fixed)?)
+        )),
+        TensorExpr::SumIdx {
+            index,
+            range,
+            exclude,
+            body,
+        } => {
+            let lower = match exclude {
+                Some(ex) => format!("\\substack{{{index}=1 \\\\ {index}\\ne {ex}}}"),
+                None => format!("{index}=1"),
+            };
+            Ok(format!(
+                "\\sum_{{{lower}}}^{{{range}}} {}",
+                fourth_component_latex(body, i, j, m, n, fixed)?
+            ))
+        }
+        TensorExpr::Var { latex, .. } | TensorExpr::Filled { latex, .. } => {
+            Ok(component_symbol_latex(latex, &[i, j, m, n], fixed))
+        }
+        TensorExpr::SetElem { latex, index, .. } => {
+            Ok(format!("{{{latex}}}_{{{}{i}{j}{m}{n}}}", index.latex()))
+        }
+        other => Err(Error::msg(format!(
+            "mode=block_components is valid for order-4 tensors, but this \
+             expression structure is not supported yet: {}",
+            crate::renderer::latex::tensor_to_latex(other)
+        ))),
+    }
+}
+
+fn second_component_latex(
+    expr: &TensorExpr,
+    i: &str,
+    j: &str,
+    fixed: &[(&str, usize)],
+) -> Result<String, Error> {
+    match expr {
+        TensorExpr::Var { latex, props, .. } => {
+            if props.identity {
+                Ok(delta_latex(i, j, fixed))
+            } else {
+                Ok(component_symbol_latex(latex, &[i, j], fixed))
+            }
+        }
+        TensorExpr::Filled {
+            latex,
+            entries,
+            dim,
+            ..
+        } => {
+            let ii = fixed_value(i, fixed);
+            let jj = fixed_value(j, fixed);
+            if let (Some(ii), Some(jj)) = (ii, jj) {
+                Ok(scalar_to_latex(&entries[(ii - 1) * dim + (jj - 1)]))
+            } else {
+                Ok(component_symbol_latex(latex, &[i, j], fixed))
+            }
+        }
+        TensorExpr::Outer(a, b) if a.order() == 1 && b.order() == 1 => Ok(join_product([
+            first_component_latex(a, i, fixed)?,
+            first_component_latex(b, j, fixed)?,
+        ])),
+        TensorExpr::Transpose(t) => second_component_latex(t, j, i, fixed),
+        TensorExpr::ScalarMul(s, t) => Ok(join_product([
+            scalar_to_latex(s),
+            paren_if_sum(second_component_latex(t, i, j, fixed)?),
+        ])),
+        TensorExpr::Add(a, b) => Ok(format!(
+            "{} + {}",
+            second_component_latex(a, i, j, fixed)?,
+            second_component_latex(b, i, j, fixed)?
+        )),
+        TensorExpr::Sub(a, b) => Ok(format!(
+            "{} - {}",
+            second_component_latex(a, i, j, fixed)?,
+            paren_if_sum(second_component_latex(b, i, j, fixed)?)
+        )),
+        TensorExpr::Neg(t) => Ok(format!(
+            "-{}",
+            paren_if_sum(second_component_latex(t, i, j, fixed)?)
+        )),
+        TensorExpr::SumIdx {
+            index,
+            range,
+            exclude,
+            body,
+        } => {
+            let lower = match exclude {
+                Some(ex) => format!("\\substack{{{index}=1 \\\\ {index}\\ne {ex}}}"),
+                None => format!("{index}=1"),
+            };
+            Ok(format!(
+                "\\sum_{{{lower}}}^{{{range}}} {}",
+                second_component_latex(body, i, j, fixed)?
+            ))
+        }
+        TensorExpr::SetElem { latex, index, .. } => Ok(format!(
+            "{{{latex}}}_{{{}{}}}",
+            index.latex(),
+            join_indices(&[i, j], fixed)
+        )),
+        other => Ok(component_symbol_latex(
+            &crate::renderer::latex::tensor_to_latex(other),
+            &[i, j],
+            fixed,
+        )),
+    }
+}
+
+fn first_component_latex(
+    expr: &TensorExpr,
+    i: &str,
+    fixed: &[(&str, usize)],
+) -> Result<String, Error> {
+    match expr {
+        TensorExpr::SetElem { latex, index, .. } => Ok(format!(
+            "{{{latex}}}_{{{}{}}}",
+            index.latex(),
+            instantiate_index(i, fixed)
+        )),
+        TensorExpr::Filled { latex, entries, .. } => match fixed_value(i, fixed) {
+            Some(ii) => Ok(scalar_to_latex(&entries[ii - 1])),
+            None => Ok(component_symbol_latex(latex, &[i], fixed)),
+        },
+        TensorExpr::Var { latex, .. } => Ok(component_symbol_latex(latex, &[i], fixed)),
+        other => Ok(component_symbol_latex(
+            &crate::renderer::latex::tensor_to_latex(other),
+            &[i],
+            fixed,
+        )),
+    }
+}
+
+fn join_product<const N: usize>(parts: [String; N]) -> String {
+    parts
+        .into_iter()
+        .filter(|p| p != "1")
+        .collect::<Vec<_>>()
+        .join(" \\, ")
+}
+
+fn paren_if_sum(tex: String) -> String {
+    if tex.contains(" + ") || tex.contains(" - ") {
+        format!("\\left( {tex} \\right)")
+    } else {
+        tex
+    }
+}
+
+fn delta_latex(a: &str, b: &str, fixed: &[(&str, usize)]) -> String {
+    format!(
+        "\\delta_{{{}{}}}",
+        instantiate_index(a, fixed),
+        instantiate_index(b, fixed)
+    )
+}
+
+fn component_symbol_latex(latex: &str, indices: &[&str], fixed: &[(&str, usize)]) -> String {
+    format!(
+        "{{{}}}_{{{}}}",
+        component_base_latex(latex),
+        join_indices(indices, fixed)
+    )
+}
+
+fn component_base_latex(latex: &str) -> String {
+    latex
+        .trim()
+        .strip_prefix("\\bm ")
+        .or_else(|| latex.trim().strip_prefix("\\bm"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| latex.trim())
+        .to_string()
+}
+
+fn join_indices(indices: &[&str], fixed: &[(&str, usize)]) -> String {
+    indices
+        .iter()
+        .map(|idx| instantiate_index(idx, fixed))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn instantiate_index(idx: &str, fixed: &[(&str, usize)]) -> String {
+    fixed_value(idx, fixed)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| idx.to_string())
+}
+
+fn fixed_value(idx: &str, fixed: &[(&str, usize)]) -> Option<usize> {
+    fixed
+        .iter()
+        .find_map(|(name, value)| (*name == idx).then_some(*value))
 }

@@ -12,7 +12,7 @@ use crate::metadata::{
     display_capabilities_for_kind, display_capability_for_kind, tensor_characteristic, value_kind,
     DisplayCapabilityState, SymbolInfo, ValueKind,
 };
-use crate::renderer::components::tensor_to_component_matrix;
+use crate::renderer::components::{tensor_to_block_component_matrix, tensor_to_component_matrix};
 use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
 use crate::simplifier::{simplify_scalar, simplify_tensor, RuleSet};
 use crate::symbolic::ScalarExpr;
@@ -1759,7 +1759,7 @@ impl Interpreter {
             SymbolInfo {
                 name: name.to_string(),
                 latex,
-                display_modes: display_capabilities_for_kind(&kind),
+                display_modes: self.display_capabilities_for_value(value, &kind),
                 kind,
                 characteristic,
             },
@@ -1898,10 +1898,9 @@ impl Interpreter {
                     Ok(format!("{lhs}{}", tensor_to_component_matrix(t)?))
                 }
             }
-            (Value::Tensor(_), "block_components") => Err(Error::msg(
-                "mode=block_components is valid for order-4 tensors, but this \
-                 expression structure is not supported yet",
-            )),
+            (Value::Tensor(t), "block_components") => {
+                Ok(format!("{lhs}{}", tensor_to_block_component_matrix(t)?))
+            }
             (Value::Tensor(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
             (Value::Scalar(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
         }
@@ -1917,8 +1916,31 @@ impl Interpreter {
     }
 
     fn ensure_value_display_mode(&self, value: &Value, mode: &str) -> Result<(), Error> {
+        if matches!(
+            (value, mode),
+            (Value::Tensor(t), "components" | "matrix")
+                if matches!(&**t, TensorExpr::Diff { .. })
+        ) {
+            return Ok(());
+        }
         let kind = value_kind(value, false);
         self.ensure_display_capability(display_capability_for_kind(&kind, mode))
+    }
+
+    fn display_capabilities_for_value(
+        &self,
+        value: &Value,
+        kind: &ValueKind,
+    ) -> Vec<crate::metadata::DisplayCapability> {
+        let mut modes = display_capabilities_for_kind(kind);
+        if matches!(value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. })) {
+            for mode in ["components", "matrix"] {
+                if let Some(cap) = modes.iter_mut().find(|cap| cap.mode == mode) {
+                    *cap = crate::metadata::DisplayCapability::available(mode);
+                }
+            }
+        }
+        modes
     }
 
     fn ensure_display_capability(

@@ -222,6 +222,38 @@ Q = 2 * diff(E, C)
 }
 
 #[test]
+fn manual_spectral_q_block_components_renders_for_derived_order_four_tensor() {
+    let src = r#"
+m = Scalar("m")
+n = Scalar("n")
+lam = Var("\lambda")
+Ecr = (lam^m - lam^(-n))/(m + n)
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+C = sum(lambda[a]^2 * N[a] & N[a], a)
+E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * diff(E, C)
+display(Q, mode=block_components)
+"#;
+    let outputs = run_source(src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(
+        latex.contains("\\mathbb Q = \\begin{bmatrix}"),
+        "got: {latex}"
+    );
+    assert!(
+        latex.contains("\\sum_{a=1}^{3}")
+            && latex.contains("\\sum_{\\substack{b=1 \\\\ b\\ne a}}^{3}"),
+        "got: {latex}"
+    );
+    assert!(
+        latex.contains("{\\bm N}_{ai}") || latex.contains("{\\bm N}_{a i}"),
+        "block entries should componentize vector-set factors: {latex}"
+    );
+    assert!(!latex.contains("not supported"), "got: {latex}");
+}
+
+#[test]
 fn manual_spectral_q_supports_hencky_and_polynomial_scales() {
     let src = format!(
         "{PRELUDE}\nC = sum(lambda[a]^2 * N[a] & N[a], a)\n\

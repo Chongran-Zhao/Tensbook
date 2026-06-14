@@ -141,6 +141,18 @@ fn dcdf_block_components_is_3x3_of_blocks() {
 }
 
 #[test]
+fn block_components_accepts_scaled_derivative_tensor() {
+    let src = format!("{PRELUDE}\nA = 2 * diff(C, F)\ndisplay(A, mode=block_components)");
+    let outputs = run_source(&src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(latex.contains("\\mathbb A = \\begin{bmatrix}"), "got: {latex}");
+    assert!(
+        latex.contains("2 \\, \\frac{\\partial"),
+        "scaled derivative should not be rejected as non-diff: {latex}"
+    );
+}
+
+#[test]
 fn block_components_rejects_non_derivative() {
     let src = format!("{PRELUDE}\ndisplay(C, mode=block_components)");
     let err = run_source(&src).unwrap_err();
