@@ -109,15 +109,23 @@ let scrollSyncFrame = null;
 
 // ---- theme ----------------------------------------------------------------
 
-function applyTheme(theme) {
+function applyTheme(theme, { persist = true } = {}) {
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem("tensorforge.theme", theme);
+  if (persist) localStorage.setItem("tensorforge.theme", theme);
 }
 
-applyTheme(
-  localStorage.getItem("tensorforge.theme") ??
-    (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark"),
-);
+const lightQuery = window.matchMedia?.("(prefers-color-scheme: light)");
+const systemTheme = () => (lightQuery?.matches ? "light" : "dark");
+
+// Follow the system theme until the user explicitly picks one (then it sticks).
+applyTheme(localStorage.getItem("tensorforge.theme") ?? systemTheme(), {
+  persist: false,
+});
+lightQuery?.addEventListener?.("change", () => {
+  if (!localStorage.getItem("tensorforge.theme")) {
+    applyTheme(systemTheme(), { persist: false });
+  }
+});
 
 function toggleTheme() {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");

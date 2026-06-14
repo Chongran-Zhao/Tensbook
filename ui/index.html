@@ -7,44 +7,49 @@
 <script defer src="vendor/katex/katex.min.js"></script>
 <style>
   :root, html[data-theme="dark"] {
-    --bg: #1e1f24;
-    --panel: #26272e;
-    --panel-2: #2c2d35;
-    --border: #3a3b44;
-    --text: #e8e8ea;
-    --muted: #9a9ba6;
-    --accent: #6aa7ff;
-    --accent-text: #11131a;
-    --tens-frame: #6aa7ff;
-    --error: #ff7b72;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    --syntax-comment: #7d8590;
-    --syntax-string: #9ecbff;
-    --syntax-number: #f2cc60;
-    --syntax-keyword: #c792ea;
-    --syntax-function: #7ee787;
-    --syntax-math: #ffb86c;
-    --syntax-strong: #ffd166;
+    /* warm-night paper (mocha) */
+    --bg: #2a2521;
+    --panel: #332e28;
+    --panel-2: #2c2722;
+    --border: #464037;
+    --text: #ece6da;
+    --muted: #a59c8c;
+    --accent: #93b6df;
+    --accent-text: #2a2521;
+    --tens-frame: #93b6df;
+    --note-accent: #d9b96e;
+    --error: #e8867a;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --serif: ui-serif, Georgia, Charter, "Times New Roman", "Songti SC", serif;
+    --syntax-comment: #9a9384;
+    --syntax-string: #cdb06a;
+    --syntax-number: #d6b56a;
+    --syntax-keyword: #c7a3d8;
+    --syntax-function: #8fb3df;
+    --syntax-math: #d99a6c;
+    --syntax-strong: #e6c98a;
   }
   html[data-theme="light"] {
-    --bg: #f4f5f7;
-    --panel: #ffffff;
-    --panel-2: #f0f1f4;
-    --border: #d8d8de;
-    --text: #1d1d22;
-    --muted: #6b6c78;
-    --accent: #2f6fdb;
+    /* warm paper */
+    --bg: #f3f1ea;
+    --panel: #fffdf8;
+    --panel-2: #ece8dd;
+    --border: #e0dccf;
+    --text: #2b2924;
+    --muted: #8c887d;
+    --accent: #355e8a;
     --accent-text: #ffffff;
-    --tens-frame: #2f6fdb;
-    --error: #c62828;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    --syntax-comment: #7b8190;
-    --syntax-string: #006d9c;
-    --syntax-number: #9a6200;
-    --syntax-keyword: #7a3fb5;
-    --syntax-function: #167a3a;
-    --syntax-math: #b35c00;
-    --syntax-strong: #8a5a00;
+    --tens-frame: #355e8a;
+    --note-accent: #9a7b3a;
+    --error: #b0432e;
+    --shadow: 0 1px 3px rgba(60, 50, 30, 0.10);
+    --syntax-comment: #9a8f78;
+    --syntax-string: #7a6320;
+    --syntax-number: #8a5a00;
+    --syntax-keyword: #6a4a86;
+    --syntax-function: #355e8a;
+    --syntax-math: #9a5a1a;
+    --syntax-strong: #7a5a1a;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -62,7 +67,8 @@
     background: var(--panel);
   }
   header h1 {
-    font-size: 15px; margin: 0 6px 0 0; font-weight: 650;
+    font-family: var(--serif);
+    font-size: 16px; margin: 0 6px 0 0; font-weight: 600;
     letter-spacing: 0.2px;
   }
   header h1 .accent { color: var(--accent); }
@@ -272,9 +278,22 @@
   .source-tens {
     border: 1px solid var(--tens-frame);
     border-radius: 8px;
-    background: color-mix(in srgb, var(--tens-frame) 10%, transparent);
+    background: color-mix(in srgb, var(--tens-frame) 8%, transparent);
     padding: 5px 11px;
     box-sizing: border-box;
+  }
+  .source-tens::after {
+    content: "tens";
+    position: absolute; top: 4px; right: 8px;
+    font-family: var(--serif); font-style: italic;
+    font-size: 10.5px; line-height: 1; color: var(--tens-frame);
+    background: var(--panel); padding: 1px 5px; border-radius: 5px;
+    pointer-events: none; opacity: 0.9;
+  }
+  .source-markdown::before {
+    content: ""; position: absolute;
+    left: -12px; top: 1px; bottom: 1px; width: 3px;
+    border-radius: 2px; background: var(--note-accent); opacity: 0.5;
   }
   .source-tens textarea {
     min-height: 22px;
@@ -364,6 +383,7 @@
   .head-label {
     min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap;
+    font-family: var(--serif); font-style: italic; font-size: 13px;
   }
   .copy-bar { display: flex; gap: 6px; justify-self: end; }
   .copy-btn {
@@ -446,6 +466,7 @@
   }
   .markdown-doc :is(h1, h2, h3) {
     margin: 0 0 8px; line-height: 1.25;
+    font-family: var(--serif); font-weight: 600;
   }
   .markdown-doc h1 { font-size: 18px; }
   .markdown-doc h2 { font-size: 16px; }
@@ -467,6 +488,7 @@
     padding: 5px 14px; border-top: 1px solid var(--border);
     background: var(--panel);
     color: var(--muted); font-size: 11.5px;
+    font-family: var(--serif); font-style: italic;
   }
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--accent); }
@@ -486,7 +508,7 @@
     border-radius: 14px; padding: 26px 30px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   }
-  #about h2 { margin: 0 0 2px; font-size: 19px; }
+  #about h2 { margin: 0 0 2px; font-size: 20px; font-family: var(--serif); font-weight: 600; }
   #about h2 .accent { color: var(--accent); }
   #about .tagline { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
   #about .row { display: flex; gap: 10px; margin: 7px 0; font-size: 13px; }
@@ -506,23 +528,24 @@
     body.printing > #app, body.printing > #about-overlay { display: none !important; }
     body.printing #print-root {
       display: block;
-      color: #1d1d22;
+      color: #2b2924;
       font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     #print-root .doc-block { margin: 0 0 22px; break-inside: avoid; }
     #print-root .head {
-      color: #6b6c78;
-      font: 12px/1.4 "SF Mono", Menlo, Consolas, monospace;
+      color: #8c887d;
+      font: italic 12px/1.4 ui-serif, Georgia, "Times New Roman", serif;
       margin-bottom: 8px;
     }
     #print-root .math-block { text-align: center; }
+    #print-root .markdown-doc :is(h1, h2, h3) { font-family: ui-serif, Georgia, "Times New Roman", serif; }
     #print-root .markdown-doc h1 { font-size: 22px; margin: 0 0 10px; }
     #print-root .markdown-doc h2 { font-size: 18px; margin: 0 0 8px; }
     #print-root .markdown-doc h3 { font-size: 15px; margin: 0 0 8px; }
-    #print-root .markdown-doc code { background: #f0f1f4; }
-    #print-root .markdown-doc pre.md-code { background: #f0f1f4; border-color: #d8d8de; }
-    #print-root .md-table th, #print-root .md-table td { border-color: #d8d8de; }
-    #print-root .md-table th { background: #f0f1f4; }
+    #print-root .markdown-doc code { background: #ece8dd; }
+    #print-root .markdown-doc pre.md-code { background: #ece8dd; border-color: #e0dccf; }
+    #print-root .md-table th, #print-root .md-table td { border-color: #e0dccf; }
+    #print-root .md-table th { background: #ece8dd; }
   }
 </style>
 </head>
