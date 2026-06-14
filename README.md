@@ -3,7 +3,7 @@
 Rigorous symbolic tensor algebra for finite-deformation continuum mechanics,
 driven by a small declarative `.tens` DSL.
 
-![TensorForge default Hill-CR example](docs/tensorforge-default.png)
+![TensorForge feature tour](docs/tensorforge-default.png)
 
 ## Install
 
@@ -11,7 +11,7 @@ driven by a small declarative `.tens` DSL.
 brew install --cask Chongran-Zhao/tensorforge/tensorforge
 ```
 
-Homebrew requires the full `owner/tap/formula` form for untapped formulae.
+Homebrew requires the full `owner/tap/cask` form for untapped casks.
 `brew install --cask Chongran-Zhao/tensorforge` is only a tap reference, not an
 installable app cask.
 
@@ -19,7 +19,7 @@ installable app cask.
 
 ```sh
 brew update
-brew upgrade tensorforge
+brew upgrade --cask tensorforge
 ```
 
 ## Functions
@@ -42,7 +42,7 @@ brew upgrade tensorforge
 | `[c, N] = Spec_Decomp(C)` | Symbolic eigendecomposition of a diagonal component-filled tensor. |
 | `diff(expr, X)` | Symbolic derivative with respect to a scalar, tensor, compound tensor, or generalized strain. |
 | `simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
-| `display(expr, mode=...)` | Render in the app/CLI. Modes: `symbol`, `components`, `matrix`, `block_components`. |
+| `display(expr, mode=...)` | Render in the app. Modes: `symbol`, `components`, `matrix`, `block_components`. |
 | `export(expr, format=...)` | Export `latex` or `markdown`. |
 
 Operators: `+`, `-`, `*`, `/`, `^`, `A & B`, `A : B`, and `A.T`.
