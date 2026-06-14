@@ -304,6 +304,20 @@ fn display_symbol_mode() {
 }
 
 #[test]
+fn scalar_display_rejects_tensor_modes_with_type_specific_message() {
+    let src = r#"
+mu = Scalar("\mu")
+display(mu, mode=matrix)
+"#;
+    let err = run_source(src).unwrap_err();
+    assert!(
+        err.message.contains("scalar values (supported: symbol)"),
+        "got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn symbol_display_preserves_transpose_in_user_definition() {
     let src = r#"
 lam = Var("\lambda")

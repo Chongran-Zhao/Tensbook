@@ -143,5 +143,11 @@ fn dcdf_block_components_is_3x3_of_blocks() {
 #[test]
 fn block_components_rejects_non_derivative() {
     let src = format!("{PRELUDE}\ndisplay(C, mode=block_components)");
-    assert!(run_source(&src).is_err());
+    let err = run_source(&src).unwrap_err();
+    assert!(
+        err.message
+            .contains("only available for order-4 tensors; this tensor has order 2"),
+        "got: {}",
+        err.message
+    );
 }

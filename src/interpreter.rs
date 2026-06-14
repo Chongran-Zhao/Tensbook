@@ -9,7 +9,8 @@ use crate::differentiation::{
 };
 use crate::error::Error;
 use crate::metadata::{
-    display_capabilities_for_kind, tensor_characteristic, value_kind, SymbolInfo, ValueKind,
+    display_capabilities_for_kind, display_capability_for_kind, tensor_characteristic, value_kind,
+    DisplayCapabilityState, SymbolInfo, ValueKind,
 };
 use crate::renderer::components::tensor_to_component_matrix;
 use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
@@ -1543,9 +1544,7 @@ impl Interpreter {
 
                 let latex = match callee {
                     "display" => {
-                        if mode != "symbol" {
-                            return Err(Error::msg("set display only supports mode=symbol"));
-                        }
+                        self.ensure_set_display_mode(set, &mode)?;
                         render_set_decl(set)
                     }
                     "export" => match format.as_str() {
@@ -1833,6 +1832,7 @@ impl Interpreter {
         lhs: Option<&str>,
         mode: &str,
     ) -> Result<String, Error> {
+        self.ensure_value_display_mode(value, mode)?;
         let lhs = lhs.map(|tex| format!("{tex} = ")).unwrap_or_default();
         match (value, mode) {
             (Value::Scalar(s), "symbol") => Ok(format!("{lhs}{}", scalar_to_latex(s))),
@@ -1899,17 +1899,41 @@ impl Interpreter {
                 }
             }
             (Value::Tensor(_), "block_components") => Err(Error::msg(
-                "mode=block_components is only available for fourth-order \
-                 derivative tensors (e.g. A = diff(P, F))",
+                "mode=block_components is valid for order-4 tensors, but this \
+                 expression structure is not supported yet",
             )),
-            (Value::Scalar(_), other) => Err(Error::msg(format!(
-                "mode={other} is not available for scalar values (supported: symbol)"
-            ))),
-            (Value::Tensor(_), other) => Err(Error::msg(format!(
-                "unknown display mode `{other}` for tensor values (supported: \
-                 symbol, components, matrix; block_components for derivative \
-                 tensors)"
-            ))),
+            (Value::Tensor(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
+            (Value::Scalar(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
+        }
+    }
+
+    fn ensure_set_display_mode(&self, set: &SetDecl, mode: &str) -> Result<(), Error> {
+        let kind = if set.vector {
+            ValueKind::VectorSet { dim: set.dim }
+        } else {
+            ValueKind::ScalarSet { dim: set.dim }
+        };
+        self.ensure_display_capability(display_capability_for_kind(&kind, mode))
+    }
+
+    fn ensure_value_display_mode(&self, value: &Value, mode: &str) -> Result<(), Error> {
+        let kind = value_kind(value, false);
+        self.ensure_display_capability(display_capability_for_kind(&kind, mode))
+    }
+
+    fn ensure_display_capability(
+        &self,
+        capability: crate::metadata::DisplayCapability,
+    ) -> Result<(), Error> {
+        match capability.state {
+            DisplayCapabilityState::Available | DisplayCapabilityState::UnsupportedRenderer => {
+                Ok(())
+            }
+            DisplayCapabilityState::InvalidForType => {
+                Err(Error::msg(capability.message.unwrap_or_else(|| {
+                    format!("mode={} is not available", capability.mode)
+                })))
+            }
         }
     }
 

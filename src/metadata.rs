@@ -148,7 +148,7 @@ pub fn display_capability_for_kind(kind: &ValueKind, mode: &str) -> DisplayCapab
         (ValueKind::Scalar | ValueKind::ScalarFunctionLike, other) => {
             DisplayCapability::invalid(
                 other,
-                format!("mode={other} is not available for scalar values"),
+                format!("mode={other} is not available for scalar values (supported: symbol)"),
             )
         }
         (ValueKind::ScalarSet { .. } | ValueKind::VectorSet { .. }, other) => {
