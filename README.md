@@ -7,9 +7,21 @@ driven by a small declarative `.tens` DSL.
 
 ## Install
 
+Command-line tool:
+
 ```sh
 brew install Chongran-Zhao/tensorforge/tensorforge
 ```
+
+Desktop app:
+
+```sh
+brew install --cask Chongran-Zhao/tensorforge/tensorforge
+```
+
+Homebrew requires the full `owner/tap/formula` form for untapped formulae.
+`brew install Chongran-Zhao/tensorforge` is only a tap reference, not an
+installable formula.
 
 ## Update
 
