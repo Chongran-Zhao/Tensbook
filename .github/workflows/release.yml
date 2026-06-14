@@ -1,8 +1,11 @@
 name: release
 
-# Build prebuilt CLI binaries on a version tag and publish them as a GitHub
+# Build a prebuilt CLI binary on a version tag and publish it as a GitHub
 # release, then sync the Homebrew formula. Because users install the binary,
 # `brew install` no longer pulls in the Rust toolchain or LLVM (~2 GB).
+#
+# Apple Silicon only. Intel Macs are not targeted; to add them, restore an
+# x86_64-apple-darwin entry (runs-on: macos-13) and an on_intel block below.
 
 on:
   push:
@@ -17,34 +20,27 @@ env:
 
 jobs:
   build:
-    name: build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
+    name: build aarch64-apple-darwin
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Build CLI
-        run: cargo build --release -p tensorforge --bin tensorforge --target ${{ matrix.target }}
+        run: cargo build --release -p tensorforge --bin tensorforge --target aarch64-apple-darwin
       - name: Package tarball + checksum
         run: |
           version="${GITHUB_REF_NAME#v}"
-          bin="target/${{ matrix.target }}/release/tensorforge"
+          bin="target/aarch64-apple-darwin/release/tensorforge"
           strip "$bin" || true
-          tarball="tensorforge-v${version}-${{ matrix.target }}.tar.gz"
-          tar -czf "$tarball" -C "target/${{ matrix.target }}/release" tensorforge
+          tarball="tensorforge-v${version}-aarch64-apple-darwin.tar.gz"
+          tar -czf "$tarball" -C "target/aarch64-apple-darwin/release" tensorforge
           shasum -a 256 "$tarball" | tee "${tarball}.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: aarch64-apple-darwin
           path: |
             tensorforge-*.tar.gz
             tensorforge-*.sha256
@@ -58,11 +54,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Render Homebrew formula with real checksums
+      - name: Render Homebrew formula with real checksum
         run: |
           version="${GITHUB_REF_NAME#v}"
           arm_sha=$(awk '{print $1}' "dist/tensorforge-v${version}-aarch64-apple-darwin.tar.gz.sha256")
-          x86_sha=$(awk '{print $1}' "dist/tensorforge-v${version}-x86_64-apple-darwin.tar.gz.sha256")
           mkdir -p out
           cat > out/tensorforge.rb <<EOF
           class Tensorforge < Formula
@@ -75,10 +70,6 @@ jobs:
               on_arm do
                 url "https://github.com/Chongran-Zhao/TensorForge/releases/download/v${version}/tensorforge-v${version}-aarch64-apple-darwin.tar.gz"
                 sha256 "${arm_sha}"
-              end
-              on_intel do
-                url "https://github.com/Chongran-Zhao/TensorForge/releases/download/v${version}/tensorforge-v${version}-x86_64-apple-darwin.tar.gz"
-                sha256 "${x86_sha}"
               end
             end
 

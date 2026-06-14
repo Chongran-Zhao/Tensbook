@@ -13,14 +13,11 @@ class Tensorforge < Formula
   version "1.0"
   license "MIT"
 
+  # Apple Silicon only.
   on_macos do
     on_arm do
       url "https://github.com/Chongran-Zhao/TensorForge/releases/download/v1.0/tensorforge-v1.0-aarch64-apple-darwin.tar.gz"
       sha256 "REPLACE_WITH_AARCH64_APPLE_DARWIN_SHA256"
-    end
-    on_intel do
-      url "https://github.com/Chongran-Zhao/TensorForge/releases/download/v1.0/tensorforge-v1.0-x86_64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_X86_64_APPLE_DARWIN_SHA256"
     end
   end
 
