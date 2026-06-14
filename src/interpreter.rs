@@ -8,6 +8,9 @@ use crate::differentiation::{
     diff_tensor_by_tensor,
 };
 use crate::error::Error;
+use crate::metadata::{
+    display_capabilities_for_kind, tensor_characteristic, value_kind, SymbolInfo, ValueKind,
+};
 use crate::renderer::components::tensor_to_component_matrix;
 use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
 use crate::simplifier::{simplify_scalar, simplify_tensor, RuleSet};
@@ -67,10 +70,13 @@ pub struct Interpreter {
     /// `VectorSet("...", dim=n)`, keyed by variable name. Elements are
     /// accessed as `name[a]` (abstract index) or `name[1]` (concrete).
     sets: HashMap<String, SetDecl>,
+    /// UI-facing summary of every named symbol/set after evaluation.
+    symbols: HashMap<String, SymbolInfo>,
     outputs: Vec<Output>,
     next_output_row: usize,
 }
 
+#[derive(Clone)]
 struct SetDecl {
     latex: String,
     /// `true` for VectorSet (order-1 elements), `false` for ScalarSet.
@@ -128,6 +134,19 @@ impl Interpreter {
     /// Look up a variable's evaluated value.
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.env.get(name)
+    }
+
+    /// Look up a variable or set's UI-facing metadata.
+    pub fn symbol_info(&self, name: &str) -> Option<&SymbolInfo> {
+        self.symbols.get(name)
+    }
+
+    /// All known variable/set metadata, sorted by source name for stable UI
+    /// and test output.
+    pub fn symbol_infos(&self) -> Vec<SymbolInfo> {
+        let mut infos: Vec<_> = self.symbols.values().cloned().collect();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        infos
     }
 
     fn exec(&mut self, stmt: &Stmt) -> Result<(), Error> {
@@ -197,6 +216,7 @@ impl Interpreter {
                 } else {
                     self.display_values.remove(name);
                 }
+                self.register_value_symbol(name, &value, is_derived);
                 self.env.insert(name.clone(), value);
                 Ok(())
             }
@@ -302,15 +322,14 @@ impl Interpreter {
             flat = flat * dim + (k - 1);
         }
         entries[flat] = rhs;
-        self.env.insert(
-            name.to_string(),
-            Value::Tensor(Rc::new(TensorExpr::Filled {
-                latex,
-                order,
-                dim,
-                entries,
-            })),
-        );
+        let value = Value::Tensor(Rc::new(TensorExpr::Filled {
+            latex,
+            order,
+            dim,
+            entries,
+        }));
+        self.register_value_symbol(name, &value, false);
+        self.env.insert(name.to_string(), value);
         Ok(())
     }
 
@@ -411,6 +430,12 @@ impl Interpreter {
         self.sets.get_mut(first).unwrap().values =
             Some(diag.into_iter().map(Value::Scalar).collect());
         self.sets.get_mut(second).unwrap().values = Some(basis);
+        if let Some(decl) = self.sets.get(first).cloned() {
+            self.register_set_symbol(first, &decl);
+        }
+        if let Some(decl) = self.sets.get(second).cloned() {
+            self.register_set_symbol(second, &decl);
+        }
         Ok(())
     }
 
@@ -945,6 +970,9 @@ impl Interpreter {
                 values: None,
             },
         );
+        if let Some(decl) = self.sets.get(name).cloned() {
+            self.register_set_symbol(name, &decl);
+        }
         Ok(())
     }
 
@@ -990,6 +1018,9 @@ impl Interpreter {
                 values: None,
             },
         );
+        if let Some(decl) = self.sets.get(name).cloned() {
+            self.register_set_symbol(name, &decl);
+        }
         Ok(())
     }
 
@@ -1711,6 +1742,49 @@ impl Interpreter {
         }
     }
 
+    fn register_value_symbol(&mut self, name: &str, value: &Value, derived: bool) {
+        let function_like = match value {
+            Value::Scalar(s) => !self.free_fn_vars(s).is_empty(),
+            Value::Tensor(_) => false,
+        };
+        let kind = value_kind(value, function_like);
+        let characteristic = match value {
+            Value::Tensor(t) => Some(tensor_characteristic(t, derived)),
+            Value::Scalar(_) => None,
+        };
+        let latex = self
+            .display_label(name, value)
+            .unwrap_or_else(|| name.to_string());
+        self.symbols.insert(
+            name.to_string(),
+            SymbolInfo {
+                name: name.to_string(),
+                latex,
+                display_modes: display_capabilities_for_kind(&kind),
+                kind,
+                characteristic,
+            },
+        );
+    }
+
+    fn register_set_symbol(&mut self, name: &str, set: &SetDecl) {
+        let kind = if set.vector {
+            ValueKind::VectorSet { dim: set.dim }
+        } else {
+            ValueKind::ScalarSet { dim: set.dim }
+        };
+        self.symbols.insert(
+            name.to_string(),
+            SymbolInfo {
+                name: name.to_string(),
+                latex: set.latex.clone(),
+                display_modes: display_capabilities_for_kind(&kind),
+                kind,
+                characteristic: None,
+            },
+        );
+    }
+
     /// Display label for a variable about to be (re)assigned `value`:
     /// declared label first, then synthesized \bm for single-char tensor
     /// names, then the plain name.
@@ -1825,15 +1899,16 @@ impl Interpreter {
                 }
             }
             (Value::Tensor(_), "block_components") => Err(Error::msg(
-                "block_components is only available for fourth-order derivative \
-                 variables (e.g. A = diff(P, F))",
+                "mode=block_components is only available for fourth-order \
+                 derivative tensors (e.g. A = diff(P, F))",
             )),
-            (Value::Scalar(_), "components" | "matrix") => {
-                Err(Error::msg("component display is only defined for tensors"))
-            }
-            (_, other) => Err(Error::msg(format!(
-                "unknown display mode `{other}` (supported: symbol, components, \
-                 matrix, block_components)"
+            (Value::Scalar(_), other) => Err(Error::msg(format!(
+                "mode={other} is not available for scalar values (supported: symbol)"
+            ))),
+            (Value::Tensor(_), other) => Err(Error::msg(format!(
+                "unknown display mode `{other}` for tensor values (supported: \
+                 symbol, components, matrix; block_components for derivative \
+                 tensors)"
             ))),
         }
     }

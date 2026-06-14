@@ -20,6 +20,7 @@ pub mod differentiation;
 pub mod error;
 pub mod indices;
 pub mod interpreter;
+pub mod metadata;
 pub mod parser;
 pub mod renderer;
 pub mod simplifier;

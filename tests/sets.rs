@@ -1,7 +1,8 @@
 //! Indexed families (`ScalarSet`/`VectorSet`), element access `lambda[a]`,
 //! and the `sum(body, a)` spectral-sum builtin.
 
-use tensorforge::run_source;
+use tensorforge::metadata::{DisplayCapabilityState, ValueKind};
+use tensorforge::{run_source, run_source_with_env};
 
 const PRELUDE: &str = r#"
 lambda = ScalarSet("\lambda", dim=3)
@@ -54,6 +55,18 @@ fn display_set_shows_family_and_index_range() {
         "{\\lambda}_{a}\\quad \\text{with } a=1,2,3"
     );
     assert_eq!(outputs[1].latex, "{\\bm N}_{a}\\quad \\text{with } a=1,2,3");
+}
+
+#[test]
+fn set_display_rejects_non_symbol_modes() {
+    let src = format!("{PRELUDE}\ndisplay(lambda, mode=matrix)");
+    let err = run_source(&src).unwrap_err();
+    assert!(
+        err.message
+            .contains("set display only supports mode=symbol"),
+        "got: {}",
+        err.message
+    );
 }
 
 #[test]
@@ -177,6 +190,35 @@ display(Q)
         "got: {latex}"
     );
     assert!(!latex.contains("\\bm M_a"), "got: {latex}");
+}
+
+#[test]
+fn metadata_records_manual_spectral_q_as_fourth_order_tensor() {
+    let src = r#"
+m = Scalar("m")
+n = Scalar("n")
+lam = Var("\lambda")
+Ecr = (lam^m - lam^(-n))/(m + n)
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+C = sum(lambda[a]^2 * N[a] & N[a], a)
+E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * diff(E, C)
+"#;
+    let (_, interp) = run_source_with_env(src).unwrap();
+    let q = interp.symbol_info("Q").expect("Q metadata");
+    assert_eq!(q.kind, ValueKind::Tensor { order: 4, dim: 3 });
+    let ch = q.characteristic.as_ref().expect("tensor characteristic");
+    assert_eq!(ch.order, 4);
+    assert_eq!(ch.dim, 3);
+    assert!(ch.derived);
+    assert!(ch.sum);
+    assert!(ch.outer_like);
+    assert!(ch.boxtimes_like);
+    assert!(q
+        .display_modes
+        .iter()
+        .any(|m| { m.mode == "block_components" && m.state == DisplayCapabilityState::Available }));
 }
 
 #[test]
