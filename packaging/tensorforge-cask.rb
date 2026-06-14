@@ -1,6 +1,6 @@
 # Homebrew cask for the TensorForge desktop app (prebuilt DMG).
 #
-# Install from the tap:
+# Install TensorForge from the tap:
 #   brew install --cask Chongran-Zhao/tensorforge/tensorforge
 #
 # This is a template. The release workflow fills in the real sha256 and copies
