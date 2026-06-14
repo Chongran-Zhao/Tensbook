@@ -15,4 +15,10 @@ cask "tensorforge" do
   homepage "https://github.com/Chongran-Zhao/TensorForge"
 
   app "TensorForge.app"
+
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/TensorForge.app"],
+                   sudo: false
+  end
 end
