@@ -41,7 +41,7 @@ TensorForge 应该是一个 desktop app，并支持 Homebrew 安装和发行。
 例如：
 
 ```text
-mooney_rivlin_uniaxial.tens
+start.tens
 ```
 
 # 3. DSL 语法设计
@@ -572,7 +572,7 @@ exporter
 10. 连续介质力学化简规则；
 11. LaTeX / Markdown 渲染规则；
 12. `.tens` 文件格式设计；
-13. 代表性示例 `mooney_rivlin_uniaxial.tens`；
+13. 代表性示例 `start.tens`；
 14. 初始开发里程碑；
 15. 可以执行的第一阶段实现计划；
 16. 第一阶段最小可运行原型的代码结构；

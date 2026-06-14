@@ -477,15 +477,23 @@ display(I1, mode=symbol)
 }
 
 #[test]
-fn mooney_rivlin_uniaxial_example_runs_end_to_end() {
+fn start_example_runs_end_to_end() {
     let src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/mooney_rivlin_uniaxial.tens"
+        "/examples/start.tens"
     ))
     .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
-    assert_eq!(outputs.len(), 8);
+    assert_eq!(outputs.len(), 42);
+    assert!(outputs.iter().all(|o| o.error.is_none()));
 
+    // The tour demonstrates side-by-side rows, component reads, and
+    // spectral sets.
+    assert!(outputs.iter().any(|o| o.row.is_some()));
+    assert!(outputs.iter().any(|o| o.header.starts_with("display D13")));
+    assert!(outputs.iter().any(|o| o.header.starts_with("display ev")));
+
+    // Psi is a scalar energy and S is its derived stress tensor.
     match interp.get("Psi") {
         Some(Value::Scalar(_)) => {}
         other => panic!("expected Psi to be a Scalar, got {other:?}"),
@@ -499,37 +507,16 @@ fn mooney_rivlin_uniaxial_example_runs_end_to_end() {
         .unwrap();
     assert!(
         !s_out.latex.contains("\\partial"),
-        "S should be derived instead of displayed as an unevaluated derivative: {}",
+        "S should be derived, not a formal derivative: {}",
         s_out.latex
     );
-    for needle in ["\\bm S", "C_1", "C_2", "\\bm I", "\\bm C"] {
+    for needle in ["\\bm S", "J", "\\bm C", "\\bm I"] {
         assert!(
             s_out.latex.contains(needle),
             "missing {needle} in: {}",
             s_out.latex
         );
     }
-}
-
-#[test]
-fn start_example_runs_as_a_notebook_tour() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/start.tens"))
-        .unwrap();
-    let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs.len(), 16);
-    assert!(outputs.iter().all(|o| o.error.is_none()));
-    assert!(
-        outputs.iter().any(|o| o.header.starts_with("display P11")),
-        "start example should show component access"
-    );
-    assert!(
-        outputs.iter().any(|o| o.header.starts_with("display Q")),
-        "start example should show spectral differentiation"
-    );
-    assert!(
-        outputs.iter().any(|o| o.row.is_some()),
-        "start example should demonstrate side-by-side display rows"
-    );
 }
 
 #[test]
