@@ -3,7 +3,7 @@
 // saved/runner source is still the plain .tens text format with hidden
 // tensorforge:tens sentinels, so files stay backward compatible.
 
-import { setupCompletion } from "./completion.js";
+import { setCompletionSymbols, setupCompletion } from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
@@ -106,6 +106,8 @@ let activeBlockId = null;
 let activeTextarea = null;
 let scrollSyncSource = null;
 let scrollSyncFrame = null;
+let analyzeTimer = null;
+let analyzeSeq = 0;
 
 // ---- theme ----------------------------------------------------------------
 
@@ -701,6 +703,14 @@ function resizeAllTextareas() {
 
 function activeBlock() {
   return docBlocks.find((b) => b.id === activeBlockId) ?? docBlocks[docBlocks.length - 1];
+}
+
+function activeSourceLine() {
+  const block = activeBlock();
+  const textarea = activeTextarea;
+  if (!block || !textarea) return null;
+  const inner = lineForOffset(textarea.value, textarea.selectionStart);
+  return block.kind === "tens" ? block.sourceLine + inner : block.sourceLine + inner - 1;
 }
 
 function insertTensBlock() {
@@ -1447,8 +1457,29 @@ async function liveRun() {
 }
 
 function scheduleLiveRun() {
+  scheduleCompletionAnalysis();
   clearTimeout(liveTimer);
   liveTimer = setTimeout(liveRun, 350);
+}
+
+async function analyzeForCompletion(seq, uptoLine) {
+  if (!invoke) {
+    setCompletionSymbols([]);
+    return;
+  }
+  const result = await invoke("analyze_tens", {
+    source: editor.value,
+    uptoLine,
+  }).catch(() => null);
+  if (seq !== analyzeSeq || !result?.ok) return;
+  setCompletionSymbols(result.symbols ?? []);
+}
+
+function scheduleCompletionAnalysis() {
+  clearTimeout(analyzeTimer);
+  const seq = ++analyzeSeq;
+  const uptoLine = activeSourceLine();
+  analyzeTimer = setTimeout(() => analyzeForCompletion(seq, uptoLine), 250);
 }
 
 function stripDisplayMath(latex) {

@@ -30,7 +30,7 @@ const BUILTINS = [
   { name: "dot", sig: "dot(A, B)", doc: "single contraction AB" },
   { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — infix `A : B` also works" },
   { name: "simplify", sig: "simplify(expr, rules=…)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
-  { name: "display", sig: "display(expr, mode=…)", doc: "mode = symbol | components | matrix | block_components" },
+  { name: "display", sig: "display(expr, mode=…)", doc: "shows available modes for the current expression" },
   { name: "export", sig: "export(expr, format=…)", doc: "format = latex | markdown" },
 ];
 
@@ -47,6 +47,12 @@ const TENSOR_KWARGS = [
 ];
 
 const KEYWORDS = ["true", "false"];
+let completionSymbols = new Map();
+
+export function setCompletionSymbols(symbols = []) {
+  completionSymbols = new Map(symbols.map((s) => [s.name, s]));
+  window.dispatchEvent(new CustomEvent("tensorforge:completion-symbols"));
+}
 
 export function setupCompletion(editor) {
   const wrap = editor.parentElement; // #editor-wrap, position: relative
@@ -101,6 +107,36 @@ export function setupCompletion(editor) {
     return [...vars];
   }
 
+  function displayModeCandidates(upto) {
+    const m = upto.match(/display\s*\(\s*([^,\n)]*)\s*,\s*mode\s*=\s*$/);
+    if (!m) return ENUM_VALUES.mode;
+    const expr = m[1].trim();
+    const component = expr.match(/^([A-Za-z_]\w*)(\[[^\]]+\])+$/);
+    if (component && completionSymbols.has(component[1])) return ["symbol"];
+    const info = completionSymbols.get(expr);
+    const modes = info?.display_modes
+      ?.filter((mode) => mode.state === "available")
+      .map((mode) => mode.mode);
+    return modes?.length ? modes : ENUM_VALUES.mode;
+  }
+
+  function displayExpressionBeforeCaret() {
+    const upto = editor.value.slice(0, editor.selectionStart);
+    const line = upto.slice(upto.lastIndexOf("\n") + 1);
+    const m = line.match(/display\s*\(\s*([^,\n)]*)/);
+    return m ? m[1].trim() : "";
+  }
+
+  function displayHintInfo() {
+    const expr = displayExpressionBeforeCaret();
+    const modes = displayModeCandidates(`display(${expr}, mode=`);
+    const label = expr || "expr";
+    return {
+      sig: `display(${label}, mode=...)`,
+      doc: `mode: ${modes.join(" | ")}`,
+    };
+  }
+
   /** The identifier being typed immediately before the caret. */
   function currentToken() {
     const upto = editor.value.slice(0, editor.selectionStart);
@@ -133,6 +169,7 @@ export function setupCompletion(editor) {
     const upto = editor.value.slice(0, editor.selectionStart - token.length);
     // value position: `mode=`, `format=`, `rules=` directly before the token
     const kw = upto.match(/([A-Za-z_]\w*)\s*=\s*$/);
+    if (kw?.[1] === "mode") return displayModeCandidates(upto);
     if (kw && ENUM_VALUES[kw[1]]) return ENUM_VALUES[kw[1]];
     if (kw) return KEYWORDS; // identity=tru… etc.
 
@@ -141,8 +178,9 @@ export function setupCompletion(editor) {
     if (call === "Tensor") out.push(...TENSOR_KWARGS);
     out.push(...BUILTINS.map((b) => b.name));
     out.push(...KEYWORDS);
+    out.push(...completionSymbols.keys());
     out.push(...userVariables());
-    return out;
+    return [...new Set(out)];
   }
 
   function updateGhost() {
@@ -167,7 +205,7 @@ export function setupCompletion(editor) {
 
   function updateHint() {
     const call = enclosingCall();
-    const info = call && BUILTIN_MAP.get(call);
+    const info = call === "display" ? displayHintInfo() : call && BUILTIN_MAP.get(call);
     if (!info) {
       hint.style.display = "none";
       return;
@@ -199,6 +237,7 @@ export function setupCompletion(editor) {
 
   editor.addEventListener("input", refresh);
   editor.addEventListener("click", refresh);
+  window.addEventListener("tensorforge:completion-symbols", refresh);
   editor.addEventListener("scroll", dismiss);
   editor.addEventListener("blur", dismiss);
   editor.addEventListener("keyup", (e) => {
