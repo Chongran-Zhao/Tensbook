@@ -12,61 +12,13 @@ const TENS_CLOSE = "<!-- /tensorforge:tens -->";
 const NOTE_OPEN = "<!-- tensorforge:note -->";
 const NOTE_CLOSE = "<!-- /tensorforge:note -->";
 
-const DEFAULT_SOURCE = `# Incompressible uniaxial tension
-
-This document derives the axial first Piola-Kirchhoff stress component for a
-Mooney-Rivlin material. Ordinary text is Markdown by default; blue .tens blocks
-are executed.
-
-$$
-\\bm F = \\operatorname{diag}(\\lambda, \\lambda^{-1/2}, \\lambda^{-1/2})
-$$
-
-${TENS_OPEN}
-lam = Var("\\lambda")
-C1 = Scalar("C_1")
-C2 = Scalar("C_2")
-
-F = Tensor("\\bm F", order=2, dim=3)
-F[1][1] = lam
-F[2][2] = lam^(-1/2)
-F[3][3] = lam^(-1/2)
-
-C = F.T * F
-${TENS_CLOSE}
-
-For this deformation, the invariants reduce to
-
-$$
-I_1 = \\lambda^2 + 2\\lambda^{-1},
-\\qquad
-I_2 = 2\\lambda + \\lambda^{-2}.
-$$
-
-${TENS_OPEN}
-I1 = Scalar("I_1")
-I2 = Scalar("I_2")
-I1 = lam^2 + 2 * lam^(-1)
-I2 = 2 * lam + lam^(-2)
-
-W = C1 * (I1 - 3) + C2 * (I2 - 3)
-
-P11 = Scalar("P_{11}")
-P11 = simplify(diff(W, lam))
-${TENS_CLOSE}
-
-The first component of the first Piola-Kirchhoff stress is \\(P_{11}=dW/d\\lambda\\).
-
-${TENS_OPEN}
-display(F, mode=matrix)
-display(C, mode=matrix)
-display(I1, mode=symbol)
-display(I2, mode=symbol)
-display(W, mode=symbol)
-display(P11, mode=symbol)
-export(P11, format=latex)
-${TENS_CLOSE}
-`;
+const DEFAULT_SOURCE_URL = "start.tens";
+const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writing.";
+const LEGACY_DEFAULT_MARKERS = [
+  "# Incompressible uniaxial tension",
+  "Mooney-Rivlin material. Ordinary text is Markdown by default",
+  "P11 = simplify(diff(W, lam))",
+];
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 
@@ -1772,6 +1724,27 @@ document.addEventListener("keydown", (e) => {
 
 // ---- boot ------------------------------------------------------------------
 
-setDocumentSource(localStorage.getItem("tensorforge.source.v3") ?? DEFAULT_SOURCE, { run: false });
-restoreFileRail();
-scheduleLiveRun();
+async function loadBundledDefaultSource() {
+  try {
+    const response = await fetch(DEFAULT_SOURCE_URL, { cache: "no-store" });
+    if (response.ok) return await response.text();
+  } catch {
+    // Fall through to the tiny fallback so the editor can still boot.
+  }
+  return FALLBACK_DEFAULT_SOURCE;
+}
+
+function isLegacyBundledDefault(source) {
+  return LEGACY_DEFAULT_MARKERS.every((marker) => source.includes(marker));
+}
+
+async function boot() {
+  const bundledDefault = await loadBundledDefaultSource();
+  const stored = localStorage.getItem("tensorforge.source.v3");
+  const source = !stored || isLegacyBundledDefault(stored) ? bundledDefault : stored;
+  setDocumentSource(source, { run: false });
+  restoreFileRail();
+  scheduleLiveRun();
+}
+
+boot();
