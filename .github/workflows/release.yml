@@ -116,4 +116,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/tensorforge.rb
           git commit -m "tensorforge ${GITHUB_REF_NAME#v}" || { echo "no changes"; exit 0; }
-          git push
+          # HEAD:main works whether the tap repo is empty or already initialized.
+          git push origin HEAD:main
