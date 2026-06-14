@@ -6,9 +6,7 @@
 
 use serde::Serialize;
 use tauri_plugin_dialog::DialogExt;
-use tensorforge::metadata::{
-    DisplayCapabilityState, SymbolInfo, TensorCharacteristic, ValueKind,
-};
+use tensorforge::metadata::{DisplayCapabilityState, SymbolInfo, TensorCharacteristic, ValueKind};
 
 #[derive(Serialize)]
 struct RunOutput {
