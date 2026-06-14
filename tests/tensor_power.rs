@@ -43,11 +43,11 @@ export(T, format=latex)
 
 #[test]
 fn trace_of_square_differentiates() {
-    // d tr(C C)/dC = C + C, whether written C*C or C^2.
+    // d tr(C C)/dC = C + C = 2C, whether written C*C or C^2.
     let src = format!("{PRELUDE}\nW = tr(C*C)\nS = diff(W, C)\nexport(S, format=latex)");
     let outputs = run_source(&src).unwrap();
     assert!(
-        outputs[0].latex.contains("\\bm C + \\bm C"),
+        outputs[0].latex.contains("2 \\, \\bm C"),
         "got: {}",
         outputs[0].latex
     );

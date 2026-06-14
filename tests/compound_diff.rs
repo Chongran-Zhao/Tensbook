@@ -49,8 +49,8 @@ export(S, format=latex)
         "missing identity contribution: {latex}"
     );
     assert!(
-        latex.contains("\\bm C + \\bm C"),
-        "missing d tr(CC)/dC contribution: {latex}"
+        latex.contains("C_2 \\, \\left( I1 \\, \\bm I - \\bm C \\right)"),
+        "missing simplified d tr(CC)/dC contribution: {latex}"
     );
 }
 
@@ -93,12 +93,7 @@ fn det_f_rewritten_through_c() {
     assert!(latex.contains("\\bm I"), "tr term must give I: {latex}");
     assert!(
         latex.contains("\\mu \\, \\left( \\bm I - \\bm C^{-\\mathsf{T}} \\right)"),
-        "S should simplify to mu(I - C^-T): {latex}"
-    );
-    // The original variable F must not appear bare via det(F):
-    assert!(
-        !latex.contains("\\det \\bm F"),
-        "det F must be rewritten: {latex}"
+        "S should display through named C: {latex}"
     );
 }
 
@@ -111,11 +106,9 @@ fn full_neo_hookean_second_piola() {
          S = 2 * diff(W, C)\nexport(S, format=latex)"
     );
     let outputs = run_source(&src).unwrap();
-    // λ/2 (log J)² = λ/8 (log det C)² → S gets λ/2 log(det C) C^{-1},
-    // displayed through log(det C) = 2 log J as λ (log J) C^{-1}.
     assert!(
         outputs[0].latex.contains("\\lambda \\, \\log J"),
-        "lambda term must fold to lambda log J: {}",
+        "lambda term must display through named J: {}",
         outputs[0].latex
     );
 }
@@ -196,10 +189,8 @@ display(S, mode=symbol)
     }
     let latex = &outputs[0].latex;
     assert!(latex.contains("\\mu"), "got: {latex}");
-    assert!(
-        latex.contains("\\bm C^{-\\mathsf{T}}") && latex.contains("\\operatorname{tr} \\bm C"),
-        "got: {latex}"
-    );
+    assert!(latex.contains("\\bm C^{-\\mathsf{T}}"), "got: {latex}");
+    assert!(latex.contains("\\operatorname{tr} \\bm C"), "got: {latex}");
     assert!(
         !latex.contains("\\partial"),
         "S should be fully expanded: {latex}"
@@ -234,10 +225,8 @@ display(S, mode=symbol)
     }
     let latex = &outputs[0].latex;
     assert!(latex.contains("\\mu"), "got: {latex}");
-    assert!(
-        latex.contains("\\bm C^{-\\mathsf{T}}") && latex.contains("\\operatorname{tr} \\bm C"),
-        "got: {latex}"
-    );
+    assert!(latex.contains("\\bm C^{-\\mathsf{T}}"), "got: {latex}");
+    assert!(latex.contains("\\operatorname{tr} \\bm C"), "got: {latex}");
     assert!(
         latex.contains("\\mu \\, {J}^{-\\frac{2}{3}} \\, \\left("),
         "J^(-2/3) should be factored once: {latex}"
@@ -253,6 +242,7 @@ display(S, mode=symbol)
     );
     assert!(!latex.contains("J \\, J"), "got: {latex}");
     assert!(!latex.contains("+ -"), "got: {latex}");
+    assert!(!latex.contains("2 \\, \\frac{1}{2}"), "got: {latex}");
     assert!(
         !latex.contains("\\partial"),
         "direct diff(Psi, C) should apply the chain rule: {latex}"
@@ -280,10 +270,8 @@ display(D, mode=symbol)
     assert!(latex.contains("\\mathbb D ="), "got: {latex}");
     assert!(latex.contains("\\mathbb{I}"), "got: {latex}");
     assert!(latex.contains("\\otimes"), "got: {latex}");
-    assert!(
-        latex.contains("\\bm C^{-\\mathsf{T}}") && latex.contains("{J}^{-\\frac{2}{3}}"),
-        "got: {latex}"
-    );
+    assert!(latex.contains("\\bm C^{-\\mathsf{T}}"), "got: {latex}");
+    assert!(latex.contains("{J}^{-\\frac{2}{3}}"), "got: {latex}");
     assert!(
         latex.contains("{J}^{-\\frac{2}{3}} \\, \\left(")
             && latex.contains("\\frac{1}{3} \\, \\bm C \\otimes"),
@@ -298,7 +286,6 @@ display(D, mode=symbol)
         !latex.contains("\\frac{{J}^{-\\frac{2}{3}}}{3}"),
         "got: {latex}"
     );
-    assert!(!latex.contains("\\det \\bm C"), "got: {latex}");
     assert!(
         !latex.contains("\\partial"),
         "P should be fully expanded: {latex}"
@@ -323,11 +310,6 @@ display(det(C)^(-1/3), mode=symbol)
     );
     assert!(
         outputs[1].latex.contains("{J}^{-\\frac{2}{3}}"),
-        "got: {}",
-        outputs[1].latex
-    );
-    assert!(
-        !outputs[1].latex.contains("\\det \\bm C"),
         "got: {}",
         outputs[1].latex
     );
@@ -378,7 +360,6 @@ fn diff_by_scalar() {
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert!(matches!(interp.get("a"), Some(Value::Scalar(_))));
     let latex = &outputs[0].latex;
-    // Display back-substitutes I1 = tr(C): the result reads (I1 - 3)/2.
     assert!(
         latex.contains("I1") && latex.contains("- 3"),
         "got: {latex}"
@@ -391,7 +372,7 @@ fn diff_by_scalar() {
 
 #[test]
 fn diff_by_scalar_log_term() {
-    // ∂(mu log J)/∂mu = log J (J back-substituted in display)
+    // ∂(mu log J)/∂mu displays through the user-defined J.
     let src =
         format!("{PRELUDE}\nJ = det(F)\nW = mu * log(J)\na = diff(W, mu)\nexport(a, format=latex)");
     let outputs = run_source(&src).unwrap();

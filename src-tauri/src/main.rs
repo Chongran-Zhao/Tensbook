@@ -13,6 +13,7 @@ struct RunOutput {
     latex: String,
     line: usize,
     error: Option<String>,
+    row: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -101,6 +102,7 @@ fn run_tens(source: String) -> RunResult {
                 latex: o.latex,
                 line: o.line,
                 error: o.error,
+                row: o.row,
             })
             .collect(),
         error: None,

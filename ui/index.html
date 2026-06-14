@@ -18,6 +18,13 @@
     --tens-frame: #6aa7ff;
     --error: #ff7b72;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --syntax-comment: #7d8590;
+    --syntax-string: #9ecbff;
+    --syntax-number: #f2cc60;
+    --syntax-keyword: #c792ea;
+    --syntax-function: #7ee787;
+    --syntax-math: #ffb86c;
+    --syntax-strong: #ffd166;
   }
   html[data-theme="light"] {
     --bg: #f4f5f7;
@@ -31,6 +38,13 @@
     --tens-frame: #2f6fdb;
     --error: #c62828;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    --syntax-comment: #7b8190;
+    --syntax-string: #006d9c;
+    --syntax-number: #9a6200;
+    --syntax-keyword: #7a3fb5;
+    --syntax-function: #167a3a;
+    --syntax-math: #b35c00;
+    --syntax-strong: #8a5a00;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -223,15 +237,35 @@
     position: relative;
     margin: 0 0 14px;
   }
+  .source-editor-layer {
+    position: relative;
+  }
+  .source-highlight {
+    position: absolute; inset: 0;
+    margin: 0; pointer-events: none;
+    overflow: hidden;
+    white-space: pre-wrap; word-wrap: break-word;
+    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
+    tab-size: 4;
+    color: var(--text);
+  }
   .source-block textarea {
+    position: relative; z-index: 1;
     display: block; width: 100%;
     resize: none; border: 0; outline: none;
-    background: transparent; color: var(--text);
+    background: transparent; color: transparent; caret-color: var(--text);
     font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
     tab-size: 4; overflow: hidden;
     white-space: pre-wrap; word-wrap: break-word;
   }
+  .source-block textarea::selection {
+    background: color-mix(in srgb, var(--accent) 34%, transparent);
+  }
   .source-markdown textarea {
+    padding: 0;
+    min-height: 28px;
+  }
+  .source-markdown .source-highlight {
     padding: 0;
     min-height: 28px;
   }
@@ -245,9 +279,53 @@
   .source-tens textarea {
     min-height: 22px;
   }
+  .source-tens .source-highlight {
+    min-height: 22px;
+  }
   .source-block textarea::placeholder {
     color: var(--muted);
     opacity: 0.55;
+  }
+  .hl-md-marker,
+  .hl-md-fence,
+  .hl-tens-op {
+    color: var(--muted);
+  }
+  .hl-md-heading {
+    color: var(--accent);
+    font-weight: 650;
+  }
+  .hl-md-strong {
+    color: var(--syntax-strong);
+    font-weight: 650;
+  }
+  .hl-md-em {
+    color: var(--syntax-keyword);
+    font-style: italic;
+  }
+  .hl-md-code,
+  .hl-tens-string {
+    color: var(--syntax-string);
+  }
+  .hl-md-math {
+    color: var(--syntax-math);
+  }
+  .hl-tens-comment {
+    color: var(--syntax-comment);
+    font-style: italic;
+  }
+  .hl-tens-number {
+    color: var(--syntax-number);
+  }
+  .hl-tens-builtin {
+    color: var(--syntax-function);
+    font-weight: 600;
+  }
+  .hl-tens-keyword {
+    color: var(--syntax-keyword);
+  }
+  .hl-tens-ident {
+    color: var(--text);
   }
   /* hidden mirror used to measure caret position */
   .cm-mirror {
@@ -278,11 +356,16 @@
   #output { flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg); }
   .block { margin-bottom: 18px; cursor: pointer; }
   .block .head {
-    display: flex; align-items: center; gap: 8px;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center; column-gap: 8px;
     color: var(--muted); font-size: 12px; margin-bottom: 6px;
     font-family: "SF Mono", Menlo, Consolas, monospace;
   }
-  .copy-bar { margin-left: auto; display: flex; gap: 6px; }
+  .head-label {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .copy-bar { display: flex; gap: 6px; justify-self: end; }
   .copy-btn {
     appearance: none; -webkit-appearance: none;
     background: var(--panel-2); color: var(--muted);
@@ -297,6 +380,39 @@
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 14px 16px; overflow-x: auto;
     box-shadow: var(--shadow);
+  }
+  .output-row {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+    align-items: stretch;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+    scroll-snap-type: x proximity;
+  }
+  .output-row > .block {
+    margin-bottom: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    scroll-snap-align: start;
+  }
+  .output-row > .block .head {
+    min-height: 24px;
+  }
+  .output-row > .block .math {
+    flex: 1;
+    min-height: 104px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .output-row > .block .math > .katex-display {
+    min-width: max-content;
+    margin: 0 auto;
   }
   .block .math .katex { font-size: 1.15em; }
   .error {
@@ -415,6 +531,7 @@
   <header>
     <h1>Tensor<span class="accent">Forge</span></h1>
     <button id="open">Open</button>
+    <button id="new-file">New</button>
     <button id="save">Save</button>
     <button id="add-note">Add&nbsp;Tens</button>
     <div class="menu-wrap">
@@ -465,7 +582,7 @@
     <span>TensorForge v0.1.0</span>
     <span class="sep">·</span>
     <span>symbolic tensor algebra for continuum mechanics</span>
-    <span class="right">© 2026 <a href="https://chongran-zhao.site" target="_blank" rel="noopener">Chongran Zhao</a></span>
+    <span class="right">© 2026 <a href="https://chongran-zhao.github.io" target="_blank" rel="noopener">Chongran Zhao</a></span>
   </footer>
 </div>
 
@@ -476,7 +593,7 @@
     <div class="row"><span class="key">Author</span><span>Chongran Zhao</span></div>
     <div class="row"><span class="key">Affiliation</span><span>Ph.D. student in Engineering, Brown University<br>M.Eng. in Mechanics, SUSTech</span></div>
     <div class="row"><span class="key">Email</span><a href="mailto:chongran_zhao@brown.edu">chongran_zhao@brown.edu</a></div>
-    <div class="row"><span class="key">Website</span><a href="https://chongran-zhao.site" target="_blank" rel="noopener">chongran-zhao.site</a></div>
+    <div class="row"><span class="key">Website</span><a href="https://chongran-zhao.github.io" target="_blank" rel="noopener">chongran-zhao.github.io</a></div>
     <div class="row"><span class="key">GitHub</span><a href="https://github.com/Chongran-Zhao" target="_blank" rel="noopener">github.com/Chongran-Zhao</a></div>
     <div class="close-row"><button id="about-close">Close</button></div>
   </div>

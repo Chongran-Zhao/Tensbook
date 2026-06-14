@@ -107,7 +107,6 @@ fn tensor_scalar_functions_point_at_the_set_form() {
 fn scalar_log_still_works() {
     let src = format!("{PRELUDE}\nJ = det(F)\nx = log(J)\ndisplay(x, mode=symbol)");
     let outputs = run_source(&src).unwrap();
-    // det F is back-substituted to J in the display.
     assert!(
         outputs[0].latex.contains("\\log J"),
         "got: {}",

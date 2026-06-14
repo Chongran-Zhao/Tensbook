@@ -173,6 +173,27 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             }
         }
         TensorExpr::MatMul(a, b) => {
+            match (&**a, &**b) {
+                (TensorExpr::ScalarMul(sa, ta), TensorExpr::ScalarMul(sb, tb)) => {
+                    return scale_tensor_by_scalar(
+                        fold_mul(sa, sb),
+                        Rc::new(TensorExpr::MatMul(ta.clone(), tb.clone())),
+                    );
+                }
+                (TensorExpr::ScalarMul(s, inner), _) => {
+                    return scale_tensor_by_scalar(
+                        s.clone(),
+                        Rc::new(TensorExpr::MatMul(inner.clone(), b.clone())),
+                    );
+                }
+                (_, TensorExpr::ScalarMul(s, inner)) => {
+                    return scale_tensor_by_scalar(
+                        s.clone(),
+                        Rc::new(TensorExpr::MatMul(a.clone(), inner.clone())),
+                    );
+                }
+                _ => {}
+            }
             // I B → B, A I → A
             if a.is_identity() {
                 return b.clone();
@@ -207,6 +228,9 @@ fn rewrite_tensor(t: Rc<TensorExpr>, rules: RuleSet) -> Rc<TensorExpr> {
             }),
             _ => t,
         },
+        TensorExpr::Add(a, b) if a == b => {
+            scale_tensor_by_scalar(Rc::new(ScalarExpr::Num(2.0)), a.clone())
+        }
         TensorExpr::Add(a, b) => factor_common_tensor_scalar(a, b, false).unwrap_or(t),
         TensorExpr::Sub(a, b) => factor_common_tensor_scalar(a, b, true).unwrap_or(t),
         // 0 · A handled at ScalarMul; -(-A) → A
@@ -502,7 +526,7 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (ScalarExpr::Pow(xa, p), ScalarExpr::Pow(xb, q)) if xa == xb => {
                 Rc::new(ScalarExpr::Pow(xa.clone(), fold_add(p.clone(), q.clone())))
             }
-            _ => s,
+            _ => with_coeff_from_product(&s),
         },
         ScalarExpr::Div(a, b) => match (&**a, &**b) {
             (ScalarExpr::Num(x), _) if *x == 0.0 => Rc::new(ScalarExpr::Num(0.0)),
@@ -585,6 +609,16 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             _ => s,
         },
         _ => s,
+    }
+}
+
+fn with_coeff_from_product(s: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
+    let (coeff, rest) = extract_coeff(s);
+    let rebuilt = with_coeff(coeff, rest);
+    if &rebuilt == s {
+        s.clone()
+    } else {
+        rebuilt
     }
 }
 

@@ -143,7 +143,19 @@ fn second_pk_stress_is_t_double_dot_q() {
         outputs[0].latex
     );
     assert!(
-        outputs[0].latex.contains("\\bm T"),
+        outputs[0].latex.contains("2 \\, \\mu \\, \\bm E"),
+        "got: {}",
+        outputs[0].latex
+    );
+    assert!(
+        outputs[0]
+            .latex
+            .contains("\\kappa \\, \\left( \\operatorname{tr} \\bm E \\right) \\, \\bm I"),
+        "got: {}",
+        outputs[0].latex
+    );
+    assert!(
+        outputs[0].latex.contains("b\\ne a"),
         "got: {}",
         outputs[0].latex
     );
@@ -174,7 +186,12 @@ fn second_pk_stress_symbol_formula() {
     // CR derivative: m λ^{m−1} + n λ^{−n−1}
     assert!(latex.contains("{{\\lambda}_{a}}^{m - 1}"), "got: {latex}");
     assert!(latex.contains("{{\\lambda}_{a}}^{-n - 1}"), "got: {latex}");
-    assert!(latex.contains("\\bm T"), "got: {latex}");
+    assert!(latex.contains("2 \\, \\mu \\, \\bm E"), "got: {latex}");
+    assert!(
+        latex.contains("\\kappa \\, \\left( \\operatorname{tr} \\bm E \\right) \\, \\bm I"),
+        "got: {latex}"
+    );
+    assert!(latex.contains("b\\ne a"), "got: {latex}");
 }
 
 #[test]

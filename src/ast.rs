@@ -11,6 +11,7 @@ pub enum Stmt {
         name: String,
         expr: Expr,
         line: usize,
+        block: usize,
     },
     /// Component assignment into a declared tensor: `F[1][1] = expr`
     /// (one index group per tensor order).
@@ -19,6 +20,7 @@ pub enum Stmt {
         indices: Vec<Expr>,
         expr: Expr,
         line: usize,
+        block: usize,
     },
     /// Destructuring assignment `[a, b] = Spec_Decomp(C)`.
     AssignPair {
@@ -26,9 +28,16 @@ pub enum Stmt {
         second: String,
         expr: Expr,
         line: usize,
+        block: usize,
     },
     /// A bare expression statement, e.g. `display(C, mode=symbol)`.
-    Expr(Expr, usize),
+    Expr(Expr, usize, usize),
+    /// A row of output calls, e.g. `[display(I1) display(I2)]`.
+    OutputRow {
+        exprs: Vec<Expr>,
+        line: usize,
+        block: usize,
+    },
 }
 
 impl Stmt {
@@ -37,7 +46,18 @@ impl Stmt {
             Stmt::Assign { line, .. } => *line,
             Stmt::AssignComponent { line, .. } => *line,
             Stmt::AssignPair { line, .. } => *line,
-            Stmt::Expr(_, line) => *line,
+            Stmt::Expr(_, line, _) => *line,
+            Stmt::OutputRow { line, .. } => *line,
+        }
+    }
+
+    pub fn block(&self) -> usize {
+        match self {
+            Stmt::Assign { block, .. } => *block,
+            Stmt::AssignComponent { block, .. } => *block,
+            Stmt::AssignPair { block, .. } => *block,
+            Stmt::Expr(_, _, block) => *block,
+            Stmt::OutputRow { block, .. } => *block,
         }
     }
 }

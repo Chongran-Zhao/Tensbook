@@ -140,6 +140,19 @@ fn tensor_component_read() {
 }
 
 #[test]
+fn display_component_read_uses_component_lhs() {
+    let src = r#"
+lam = Var("\lambda")
+P = Tensor("\bm P", order=2, dim=3)
+P[1][1] = lam
+display(P[1][1])
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs[0].header, "display P[1][1], mode=symbol");
+    assert_eq!(outputs[0].latex, "{\\bm P}_{11} = \\lambda");
+}
+
+#[test]
 fn component_index_out_of_range_errors() {
     let src = format!("{PRELUDE}\nx = C[4][1]\ndisplay(x)");
     let err = run_source(&src).unwrap_err();

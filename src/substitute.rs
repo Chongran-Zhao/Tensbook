@@ -14,9 +14,11 @@ use std::rc::Rc;
 
 /// One substitutable definition: replace structural occurrences of `value`
 /// by a symbolic leaf labeled `latex`.
+#[derive(Clone)]
 pub struct Def {
     pub latex: String,
     pub value: Value,
+    pub block: usize,
 }
 
 /// Substitute all definitions into `v`. `defs` is in insertion order; they
@@ -291,6 +293,13 @@ fn numeric_fraction(num: f64, den: f64) -> Rc<ScalarExpr> {
 fn subst_t(t: &Rc<TensorExpr>, target: &Rc<TensorExpr>, rep: &Rc<TensorExpr>) -> Rc<TensorExpr> {
     if t == target {
         return rep.clone();
+    }
+    if target.is_symmetric() {
+        if let TensorExpr::Transpose(inner) = &**t {
+            if inner == target {
+                return rep.clone();
+            }
+        }
     }
     let rt = |x: &Rc<TensorExpr>| subst_t(x, target, rep);
     let rs = |x: &Rc<ScalarExpr>| subst_s_tensor(x, target, rep);

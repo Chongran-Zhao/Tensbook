@@ -1,0 +1,171 @@
+# TensorForge Start
+
+This notebook-style file is a guided tour of TensorForge. Ordinary text is
+Markdown, and blue `tens` blocks are executable symbolic tensor algebra.
+
+Use **Run** to evaluate the code blocks. The preview on the right keeps the
+same document order as the editor, so formulas appear where the derivation
+introduces them.
+
+| Feature | Where it appears |
+| --- | --- |
+| Markdown notes and display math | This introduction |
+| Executable TensorForge blocks | Every blue code block |
+| Matrix, symbol, and component display | Sections 1 and 2 |
+| Side-by-side formula rows | Sections 2, 3, 4, and 5 |
+| Symbolic differentiation | Section 3 |
+| Indexed spectral notation | Sections 5 and 6 |
+| Copy/export workflow | Use `copy latex` on any formula or the toolbar Export button |
+
+$$
+\bm C = \bm F^{\mathsf T}\bm F, \qquad
+I_1 = \operatorname{tr}\bm C, \qquad
+I_2 = \frac{I_1^2-\operatorname{tr}(\bm C^2)}{2}.
+$$
+
+## 1. Scalars, tensors, and display modes
+
+TensorForge starts with symbolic declarations. A scalar uses `Scalar`, a
+tensor uses `Tensor`, and a scalar variable for one-dimensional calculus uses
+`Var`.
+
+This block builds an incompressible uniaxial deformation gradient. Component
+assignment fills a matrix; unset components are zero.
+
+<!-- tensorforge:tens -->
+lam = Var("\lambda")
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
+
+F = Tensor("\bm F", order=2, dim=3)
+F[1][1] = lam
+F[2][2] = lam^(-1/2)
+F[3][3] = lam^(-1/2)
+
+display(F, mode=matrix)
+<!-- /tensorforge:tens -->
+
+The right Cauchy-Green tensor is assigned as a named expression. Symbol mode
+keeps the definition compact, while matrix/components mode expands entries.
+
+<!-- tensorforge:tens -->
+C = F.T * F
+display(C, mode=symbol)
+display(C, mode=components)
+<!-- /tensorforge:tens -->
+
+## 2. Invariants and side-by-side output
+
+Definitions declared in a previous code block become notation for later
+blocks. Definitions made inside the same block are not substituted into one
+another during display, so the displayed formula below keeps `tr(C)` rather
+than hiding it behind `I_1`.
+
+Square brackets around display calls put the formulas in one preview row.
+
+<!-- tensorforge:tens -->
+I1 = Scalar("I_1")
+I2 = Scalar("I_2")
+I1 = tr(C)
+I2 = 0.5 * ((tr(C))^2 - tr(C*C))
+
+[display(I1), display(I2)]
+<!-- /tensorforge:tens -->
+
+The same notation is now available in the following block, where the
+Mooney-Rivlin strain-energy density is written as a function of the
+invariants.
+
+<!-- tensorforge:tens -->
+Psi = Scalar("\Psi")
+Psi = C1 * (I1 - 3) + C2 * (I2 - 3)
+display(Psi)
+<!-- /tensorforge:tens -->
+
+## 3. Differentiation and stresses
+
+TensorForge differentiates scalar energies with respect to tensor variables.
+Here the second Piola-Kirchhoff stress is
+
+$$
+\bm S = 2\,\frac{\partial \Psi}{\partial \bm C}.
+$$
+
+<!-- tensorforge:tens -->
+S = 2 * diff(Psi, C)
+P = F * S
+
+[display(S), display(P)]
+<!-- /tensorforge:tens -->
+
+You can read tensor components with index syntax. Because `P` is a matrix
+expression, `P[1][1]` gives the first axial nominal stress component.
+
+<!-- tensorforge:tens -->
+P11 = Scalar("P_{11}")
+P11 = simplify(P[1][1])
+display(P11)
+<!-- /tensorforge:tens -->
+
+## 4. Algebraic simplification
+
+The `simplify` function can apply algebraic, tensor, or continuum rules. This
+example cancels a double transpose and displays a matrix power compactly.
+
+<!-- tensorforge:tens -->
+X = simplify((F.T).T, rules=tensor)
+tau = Scalar("\tau")
+tau = simplify(tr(C*C), rules=continuum)
+
+[display(X), display(tau)]
+<!-- /tensorforge:tens -->
+
+## 5. Indexed sets and spectral notation
+
+For spectral derivations, declare indexed families. `ScalarSet` creates
+scalar elements such as `lambda[a]`; `VectorSet` creates vector elements such
+as `N[a]`. The `&` operator is the tensor product.
+
+<!-- tensorforge:tens -->
+lambda = ScalarSet("\lambda", dim=3)
+N = VectorSet("\bm N", dim=3)
+
+[display(lambda), display(N)]
+<!-- /tensorforge:tens -->
+
+A hand-written spectral decomposition can remain symbolic while still letting
+you operate on individual terms.
+
+<!-- tensorforge:tens -->
+Cspec = sum(lambda[a]^2 * N[a] & N[a], a)
+display(Cspec)
+<!-- /tensorforge:tens -->
+
+## 6. Scalar functions in spectral formulas
+
+A scalar expression containing a `Var` behaves like a scalar function. This is
+useful for generalized strain measures and Hill-type models.
+
+<!-- tensorforge:tens -->
+x = Var("\hat{\lambda}")
+m = Scalar("m")
+n = Scalar("n")
+
+Ecr = (x^m - x^(-n))/(m + n)
+E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
+
+display(E)
+<!-- /tensorforge:tens -->
+
+Because the stretch spectral decomposition of `C` is explicit, **TensorForge** can form the fourth-order projection tensor
+
+$$
+\mathbb Q = 2\,\frac{\partial \bm E}{\partial \bm C}.
+$$
+
+<!-- tensorforge:tens -->
+Q = 2 * diff(E, Cspec)
+display(Q)
+<!-- /tensorforge:tens -->
+
+This file is meant to be edited. Try changing a display mode, adding a new Markdown paragraph, or placing another pair of displays in square brackets.

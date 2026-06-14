@@ -49,12 +49,10 @@ I1 = Scalar("I_1")
 I2 = Scalar("I_2")
 I1 = tr(C)
 I2 = 0.5 * ((tr(C))^2 - tr(C*C))
-display(I1)
-display(I2)
+[display(I1), display(I2)]
 <!-- /tensorforge:tens -->
 
 The Mooney-Rivlin model is defined as the function of $I_1$ and $I_2$, as
-
 
 <!-- tensorforge:tens -->
 Psi = Scalar("\Psi_\mathrm{ich}")
@@ -64,10 +62,6 @@ display(Psi)
 
 Then, we can derive the second Piola-Kirichoff stress $\bm S$ by the definition of $\bm S:= 2\partial \Psi/\partial \bm C$, as
 
-
-
-
-
 <!-- tensorforge:tens -->
 S = 2 * diff(Psi, C)
 display(S)
@@ -75,9 +69,6 @@ display(S)
 <!-- /tensorforge:tens -->
 
 and the first Piola-Kirichhoff stress
-
-
-
 
 <!-- tensorforge:tens -->
 P = F * S

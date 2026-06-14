@@ -79,6 +79,7 @@ const output = document.getElementById("output");
 const splitResizer = document.getElementById("split-resizer");
 const runBtn = document.getElementById("run");
 const openBtn = document.getElementById("open");
+const newBtn = document.getElementById("new-file");
 const saveBtn = document.getElementById("save");
 const fileRail = document.getElementById("file-rail");
 const railToggle = document.getElementById("rail-toggle");
@@ -329,11 +330,248 @@ function renderSourceGutter() {
   );
 }
 
+const TENS_BUILTINS = new Set([
+  "Scalar",
+  "Tensor",
+  "Var",
+  "ScalarSet",
+  "VectorSet",
+  "Spec_Decomp",
+  "eigvals",
+  "eigvecs",
+  "display",
+  "export",
+  "diff",
+  "det",
+  "tr",
+  "log",
+  "sqrt",
+  "exp",
+  "sinh",
+  "cosh",
+  "sum",
+  "inv",
+  "dot",
+  "ddot",
+  "outer",
+  "otimes",
+  "simplify",
+]);
+
+const TENS_KEYWORDS = new Set([
+  "true",
+  "false",
+  "order",
+  "dim",
+  "mode",
+  "format",
+  "rules",
+  "identity",
+  "symmetric",
+  "antisymmetric",
+  "orthogonal",
+  "isotropic",
+  "symbol",
+  "components",
+  "matrix",
+  "block_components",
+  "latex",
+  "markdown",
+  "algebra",
+  "tensor",
+  "continuum",
+]);
+
+function span(className, text) {
+  return `<span class="${className}">${escapeHtml(text)}</span>`;
+}
+
+function highlightSource(kind, text) {
+  const html = kind === "tens" ? highlightTens(text) : highlightMarkdownSource(text);
+  return html || " ";
+}
+
+function updateHighlight(textarea) {
+  const blockEl = textarea.closest(".source-block");
+  const highlight = blockEl?.querySelector(".source-highlight");
+  if (!highlight) return;
+  highlight.innerHTML = highlightSource(
+    blockEl.classList.contains("source-tens") ? "tens" : "markdown",
+    textarea.value,
+  );
+}
+
+function highlightMarkdownSource(text) {
+  const lines = text.split("\n");
+  let inFence = false;
+  return lines
+    .map((line) => {
+      const fence = line.match(/^(\s*```)(.*)$/);
+      if (fence) {
+        inFence = !inFence;
+        return span("hl-md-fence", fence[1]) + span("hl-md-code", fence[2]);
+      }
+      if (inFence) return span("hl-md-code", line);
+
+      const heading = line.match(/^(#{1,6})(\s+.*)$/);
+      if (heading) {
+        return span("hl-md-marker", heading[1]) + span("hl-md-heading", heading[2]);
+      }
+
+      const list = line.match(/^(\s*[-*+]\s+)(.*)$/);
+      if (list) {
+        return span("hl-md-marker", list[1]) + highlightMarkdownInline(list[2]);
+      }
+
+      const quote = line.match(/^(\s*>\s+)(.*)$/);
+      if (quote) {
+        return span("hl-md-marker", quote[1]) + highlightMarkdownInline(quote[2]);
+      }
+
+      if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+        return highlightMarkdownTableLine(line);
+      }
+
+      return highlightMarkdownInline(line);
+    })
+    .join("\n");
+}
+
+function highlightMarkdownTableLine(line) {
+  let out = "";
+  for (let i = 0; i < line.length; ) {
+    if (line[i] === "|") {
+      out += span("hl-md-marker", "|");
+      i++;
+      continue;
+    }
+    const end = line.indexOf("|", i);
+    const j = end === -1 ? line.length : end;
+    out += highlightMarkdownInline(line.slice(i, j));
+    i = j;
+  }
+  return out;
+}
+
+function highlightMarkdownInline(text) {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    if (text.startsWith("**", i)) {
+      const end = text.indexOf("**", i + 2);
+      if (end !== -1) {
+        out += span("hl-md-marker", "**");
+        out += span("hl-md-strong", text.slice(i + 2, end));
+        out += span("hl-md-marker", "**");
+        i = end + 2;
+        continue;
+      }
+    }
+    if (text[i] === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end !== -1) {
+        out += span("hl-md-marker", "`");
+        out += span("hl-md-code", text.slice(i + 1, end));
+        out += span("hl-md-marker", "`");
+        i = end + 1;
+        continue;
+      }
+    }
+    if (text[i] === "$") {
+      const end = findInlineMathEnd(text, i + 1);
+      if (end !== -1) {
+        out += span("hl-md-marker", "$");
+        out += span("hl-md-math", text.slice(i + 1, end));
+        out += span("hl-md-marker", "$");
+        i = end + 1;
+        continue;
+      }
+    }
+    if (text[i] === "*" && text[i + 1] !== "*") {
+      const end = text.indexOf("*", i + 1);
+      if (end !== -1) {
+        out += span("hl-md-marker", "*");
+        out += span("hl-md-em", text.slice(i + 1, end));
+        out += span("hl-md-marker", "*");
+        i = end + 1;
+        continue;
+      }
+    }
+    out += escapeHtml(text[i]);
+    i++;
+  }
+  return out;
+}
+
+function highlightTens(text) {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const ch = text[i];
+    if (ch === "#") {
+      const end = text.indexOf("\n", i);
+      const j = end === -1 ? text.length : end;
+      out += span("hl-tens-comment", text.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === "\\" && text[j + 1] === '"') {
+          j += 2;
+          continue;
+        }
+        if (text[j] === '"') {
+          j++;
+          break;
+        }
+        j++;
+      }
+      out += span("hl-tens-string", text.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      const m = text.slice(i).match(/^\d+(?:\.\d+)?/);
+      out += span("hl-tens-number", m[0]);
+      i += m[0].length;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(ch)) {
+      const m = text.slice(i).match(/^[A-Za-z_]\w*/);
+      const word = m[0];
+      const cls = TENS_BUILTINS.has(word)
+        ? "hl-tens-builtin"
+        : TENS_KEYWORDS.has(word)
+          ? "hl-tens-keyword"
+          : "hl-tens-ident";
+      out += span(cls, word);
+      i += word.length;
+      continue;
+    }
+    if ("+-*/^=.:,&[]()".includes(ch)) {
+      out += span("hl-tens-op", ch);
+      i++;
+      continue;
+    }
+    out += escapeHtml(ch);
+    i++;
+  }
+  return out;
+}
+
 function renderSourceBlock(block) {
   const section = document.createElement("section");
   section.className = `source-block ${block.kind === "tens" ? "source-tens" : "source-markdown"}`;
   section.dataset.blockId = String(block.id);
   section.dataset.sourceLine = String(block.sourceLine);
+
+  const layer = document.createElement("div");
+  layer.className = "source-editor-layer";
+
+  const highlight = document.createElement("pre");
+  highlight.className = `source-highlight ${block.kind === "tens" ? "highlight-tens" : "highlight-markdown"}`;
+  highlight.setAttribute("aria-hidden", "true");
+  highlight.innerHTML = highlightSource(block.kind, block.text);
 
   const textarea = document.createElement("textarea");
   textarea.className = "source-textarea";
@@ -389,7 +627,8 @@ function renderSourceBlock(block) {
   textarea.addEventListener("click", updateInsertTableState);
   textarea.addEventListener("keyup", updateInsertTableState);
 
-  section.appendChild(textarea);
+  layer.append(highlight, textarea);
+  section.appendChild(layer);
   if (block.kind === "tens") setupCompletion(textarea);
   return section;
 }
@@ -443,6 +682,7 @@ function refreshBlockLineAttributes() {
 }
 
 function autoResize(textarea) {
+  updateHighlight(textarea);
   textarea.style.height = "auto";
   textarea.style.height = `${Math.max(textarea.scrollHeight, 22)}px`;
 }
@@ -592,6 +832,20 @@ async function openFile() {
   const opened = await invoke("open_tens").catch(showError);
   if (!opened) return;
   loadOpenedFile(opened);
+}
+
+function newFile() {
+  setCurrentPath(null);
+  setDocumentSource("", { run: false });
+  lastRenderedOutputs = [];
+  lastGoodShown = false;
+  output.innerHTML = '<div class="placeholder">No output yet. Add display(...) or export(...).</div>';
+  railFiles.querySelectorAll(".file.active").forEach((el) => el.classList.remove("active"));
+  sourceEditor.scrollTop = 0;
+  sourceGutter.scrollTop = 0;
+  output.scrollTop = 0;
+  const first = sourceEditor.querySelector("textarea");
+  first?.focus();
 }
 
 function loadOpenedFile(opened) {
@@ -989,11 +1243,14 @@ function renderOutputBlock(item) {
     return block;
   }
 
-  head.textContent = `[${header}]`;
+  const label = document.createElement("span");
+  label.className = "head-label";
+  label.textContent = `[${header}]`;
+  head.appendChild(label);
   const tex = stripDisplayMath(latex);
   const bar = document.createElement("span");
   bar.className = "copy-bar";
-  bar.append(copyButton("copy latex", tex), copyButton("copy markdown", `$$\n${tex}\n$$`));
+  bar.append(copyButton("copy latex", tex));
   head.appendChild(bar);
 
   const math = document.createElement("div");
@@ -1011,24 +1268,125 @@ function renderOutputBlock(item) {
   return block;
 }
 
+function renderOutputRowBlock(items) {
+  const row = document.createElement("div");
+  row.className = "output-row";
+  for (const item of items) row.appendChild(renderOutputBlock(item));
+  return row;
+}
+
+function countOutputCalls(source) {
+  return source
+    .split(/\r?\n/)
+    .reduce(
+      (count, line) =>
+        count + (line.replace(/#.*/, "").match(/\b(?:display|export)\s*\(/g)?.length ?? 0),
+      0,
+    );
+}
+
+function orderedPreviewBlocks(outputs) {
+  const items = outputs.map((item, index) => ({ kind: "output", index, ...item }));
+  const buckets = new Map(docBlocks.map((block) => [block.id, []]));
+  const expected = new Map(
+    docBlocks
+      .filter((block) => block.kind === "tens")
+      .map((block) => [block.id, countOutputCalls(block.text)]),
+  );
+  const assigned = new Set();
+  let sequentialBlockIndex = 0;
+
+  const tensBlocks = docBlocks.filter((block) => block.kind === "tens");
+  const outputInBlock = (item, block) =>
+    item.line >= block.sourceLine && item.line <= block.sourceEndLine;
+
+  const put = (item, block) => {
+    buckets.get(block.id)?.push(item);
+    assigned.add(item.index);
+  };
+
+  for (const item of items) {
+    if (!item.error) continue;
+    const block = tensBlocks.find((candidate) => outputInBlock(item, candidate));
+    if (block) put(item, block);
+  }
+
+  for (const item of items) {
+    if (assigned.has(item.index)) continue;
+    if (item.error) {
+      const block = tensBlocks.find((candidate) => outputInBlock(item, candidate));
+      if (block) {
+        put(item, block);
+        continue;
+      }
+    }
+
+    while (
+      sequentialBlockIndex < tensBlocks.length &&
+      (buckets.get(tensBlocks[sequentialBlockIndex].id)?.filter((b) => !b.error).length ?? 0) >=
+        (expected.get(tensBlocks[sequentialBlockIndex].id) ?? 0)
+    ) {
+      sequentialBlockIndex++;
+    }
+
+    const block = tensBlocks[sequentialBlockIndex];
+    if (block) put(item, block);
+  }
+
+  const blocks = [];
+
+  for (const docBlock of docBlocks) {
+    if (docBlock.kind === "markdown" && docBlock.text.trim()) {
+      blocks.push({ kind: "markdown", ...docBlock });
+      continue;
+    }
+
+    if (docBlock.kind !== "tens") continue;
+    blocks.push(...(buckets.get(docBlock.id) ?? []));
+  }
+
+  for (const item of items) {
+    if (!assigned.has(item.index)) blocks.push(item);
+  }
+
+  return blocks;
+}
+
+function groupOutputRows(blocks) {
+  const grouped = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.kind !== "output" || !block.row || block.error) {
+      grouped.push(block);
+      continue;
+    }
+    const items = [block];
+    while (
+      i + 1 < blocks.length &&
+      blocks[i + 1].kind === "output" &&
+      blocks[i + 1].row === block.row &&
+      !blocks[i + 1].error
+    ) {
+      items.push(blocks[++i]);
+    }
+    grouped.push({ kind: "output-row", row: block.row, items });
+  }
+  return grouped;
+}
+
 function renderOutputs(outputs) {
   output.innerHTML = "";
   lastRenderedOutputs = outputs;
-  const blocks = [
-    ...docBlocks.filter((b) => b.kind === "markdown" && b.text.trim()).map((b) => ({ kind: "markdown", ...b })),
-    ...outputs.map((item) => ({ kind: "output", ...item })),
-  ].sort((a, b) => {
-    const la = a.kind === "markdown" ? a.sourceLine : a.line;
-    const lb = b.kind === "markdown" ? b.sourceLine : b.line;
-    return la - lb || (a.kind === "markdown" ? -1 : 1);
-  });
+  const blocks = groupOutputRows(orderedPreviewBlocks(outputs));
 
   if (blocks.length === 0) {
     output.innerHTML = '<div class="placeholder">No output yet. Add display(...) or export(...).</div>';
     return;
   }
   for (const block of blocks) {
-    output.appendChild(block.kind === "markdown" ? renderMarkdownBlock(block) : renderOutputBlock(block));
+    if (block.kind === "markdown") output.appendChild(renderMarkdownBlock(block));
+    else if (block.kind === "output-row") output.appendChild(renderOutputRowBlock(block.items));
+    else output.appendChild(renderOutputBlock(block));
   }
   syncOutputToEditor();
 }
@@ -1090,20 +1448,18 @@ function stripDisplayMath(latex) {
 }
 
 function exportBlocks() {
-  return [
-    ...docBlocks.filter((b) => b.kind === "markdown" && b.text.trim()).map((b) => ({ kind: "markdown", ...b })),
-    ...lastRenderedOutputs.filter((item) => !item.error).map((item) => ({ kind: "output", ...item })),
-  ].sort((a, b) => {
-    const la = a.kind === "markdown" ? a.sourceLine : a.line;
-    const lb = b.kind === "markdown" ? b.sourceLine : b.line;
-    return la - lb || (a.kind === "markdown" ? -1 : 1);
-  });
+  return groupOutputRows(orderedPreviewBlocks(lastRenderedOutputs.filter((item) => !item.error)));
 }
 
 function buildExportMarkdown() {
   return exportBlocks()
     .map((block) => {
       if (block.kind === "markdown") return block.text.trim();
+      if (block.kind === "output-row") {
+        return block.items
+          .map((item) => `### ${item.header}\n\n$$\n${stripDisplayMath(item.latex)}\n$$`)
+          .join("\n\n");
+      }
       return `### ${block.header}\n\n$$\n${stripDisplayMath(block.latex)}\n$$`;
     })
     .filter(Boolean)
@@ -1117,6 +1473,14 @@ function buildPrintableBody() {
     .map((block) => {
       if (block.kind === "markdown") {
         return `<section class="doc-block markdown-doc">${renderMarkdown(block.text)}</section>`;
+      }
+      if (block.kind === "output-row") {
+        return `<section class="doc-block output-row">${block.items
+          .map(
+            (item) =>
+              `<div><div class="head">${escapeHtml(item.header)}</div><div class="math-block">${renderMath(stripDisplayMath(item.latex), true)}</div></div>`,
+          )
+          .join("")}</section>`;
       }
       return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
     })
@@ -1314,6 +1678,7 @@ function closeExportMenu() {
 
 runBtn.addEventListener("click", run);
 openBtn.addEventListener("click", openFile);
+newBtn.addEventListener("click", newFile);
 saveBtn.addEventListener("click", saveFile);
 addTensBtn.addEventListener("click", insertTensBlock);
 themeBtn.addEventListener("click", toggleTheme);
@@ -1360,6 +1725,9 @@ document.addEventListener("keydown", (e) => {
   } else if (mod && e.key === "o") {
     e.preventDefault();
     openFile();
+  } else if (mod && e.key === "n") {
+    e.preventDefault();
+    newFile();
   }
 });
 

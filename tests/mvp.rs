@@ -109,6 +109,65 @@ More Markdown with $W = \mu I_1$.
 }
 
 #[test]
+fn display_does_not_substitute_aliases_from_the_same_tens_block() {
+    let src = r#"
+<!-- tensorforge:tens -->
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+display(C)
+<!-- /tensorforge:tens -->
+
+<!-- tensorforge:tens -->
+I1 = Scalar("I_1")
+I2 = Scalar("I_2")
+I1 = tr(C)
+I2 = 0.5 * ((tr(C))^2 - tr(C*C))
+display(I2)
+<!-- /tensorforge:tens -->
+
+<!-- tensorforge:tens -->
+Psi = Scalar("\Psi")
+Psi = I1 + I2
+display(Psi)
+<!-- /tensorforge:tens -->
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs.len(), 3);
+    assert!(
+        outputs[1].latex.contains("\\operatorname{tr} \\bm C"),
+        "got: {}",
+        outputs[1].latex
+    );
+    assert!(
+        !outputs[1].latex.contains("{I_1}^{2}"),
+        "got: {}",
+        outputs[1].latex
+    );
+    assert!(
+        outputs[2].latex.contains("I_1 + I_2"),
+        "got: {}",
+        outputs[2].latex
+    );
+}
+
+#[test]
+fn bracketed_display_calls_share_a_preview_row() {
+    let src = r#"
+I1 = Scalar("I_1")
+I2 = Scalar("I_2")
+I1 = 1
+I2 = 2
+[display(I1) display(I2)]
+display(I1)
+"#;
+    let outputs = run_source(src).unwrap();
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(outputs[0].row, outputs[1].row);
+    assert!(outputs[0].row.is_some());
+    assert_eq!(outputs[2].row, None);
+}
+
+#[test]
 fn unterminated_tens_block_is_a_parse_error() {
     let src = r#"
 # Markdown first
@@ -264,6 +323,93 @@ display(C, mode=symbol)
 }
 
 #[test]
+fn display_uses_named_definitions() {
+    let src = r#"
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+I1 = Scalar("I_1")
+I1 = tr(C)
+W = I1 - 3
+display(W, mode=symbol)
+export(W, format=latex)
+"#;
+    let outputs = run_source(src).unwrap();
+    for output in &outputs {
+        assert!(output.latex.contains("I_1 - 3"), "got: {}", output.latex);
+        assert!(
+            !output.latex.contains("\\operatorname{tr}"),
+            "got: {}",
+            output.latex
+        );
+    }
+}
+
+#[test]
+fn display_expands_derived_results_but_keeps_base_aliases() {
+    let src = r#"
+mu = Scalar("\mu")
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+I1 = Scalar("I_1")
+I1 = tr(C)
+Psi = mu/2 * (I1 - 3)
+S = 2 * diff(Psi, C)
+P = F * S
+display(P, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(latex.contains("\\bm P = \\mu \\, \\bm F"), "got: {latex}");
+    assert!(!latex.contains("\\bm S"), "got: {latex}");
+}
+
+#[test]
+fn display_hoists_scalar_coefficients_out_of_matrix_products() {
+    let src = r#"
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
+F = Tensor("\bm F", order=2, dim=3)
+C = Tensor("\bm C", order=2, dim=3, symmetric=true)
+I = Tensor("\bm I", order=2, dim=3, identity=true)
+S = 2 * (C1 * I + C2 * C)
+P = F * S
+display(P, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(
+        latex.contains("\\bm P = 2 \\, \\bm F \\, \\left("),
+        "got: {latex}"
+    );
+    assert!(
+        !latex.contains("\\bm F \\, 2"),
+        "scalar coefficient should not sit after F: {latex}"
+    );
+}
+
+#[test]
+fn display_simplifies_transposes_of_named_symmetric_definitions() {
+    let src = r#"
+C1 = Scalar("C_1")
+C2 = Scalar("C_2")
+I1 = Scalar("I_1")
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+I = Tensor("\bm I", order=2, dim=3, identity=true)
+S = 2 * (C1 * I + C2/2 * (2 * I1 * I - (C.T + C.T)))
+display(S, mode=symbol)
+"#;
+    let outputs = run_source(src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(
+        latex.contains("C_2 \\, \\left( I_1 \\, \\bm I - \\bm C \\right)"),
+        "got: {latex}"
+    );
+    assert!(!latex.contains("\\bm C^{\\mathsf{T}}"), "got: {latex}");
+    assert!(!latex.contains("\\bm C + \\bm C"), "got: {latex}");
+}
+
+#[test]
 fn display_components_mode_is_3x3() {
     let src = format!("{PRELUDE}\ndisplay(C, mode=components)");
     let outputs = run_source(&src).unwrap();
@@ -349,6 +495,27 @@ fn mooney_rivlin_uniaxial_example_runs_end_to_end() {
             s_out.latex
         );
     }
+}
+
+#[test]
+fn start_example_runs_as_a_notebook_tour() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/start.tens"))
+        .unwrap();
+    let outputs = run_source(&src).unwrap();
+    assert_eq!(outputs.len(), 16);
+    assert!(outputs.iter().all(|o| o.error.is_none()));
+    assert!(
+        outputs.iter().any(|o| o.header.starts_with("display P11")),
+        "start example should show component access"
+    );
+    assert!(
+        outputs.iter().any(|o| o.header.starts_with("display Q")),
+        "start example should show spectral differentiation"
+    );
+    assert!(
+        outputs.iter().any(|o| o.row.is_some()),
+        "start example should demonstrate side-by-side display rows"
+    );
 }
 
 #[test]

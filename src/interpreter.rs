@@ -13,7 +13,7 @@ use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
 use crate::simplifier::{simplify_scalar, simplify_tensor, RuleSet};
 use crate::symbolic::ScalarExpr;
 use crate::tensor::{TensorExpr, TensorProperties};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// A semantic value: scalars and tensors are distinct types and cannot be
@@ -35,6 +35,8 @@ pub struct Output {
     pub line: usize,
     /// `Some(message)` if this statement failed (per-block error recovery).
     pub error: Option<String>,
+    /// Outputs sharing the same row id are rendered side by side in the UI.
+    pub row: Option<usize>,
 }
 
 #[derive(Default)]
@@ -53,6 +55,10 @@ pub struct Interpreter {
     /// computational value simplifies `F.T` to `F` for a component-filled
     /// symmetric `F`.
     display_values: HashMap<String, Value>,
+    /// Names whose definitions are computed results rather than display
+    /// aliases. These expand in later displays; foundational notation such as
+    /// `C = F.T * F`, `J = det(F)`, `I1 = tr(C)` remains aliasable.
+    derived_names: HashSet<String>,
     /// Symbol names declared as function arguments via `Var("...")`, in
     /// declaration order. A scalar expression mentioning exactly one of
     /// these is a function of it and can be applied with call syntax.
@@ -62,6 +68,7 @@ pub struct Interpreter {
     /// accessed as `name[a]` (abstract index) or `name[1]` (concrete).
     sets: HashMap<String, SetDecl>,
     outputs: Vec<Output>,
+    next_output_row: usize,
 }
 
 struct SetDecl {
@@ -75,6 +82,15 @@ struct SetDecl {
     /// scalar expressions for a ScalarSet, order-1 `Filled` vectors for a
     /// VectorSet. `name[1]` resolves to the value; `name[a]` stays abstract.
     values: Option<Vec<Value>>,
+}
+
+struct OutputSubject {
+    /// Bare variable name when the output argument is `X`.
+    name: Option<String>,
+    /// Human-readable source label for the output header.
+    header: String,
+    /// LaTeX left-hand side for display output.
+    lhs: Option<String>,
 }
 
 impl Interpreter {
@@ -102,6 +118,7 @@ impl Interpreter {
                     latex: String::new(),
                     line: e.line.unwrap_or(stmt.line()),
                     error: Some(e.message),
+                    row: None,
                 });
             }
         }
@@ -115,7 +132,9 @@ impl Interpreter {
 
     fn exec(&mut self, stmt: &Stmt) -> Result<(), Error> {
         match stmt {
-            Stmt::Assign { name, expr, .. } => {
+            Stmt::Assign {
+                name, expr, block, ..
+            } => {
                 // Set declarations bind into the sets registry, not the
                 // value environment: only `name[index]` elements are values.
                 if let Expr::Call {
@@ -144,9 +163,6 @@ impl Interpreter {
                         }
                     }
                 }
-                // Register compound definitions for display-time
-                // back-substitution (declared leaves substitute trivially
-                // and are skipped).
                 let is_leaf = matches!(
                     &value,
                     Value::Tensor(t) if matches!(&**t, TensorExpr::Var { .. })
@@ -154,18 +170,28 @@ impl Interpreter {
                     &value,
                     Value::Scalar(s) if matches!(&**s, ScalarExpr::Sym { .. } | ScalarExpr::Num(_))
                 );
-                if !is_leaf {
-                    if let Some(latex) = self.display_label(name, &value) {
-                        // Re-registering a name drops its previous definition.
-                        self.defs.retain(|d| d.latex != latex);
+                let is_derived = self.expr_is_derived_display_result(expr);
+                // Register compound definitions for display-time
+                // back-substitution (declared leaves substitute trivially
+                // and are skipped).
+                if let Some(latex) = self.display_label(name, &value) {
+                    // Re-registering a name drops its previous definition.
+                    self.defs.retain(|d| d.latex != latex);
+                    if !is_leaf && !is_derived {
                         self.defs.push(crate::substitute::Def {
                             latex,
                             value: value.clone(),
+                            block: *block,
                         });
                     }
                 }
+                if is_derived {
+                    self.derived_names.insert(name.clone());
+                } else {
+                    self.derived_names.remove(name);
+                }
                 if let Some(display_value) =
-                    display_value.filter(|v| !is_leaf && value_contains_transpose(v))
+                    display_value.filter(|_| !is_leaf && is_raw_transpose_product_definition(expr))
                 {
                     self.display_values.insert(name.clone(), display_value);
                 } else {
@@ -193,10 +219,12 @@ impl Interpreter {
                     kwargs,
                 },
                 line,
+                block,
             ) if callee == "display" || callee == "export" => {
-                self.exec_output(callee, args, kwargs, *line)
+                self.exec_output(callee, args, kwargs, *line, *block, None)
             }
-            Stmt::Expr(expr, _) => {
+            Stmt::OutputRow { exprs, line, block } => self.exec_output_row(exprs, *line, *block),
+            Stmt::Expr(expr, _, _) => {
                 // Evaluate for the side effect of error checking.
                 self.eval(expr)?;
                 Ok(())
@@ -1450,19 +1478,17 @@ impl Interpreter {
         args: &[Expr],
         kwargs: &[(String, Expr)],
         line: usize,
+        block: usize,
+        row: Option<usize>,
     ) -> Result<(), Error> {
         if args.len() != 1 {
             return Err(Error::msg(format!(
                 "`{callee}` expects exactly one expression argument"
             )));
         }
-        // The argument's source name (if a bare identifier) labels the output.
-        let subject = match &args[0] {
-            Expr::Ident(name) => Some(name.clone()),
-            _ => None,
-        };
+        let subject = self.output_subject(&args[0]);
 
-        if let Some(name) = subject.as_deref() {
+        if let Some(name) = subject.name.as_deref() {
             if let Some(set) = self.sets.get(name) {
                 let mut mode = "symbol".to_string();
                 let mut format = "latex".to_string();
@@ -1512,6 +1538,7 @@ impl Interpreter {
                     latex,
                     line,
                     error: None,
+                    row,
                 });
                 return Ok(());
             }
@@ -1537,8 +1564,15 @@ impl Interpreter {
         }
 
         let value = self.eval(&args[0])?;
-        let value = if callee == "display" && mode == "symbol" {
+        let uses_raw_display_value = callee == "display"
+            && mode == "symbol"
+            && subject
+                .name
+                .as_deref()
+                .is_some_and(|name| self.display_values.contains_key(name));
+        let value = if uses_raw_display_value {
             subject
+                .name
                 .as_deref()
                 .and_then(|name| self.display_values.get(name))
                 .cloned()
@@ -1548,35 +1582,133 @@ impl Interpreter {
         };
 
         // Back-substitute registered definitions (most recent first) so the
-        // display shows \bm C rather than the expanded FᵀF. Internal values
-        // stay expanded; this is presentation only. Derivative nodes are
-        // exempt: they need the expanded structure.
+        // display follows user-defined names such as `C` and `I_1`. Internal
+        // values stay expanded; this is presentation only. Derivative nodes
+        // are exempt because they need the expanded structure.
         let skip_subst =
             matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }));
         let value = if skip_subst {
             value
         } else {
-            crate::substitute::substitute(&value, &self.defs)
+            let defs = self.display_defs_for_block(block);
+            crate::substitute::substitute(&value, &defs)
+        };
+        let value = if uses_raw_display_value || skip_subst {
+            value
+        } else {
+            Self::simplify_presentation_value(value)
         };
 
         let latex = match callee {
-            "display" => self.render_display(&value, &subject, &mode)?,
+            "display" => self.render_display(&value, subject.lhs.as_deref(), &mode)?,
             "export" => self.render_export(&value, &format)?,
             _ => unreachable!(),
         };
-        let label = subject.as_deref().unwrap_or("<expr>");
         let detail = if callee == "display" {
             format!("mode={mode}")
         } else {
             format!("format={format}")
         };
         self.outputs.push(Output {
-            header: format!("{callee} {label}, {detail}"),
+            header: format!("{callee} {}, {detail}", subject.header),
             latex,
             line,
             error: None,
+            row,
         });
         Ok(())
+    }
+
+    fn exec_output_row(&mut self, exprs: &[Expr], line: usize, block: usize) -> Result<(), Error> {
+        self.next_output_row += 1;
+        let row = Some(self.next_output_row);
+        for expr in exprs {
+            let Expr::Call {
+                callee,
+                args,
+                kwargs,
+            } = expr
+            else {
+                return Err(Error::new(
+                    "display row items must be display(...) or export(...) calls",
+                    Some(line),
+                ));
+            };
+            if callee != "display" && callee != "export" {
+                return Err(Error::new(
+                    "display row items must be display(...) or export(...) calls",
+                    Some(line),
+                ));
+            }
+            self.exec_output(callee, args, kwargs, line, block, row)?;
+        }
+        Ok(())
+    }
+
+    fn display_defs_for_block(&self, block: usize) -> Vec<crate::substitute::Def> {
+        if block == 0 {
+            return self.defs.clone();
+        }
+        self.defs
+            .iter()
+            .filter(|def| def.block != block)
+            .cloned()
+            .collect()
+    }
+
+    fn output_subject(&self, expr: &Expr) -> OutputSubject {
+        match expr {
+            Expr::Ident(name) => OutputSubject {
+                name: Some(name.clone()),
+                header: name.clone(),
+                lhs: self.display_lhs(name),
+            },
+            _ => self
+                .component_output_subject(expr)
+                .unwrap_or_else(|| OutputSubject {
+                    name: None,
+                    header: "<expr>".to_string(),
+                    lhs: None,
+                }),
+        }
+    }
+
+    fn component_output_subject(&self, expr: &Expr) -> Option<OutputSubject> {
+        let (name, indices) = flatten_component_subject(expr)?;
+        let Value::Tensor(t) = self.env.get(name)? else {
+            return None;
+        };
+        if indices.len() != t.order() {
+            return None;
+        }
+        let mut subscript = String::new();
+        let mut header = name.to_string();
+        for idx in indices {
+            let Expr::Num(n) = idx else {
+                return None;
+            };
+            if n.fract() != 0.0 || *n < 1.0 || (*n as usize) > t.dim() {
+                return None;
+            }
+            let k = *n as usize;
+            header.push_str(&format!("[{k}]"));
+            subscript.push_str(&k.to_string());
+        }
+        let lhs = self
+            .display_lhs(name)
+            .map(|base| format!("{{{base}}}_{{{subscript}}}"));
+        Some(OutputSubject {
+            name: None,
+            header,
+            lhs,
+        })
+    }
+
+    fn simplify_presentation_value(value: Value) -> Value {
+        match value {
+            Value::Scalar(s) => Value::Scalar(simplify_scalar(&s, RuleSet::Tensor)),
+            Value::Tensor(t) => Value::Tensor(simplify_tensor(&t, RuleSet::Tensor)),
+        }
     }
 
     /// Display label for a variable about to be (re)assigned `value`:
@@ -1592,17 +1724,42 @@ impl Interpreter {
         }
     }
 
+    fn expr_is_derived_display_result(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name) => self.derived_names.contains(name),
+            Expr::Unary { expr, .. } => self.expr_is_derived_display_result(expr),
+            Expr::Binary { lhs, rhs, .. } => {
+                self.expr_is_derived_display_result(lhs) || self.expr_is_derived_display_result(rhs)
+            }
+            Expr::Field { target, .. } => self.expr_is_derived_display_result(target),
+            Expr::Index { target, index } => {
+                self.expr_is_derived_display_result(target)
+                    || self.expr_is_derived_display_result(index)
+            }
+            Expr::Call {
+                callee,
+                args,
+                kwargs,
+            } => {
+                callee == "diff"
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_is_derived_display_result(arg))
+                    || kwargs
+                        .iter()
+                        .any(|(_, value)| self.expr_is_derived_display_result(value))
+            }
+            Expr::Num(_) | Expr::Str(_) | Expr::Bool(_) => false,
+        }
+    }
+
     fn render_display(
         &self,
         value: &Value,
-        subject: &Option<String>,
+        lhs: Option<&str>,
         mode: &str,
     ) -> Result<String, Error> {
-        let lhs = subject
-            .as_ref()
-            .and_then(|name| self.display_lhs(name))
-            .map(|tex| format!("{tex} = "))
-            .unwrap_or_default();
+        let lhs = lhs.map(|tex| format!("{tex} = ")).unwrap_or_default();
         match (value, mode) {
             (Value::Scalar(s), "symbol") => Ok(format!("{lhs}{}", scalar_to_latex(s))),
             (Value::Tensor(t), "symbol") => Ok(format!("{lhs}{}", tensor_to_latex(t))),
@@ -1760,36 +1917,37 @@ fn contains_filled(t: &TensorExpr) -> bool {
     }
 }
 
-fn value_contains_transpose(value: &Value) -> bool {
-    match value {
-        Value::Tensor(t) => tensor_contains_transpose(t),
-        Value::Scalar(_) => false,
-    }
+fn is_raw_transpose_product_definition(expr: &Expr) -> bool {
+    let Expr::Binary {
+        op: BinOp::Mul,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return false;
+    };
+    is_transpose_of(lhs, rhs) || is_transpose_of(rhs, lhs)
 }
 
-fn tensor_contains_transpose(t: &TensorExpr) -> bool {
-    match t {
-        TensorExpr::Transpose(_) | TensorExpr::InverseTranspose(_) => true,
-        TensorExpr::Var { .. }
-        | TensorExpr::Filled { .. }
-        | TensorExpr::Identity4 { .. }
-        | TensorExpr::SetElem { .. } => false,
-        TensorExpr::Inverse(a)
-        | TensorExpr::Neg(a)
-        | TensorExpr::ScalarMul(_, a)
-        | TensorExpr::SumIdx { body: a, .. }
-        | TensorExpr::Power { base: a, .. } => tensor_contains_transpose(a),
-        TensorExpr::Diff { num, den, .. } => {
-            tensor_contains_transpose(num) || tensor_contains_transpose(den)
-        }
-        TensorExpr::MatMul(a, b)
-        | TensorExpr::Add(a, b)
-        | TensorExpr::Sub(a, b)
-        | TensorExpr::Outer(a, b)
-        | TensorExpr::BoxTimes(a, b) => {
-            tensor_contains_transpose(a) || tensor_contains_transpose(b)
-        }
+fn is_transpose_of(candidate: &Expr, base: &Expr) -> bool {
+    matches!(
+        candidate,
+        Expr::Field { target, name } if name == "T" && target.as_ref() == base
+    )
+}
+
+fn flatten_component_subject(expr: &Expr) -> Option<(&str, Vec<&Expr>)> {
+    let mut indices = Vec::new();
+    let mut base = expr;
+    while let Expr::Index { target, index } = base {
+        indices.push(index.as_ref());
+        base = target;
     }
+    indices.reverse();
+    let Expr::Ident(name) = base else {
+        return None;
+    };
+    (!indices.is_empty()).then_some((name.as_str(), indices))
 }
 
 fn tensor_index_range(t: &TensorExpr, idx: &str) -> Option<usize> {

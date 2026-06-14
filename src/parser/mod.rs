@@ -19,21 +19,35 @@ pub mod lexer;
 use crate::ast::{BinOp, Expr, Stmt, UnOp};
 use crate::error::Error;
 use lexer::{lex, Tok, Token};
+use std::collections::HashMap;
 
 /// Positional and keyword arguments of a call.
 type CallArgs = (Vec<Expr>, Vec<(String, Expr)>);
 
 pub fn parse(src: &str) -> Result<Vec<Stmt>, Error> {
-    let stripped = prepare_source(src)?;
-    let tokens = lex(&stripped)?;
-    Parser { tokens, pos: 0 }.parse_program()
+    let prepared = prepare_source(src)?;
+    let tokens = lex(&prepared.source)?;
+    Parser {
+        tokens,
+        pos: 0,
+        line_blocks: prepared.line_blocks,
+    }
+    .parse_program()
 }
 
-fn prepare_source(src: &str) -> Result<String, Error> {
+struct PreparedSource {
+    source: String,
+    line_blocks: HashMap<usize, usize>,
+}
+
+fn prepare_source(src: &str) -> Result<PreparedSource, Error> {
     if has_tens_block(src) {
         extract_tens_blocks(src)
     } else {
-        strip_note_blocks(src)
+        Ok(PreparedSource {
+            source: strip_note_blocks(src)?,
+            line_blocks: HashMap::new(),
+        })
     }
 }
 
@@ -44,10 +58,12 @@ fn has_tens_block(src: &str) -> bool {
     })
 }
 
-fn extract_tens_blocks(src: &str) -> Result<String, Error> {
+fn extract_tens_blocks(src: &str) -> Result<PreparedSource, Error> {
     let mut out = String::with_capacity(src.len());
     let mut in_tens = false;
     let mut start_line = None;
+    let mut current_block = 0usize;
+    let mut line_blocks = HashMap::new();
 
     for (idx, line) in src.split_inclusive('\n').enumerate() {
         let line_no = idx + 1;
@@ -60,6 +76,7 @@ fn extract_tens_blocks(src: &str) -> Result<String, Error> {
                 start_line = None;
                 out.push_str(blank_like(line));
             } else {
+                line_blocks.insert(line_no, current_block);
                 out.push_str(line);
             }
             continue;
@@ -67,6 +84,7 @@ fn extract_tens_blocks(src: &str) -> Result<String, Error> {
 
         if trimmed.eq_ignore_ascii_case("<!-- tensorforge:tens -->") {
             in_tens = true;
+            current_block += 1;
             start_line = Some(line_no);
         }
         out.push_str(blank_like(line));
@@ -75,7 +93,10 @@ fn extract_tens_blocks(src: &str) -> Result<String, Error> {
     if in_tens {
         return Err(Error::new("unterminated tens block", start_line));
     }
-    Ok(out)
+    Ok(PreparedSource {
+        source: out,
+        line_blocks,
+    })
 }
 
 fn strip_note_blocks(src: &str) -> Result<String, Error> {
@@ -177,6 +198,7 @@ fn blank_like(line: &str) -> &'static str {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    line_blocks: HashMap<usize, usize>,
 }
 
 impl Parser {
@@ -186,6 +208,10 @@ impl Parser {
 
     fn line(&self) -> usize {
         self.tokens[self.pos].line
+    }
+
+    fn block_for_line(&self, line: usize) -> usize {
+        self.line_blocks.get(&line).copied().unwrap_or(0)
     }
 
     fn next(&mut self) -> Tok {
@@ -237,9 +263,13 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Stmt, Error> {
         let line = self.line();
+        let block = self.block_for_line(line);
         // `[a, b] = expr` — destructuring assignment.
         if matches!(self.peek(), Tok::LBracket) {
-            return self.parse_pair_assignment(line);
+            if self.looks_like_pair_assignment() {
+                return self.parse_pair_assignment(line, block);
+            }
+            return self.parse_output_row(line, block);
         }
         if let Tok::Ident(name) = self.peek().clone() {
             // Lookahead: IDENT "=" starts an assignment (but IDENT "==" would
@@ -248,23 +278,70 @@ impl Parser {
                 self.next(); // ident
                 self.next(); // =
                 let expr = self.parse_expr()?;
-                return Ok(Stmt::Assign { name, expr, line });
+                return Ok(Stmt::Assign {
+                    name,
+                    expr,
+                    line,
+                    block,
+                });
             }
             // Tentative: IDENT ("[" expr "]")+ "=" is a component assignment;
             // anything else falls back to an expression statement.
             if self.tokens[self.pos + 1].tok == Tok::LBracket {
                 let saved = self.pos;
-                if let Some(stmt) = self.try_parse_component_assignment(name, line)? {
+                if let Some(stmt) = self.try_parse_component_assignment(name, line, block)? {
                     return Ok(stmt);
                 }
                 self.pos = saved;
             }
         }
-        Ok(Stmt::Expr(self.parse_expr()?, line))
+        Ok(Stmt::Expr(self.parse_expr()?, line, block))
+    }
+
+    fn looks_like_pair_assignment(&self) -> bool {
+        matches!(
+            self.tokens.get(self.pos).map(|t| &t.tok),
+            Some(Tok::LBracket)
+        ) && matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.tok),
+            Some(Tok::Ident(_))
+        ) && matches!(
+            self.tokens.get(self.pos + 2).map(|t| &t.tok),
+            Some(Tok::Comma)
+        ) && matches!(
+            self.tokens.get(self.pos + 3).map(|t| &t.tok),
+            Some(Tok::Ident(_))
+        ) && matches!(
+            self.tokens.get(self.pos + 4).map(|t| &t.tok),
+            Some(Tok::RBracket)
+        ) && matches!(self.tokens.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Eq))
+    }
+
+    /// `[display(A) display(B)]` or `[display(A), display(B)]`.
+    fn parse_output_row(&mut self, line: usize, block: usize) -> Result<Stmt, Error> {
+        self.expect(&Tok::LBracket, "`[`")?;
+        let mut exprs = Vec::new();
+        loop {
+            if matches!(self.peek(), Tok::RBracket) {
+                break;
+            }
+            if matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                return Err(Error::new("unterminated display row", Some(line)));
+            }
+            exprs.push(self.parse_expr()?);
+            if matches!(self.peek(), Tok::Comma) {
+                self.next();
+            }
+        }
+        self.expect(&Tok::RBracket, "`]`")?;
+        if exprs.is_empty() {
+            return Err(Error::new("empty display row", Some(line)));
+        }
+        Ok(Stmt::OutputRow { exprs, line, block })
     }
 
     /// `[a, b] = expr`
-    fn parse_pair_assignment(&mut self, line: usize) -> Result<Stmt, Error> {
+    fn parse_pair_assignment(&mut self, line: usize, block: usize) -> Result<Stmt, Error> {
         self.next(); // [
         let first = match self.next() {
             Tok::Ident(name) => name,
@@ -293,6 +370,7 @@ impl Parser {
             second,
             expr,
             line,
+            block,
         })
     }
 
@@ -302,6 +380,7 @@ impl Parser {
         &mut self,
         name: String,
         line: usize,
+        block: usize,
     ) -> Result<Option<Stmt>, Error> {
         self.next(); // ident
         let mut indices = Vec::new();
@@ -320,6 +399,7 @@ impl Parser {
             indices,
             expr,
             line,
+            block,
         }))
     }
 
