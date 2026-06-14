@@ -1,19 +1,31 @@
-# Homebrew formula for the TensorForge CLI.
+# Homebrew formula for the TensorForge CLI (prebuilt binaries).
 #
 # Install from the tap:
 #   brew install Chongran-Zhao/tensorforge/tensorforge
+#
+# This formula ships precompiled binaries, so installing it does NOT pull in
+# the Rust toolchain or LLVM (~2 GB). The binaries are built by the release
+# workflow (.github/workflows/release.yml) and attached to the GitHub release;
+# the sha256 values below are filled in by that workflow.
 class Tensorforge < Formula
   desc "Symbolic tensor algebra for continuum mechanics (.tens DSL)"
   homepage "https://github.com/Chongran-Zhao/TensorForge"
-  url "https://github.com/Chongran-Zhao/TensorForge/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "d18ba93c323754ce6cb40b18dfd4827277bbb309e3378f388d5b632b2070fb53"
+  version "1.0"
   license "MIT"
 
-  depends_on "rust" => :build
+  on_macos do
+    on_arm do
+      url "https://github.com/Chongran-Zhao/TensorForge/releases/download/v1.0/tensorforge-v1.0-aarch64-apple-darwin.tar.gz"
+      sha256 "REPLACE_WITH_AARCH64_APPLE_DARWIN_SHA256"
+    end
+    on_intel do
+      url "https://github.com/Chongran-Zhao/TensorForge/releases/download/v1.0/tensorforge-v1.0-x86_64-apple-darwin.tar.gz"
+      sha256 "REPLACE_WITH_X86_64_APPLE_DARWIN_SHA256"
+    end
+  end
 
   def install
-    # The repo is a workspace; install the root (engine + CLI) package.
-    system "cargo", "install", *std_cargo_args
+    bin.install "tensorforge"
   end
 
   test do

@@ -2,7 +2,7 @@
 //! 1. Scalar parses; 2. Tensor parses; 3. `C = F.T * F` parses;
 //! 4. C is inferred symmetric; 5. display(C, mode=symbol);
 //! 6. display(C, mode=components) is a 3x3 matrix; 7. export(C, format=latex);
-//! 8. the full Mooney-Rivlin uniaxial example runs end to end.
+//! 8. the shipped start.tens feature tour runs end to end.
 
 use tensorforge::interpreter::Value;
 use tensorforge::tensor::TensorExpr;
@@ -478,11 +478,8 @@ display(I1, mode=symbol)
 
 #[test]
 fn start_example_runs_end_to_end() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/examples/start.tens"
-    ))
-    .unwrap();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/start.tens"))
+        .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert_eq!(outputs.len(), 42);
     assert!(outputs.iter().all(|o| o.error.is_none()));

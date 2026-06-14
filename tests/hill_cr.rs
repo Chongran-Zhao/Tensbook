@@ -196,11 +196,8 @@ fn second_pk_stress_symbol_formula() {
 
 #[test]
 fn shipped_example_runs_end_to_end() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/examples/start.tens"
-    ))
-    .unwrap();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/start.tens"))
+        .unwrap();
     let outputs = run_source(&src).unwrap();
     assert!(!outputs.is_empty());
     assert!(outputs.iter().all(|o| o.error.is_none()));
