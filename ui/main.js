@@ -1002,37 +1002,45 @@ function isBareFenceClose(line) {
   return /^```\s*$/.test(line.trim());
 }
 
-function renderMarkdown(markdown) {
+function sourceLineAttr(line) {
+  return Number.isFinite(line) ? ` data-source-line="${line}"` : "";
+}
+
+function renderMarkdown(markdown, baseLine = null) {
   const lines = markdown.split(/\r?\n/);
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const sourceLine = baseLine == null ? null : baseLine + i;
     if (isInnerFenceOpen(line)) {
+      const startLine = sourceLine;
       const code = [];
       i++;
       while (i < lines.length && !isBareFenceClose(lines[i])) {
         code.push(lines[i]);
         i++;
       }
-      out.push(`<pre class="md-code"><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      out.push(`<pre class="md-code"${sourceLineAttr(startLine)}><code>${escapeHtml(code.join("\n"))}</code></pre>`);
       continue;
     }
     const oneLineMath = line.match(/^\s*\$\$\s*(.*?)\s*\$\$\s*$/);
     if (oneLineMath) {
-      out.push(`<div class="markdown-math">${renderMath(oneLineMath[1], true)}</div>`);
+      out.push(`<div class="markdown-math"${sourceLineAttr(sourceLine)}>${renderMath(oneLineMath[1], true)}</div>`);
       continue;
     }
     if (line.trim() === "$$") {
+      const startLine = sourceLine;
       const tex = [];
       i++;
       while (i < lines.length && lines[i].trim() !== "$$") {
         tex.push(lines[i]);
         i++;
       }
-      out.push(`<div class="markdown-math">${renderMath(tex.join("\n"), true)}</div>`);
+      out.push(`<div class="markdown-math"${sourceLineAttr(startLine)}>${renderMath(tex.join("\n"), true)}</div>`);
       continue;
     }
     if (isTableRow(line) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const startLine = sourceLine;
       const aligns = tableAlignments(lines[i + 1]);
       const header = tableCells(line);
       const rows = [];
@@ -1042,27 +1050,29 @@ function renderMarkdown(markdown) {
         i++;
       }
       i--;
-      out.push(renderTable(header, rows, aligns));
+      out.push(renderTable(header, rows, aligns, startLine));
       continue;
     }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
-      out.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      out.push(`<h${level}${sourceLineAttr(sourceLine)}>${inlineMarkdown(heading[2])}</h${level}>`);
       continue;
     }
     if (/^\s*[-*]\s+/.test(line)) {
+      const startLine = sourceLine;
       const items = [];
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(`<li>${inlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`);
+        const itemLine = baseLine == null ? null : baseLine + i;
+        items.push(`<li${sourceLineAttr(itemLine)}>${inlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`);
         i++;
       }
       i--;
-      out.push(`<ul>${items.join("")}</ul>`);
+      out.push(`<ul${sourceLineAttr(startLine)}>${items.join("")}</ul>`);
       continue;
     }
     if (line.trim() === "") continue;
-    out.push(`<p>${inlineMarkdown(line)}</p>`);
+    out.push(`<p${sourceLineAttr(sourceLine)}>${inlineMarkdown(line)}</p>`);
   }
   return out.join("") || "<p></p>";
 }
@@ -1092,10 +1102,10 @@ function tableAlignments(sepLine) {
   });
 }
 
-function renderTable(header, rows, aligns) {
+function renderTable(header, rows, aligns, sourceLine = null) {
   const cell = (tag, content, k) =>
     `<${tag} style="text-align:${aligns[k] ?? "left"}">${inlineMarkdown(content.trim())}</${tag}>`;
-  return `<table class="md-table"><thead><tr>${header
+  return `<table class="md-table"${sourceLineAttr(sourceLine)}><thead><tr>${header
     .map((c, k) => cell("th", c, k))
     .join("")}</tr></thead><tbody>${rows
     .map((r) => `<tr>${r.map((c, k) => cell("td", c, k)).join("")}</tr>`)
@@ -1195,7 +1205,7 @@ function copyButton(label, text) {
 function renderMarkdownBlock(block) {
   const el = document.createElement("div");
   el.className = "block markdown-doc";
-  el.innerHTML = renderMarkdown(block.text);
+  el.innerHTML = renderMarkdown(block.text, block.sourceLine);
   makeBlockJump(el, block.sourceLine);
   return el;
 }
@@ -1674,7 +1684,8 @@ function makeBlockJump(el, line) {
   el.title = `Click to jump to source`;
   el.addEventListener("click", (e) => {
     if (e.target.closest("button")) return;
-    jumpToSourceLine(line, { focus: true, behavior: "auto" });
+    const targetLine = Number(e.target.closest("[data-source-line]")?.dataset.sourceLine ?? line);
+    jumpToSourceLine(targetLine, { focus: true, behavior: "auto" });
   });
 }
 
