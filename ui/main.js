@@ -51,6 +51,7 @@ let nextBlockId = 1;
 let docBlocks = [];
 let activeBlockId = null;
 let activeTextarea = null;
+let isDirty = false;
 let scrollSyncSource = null;
 let scrollSyncFrame = null;
 let analyzeTimer = null;
@@ -104,10 +105,35 @@ document.addEventListener("click", (e) => {
 
 function setCurrentPath(path) {
   currentPath = path;
-  filenameEl.textContent = path ? path.split("/").pop() : "";
-  filenameEl.title = path ?? "";
+  updateFilename();
   if (path) localStorage.setItem("tensorforge.path.v1", path);
   else localStorage.removeItem("tensorforge.path.v1");
+}
+
+function updateFilename() {
+  const name = currentPath ? currentPath.split("/").pop() : "";
+  filenameEl.textContent = `${name}${isDirty ? " *" : ""}`;
+  filenameEl.title = currentPath ? `${currentPath}${isDirty ? " (unsaved)" : ""}` : "";
+}
+
+function markDirty() {
+  if (isDirty) return;
+  isDirty = true;
+  updateFilename();
+}
+
+function markClean() {
+  if (!isDirty) {
+    updateFilename();
+    return;
+  }
+  isDirty = false;
+  updateFilename();
+}
+
+function confirmDiscardUnsaved() {
+  if (!isDirty) return true;
+  return window.confirm("Discard unsaved changes?");
 }
 
 // ---- document model --------------------------------------------------------
@@ -269,6 +295,7 @@ function setDocumentSource(source, options = {}) {
   docBlocks = parseSourceDocument(source);
   syncSourceFromBlocks();
   renderSourceEditor();
+  if (options.dirty === false) markClean();
   if (options.run !== false) scheduleLiveRun();
 }
 
@@ -566,6 +593,7 @@ function renderSourceBlock(block) {
   textarea.addEventListener("input", (e) => {
     if (block.kind === "tens" && splitTensBlockOnBlankGap(block, textarea)) return;
     block.text = textarea.value;
+    markDirty();
     if (
       block.kind === "markdown" &&
       e.inputType?.startsWith("delete") &&
@@ -686,6 +714,7 @@ function insertTensBlock() {
   const block = makeBlock("tens", "");
   docBlocks.splice(idx + 1, 0, block);
   activeBlockId = block.id;
+  markDirty();
   syncSourceFromBlocks();
   renderSourceEditor();
   const textarea = sourceEditor.querySelector(`[data-block-id="${block.id}"] textarea`);
@@ -711,6 +740,7 @@ function splitTensBlockOnBlankGap(block, textarea) {
 
   docBlocks.splice(idx, 1, ...replacement);
   activeBlockId = markdown.id;
+  markDirty();
   syncSourceFromBlocks();
   renderSourceEditor();
   sourceEditor.querySelector(`[data-block-id="${markdown.id}"] textarea`)?.focus();
@@ -731,6 +761,7 @@ function removeEmptyTensBlock(block, direction = -1) {
 
   const target = focusTarget && docBlocks.includes(focusTarget) ? focusTarget : docBlocks[Math.min(idx, docBlocks.length - 1)];
   activeBlockId = target.id;
+  markDirty();
   syncSourceFromBlocks();
   renderSourceEditor();
 
@@ -760,6 +791,7 @@ function collapseEmptyMarkdownBetweenTens(block) {
   docBlocks.splice(idx, 2);
   activeBlockId = prev.id;
 
+  markDirty();
   syncSourceFromBlocks();
   renderSourceEditor();
   const textarea = sourceEditor.querySelector(`[data-block-id="${prev.id}"] textarea`);
@@ -771,16 +803,23 @@ function collapseEmptyMarkdownBetweenTens(block) {
   return true;
 }
 
-function focusSourceLine(line) {
+function sourceLineLocation(line) {
   const block = blockForSourceLine(line);
   const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
   const textarea = section?.querySelector("textarea");
-  if (!textarea) return;
+  if (!section || !textarea) return null;
   const innerLine =
     block.kind === "tens"
       ? Math.max(1, line - block.sourceLine)
       : Math.max(1, line - block.sourceLine + 1);
   const offset = offsetForLine(textarea.value, innerLine);
+  return { block, section, textarea, innerLine, offset };
+}
+
+function focusSourceLine(line) {
+  const loc = sourceLineLocation(line);
+  if (!loc) return;
+  const { textarea, offset } = loc;
   textarea.focus();
   textarea.setSelectionRange(offset, offset);
 }
@@ -796,13 +835,64 @@ function offsetForLine(source, line) {
 }
 
 function scrollEditorToLine(line, options = {}) {
-  const block = blockForSourceLine(line);
-  const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
-  if (!section) return;
+  const loc = sourceLineLocation(line);
+  if (!loc) return;
+  const { section, textarea, offset } = loc;
   const align = options.align ?? 0.18;
   const behavior = options.behavior ?? "smooth";
-  const target = Math.max(0, section.offsetTop - sourceEditor.clientHeight * align);
+  const caretTop = measureTextareaOffsetTop(textarea, offset);
+  const target = Math.max(
+    0,
+    section.offsetTop + textarea.offsetTop + caretTop - sourceEditor.clientHeight * align,
+  );
   sourceEditor.scrollTo({ top: target, behavior });
+}
+
+function measureTextareaOffsetTop(textarea, offset) {
+  const style = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  const props = [
+    "boxSizing",
+    "width",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "lineHeight",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "whiteSpace",
+    "wordWrap",
+    "overflowWrap",
+    "tabSize",
+  ];
+  for (const prop of props) mirror.style[prop] = style[prop];
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.pointerEvents = "none";
+  mirror.style.left = "-10000px";
+  mirror.style.top = "0";
+  mirror.style.height = "auto";
+  mirror.style.minHeight = "0";
+  mirror.style.overflow = "hidden";
+  mirror.style.width = `${textarea.clientWidth}px`;
+
+  const before = textarea.value.slice(0, offset);
+  mirror.textContent = before || "";
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
 }
 
 function jumpToSourceLine(line, options = {}) {
@@ -814,14 +904,16 @@ function jumpToSourceLine(line, options = {}) {
 
 async function openFile() {
   if (!invoke) return;
+  if (!confirmDiscardUnsaved()) return;
   const opened = await invoke("open_tens").catch(showError);
   if (!opened) return;
   loadOpenedFile(opened);
 }
 
 function newFile() {
+  if (!confirmDiscardUnsaved()) return;
   setCurrentPath(null);
-  setDocumentSource("", { run: false });
+  setDocumentSource("", { run: false, dirty: false });
   lastRenderedOutputs = [];
   lastGoodShown = false;
   output.innerHTML = '<div class="placeholder">No output yet. Add display(...) or export(...).</div>';
@@ -835,7 +927,7 @@ function newFile() {
 
 function loadOpenedFile(opened) {
   setCurrentPath(opened.path);
-  setDocumentSource(opened.source);
+  setDocumentSource(opened.source, { dirty: false });
   renderFileRail(opened.folder, opened.files);
 }
 
@@ -872,10 +964,7 @@ async function restoreFileRail() {
 
 async function switchToFile(path) {
   if (!invoke || path === currentPath) return;
-  syncSourceFromBlocks();
-  if (currentPath) {
-    await invoke("save_tens", { source: editor.value, path: currentPath }).catch(showError);
-  }
+  if (!confirmDiscardUnsaved()) return;
   const opened = await invoke("read_tens", { path }).catch(showError);
   if (opened) loadOpenedFile(opened);
 }
@@ -889,6 +978,7 @@ async function saveFile() {
   }).catch(showError);
   if (path) {
     setCurrentPath(path);
+    markClean();
     await refreshFolderListing(path);
   }
 }
@@ -1622,6 +1712,7 @@ function insertTableIntoMarkdown() {
   const atLineStart = s === 0 || textarea.value[s - 1] === "\n";
   textarea.setRangeText(`${atLineStart ? "" : "\n"}${markdownTable(rows, cols, align)}\n`, s, e, "end");
   block.text = textarea.value;
+  markDirty();
   autoResize(textarea);
   syncSourceFromBlocks();
   closeTableMenu();
@@ -1638,6 +1729,7 @@ function handleMarkdownPaste(e, textarea, block) {
   reader.onload = () => {
     textarea.setRangeText(`![pasted image](${reader.result})`, textarea.selectionStart, textarea.selectionEnd, "end");
     block.text = textarea.value;
+    markDirty();
     autoResize(textarea);
     syncSourceFromBlocks();
     scheduleLiveRun();
@@ -1742,6 +1834,11 @@ sourceEditor.addEventListener("scroll", () => {
 });
 output.addEventListener("scroll", syncEditorToOutput);
 window.addEventListener("resize", resizeAllTextareas);
+window.addEventListener("beforeunload", (e) => {
+  if (!isDirty) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
 
 document.addEventListener("click", () => {
   closeExportMenu();
@@ -1788,7 +1885,7 @@ async function boot() {
   } else {
     if (storedPath) localStorage.removeItem("tensorforge.path.v1");
     setCurrentPath(null);
-    setDocumentSource(bundledDefault, { run: false });
+    setDocumentSource(bundledDefault, { run: false, dirty: false });
   }
   restoreFileRail();
   scheduleLiveRun();

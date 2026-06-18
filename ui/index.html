@@ -58,7 +58,11 @@
     background: var(--bg); color: var(--text);
     font: 14px/1.5 -apple-system, "Segoe UI", sans-serif;
   }
-  #app { display: flex; flex-direction: column; height: 100vh; }
+  #app {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
 
   /* ---- header ---- */
   header {
@@ -200,7 +204,11 @@
   }
 
   /* ---- main panes ---- */
-  main { display: flex; flex: 1; min-height: 0; }
+  main {
+    display: flex; flex: 1; min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
   #editor-wrap {
     position: relative; flex: 0 0 44%; min-width: 280px;
     background: var(--panel);
@@ -214,6 +222,7 @@
   #source-editor {
     flex: 1; overflow-y: auto; overflow-x: hidden;
     padding: 18px 20px 42px;
+    overscroll-behavior: contain;
   }
   #source-gutter {
     flex: 0 0 34px; overflow: hidden;
@@ -364,7 +373,10 @@
     color: var(--accent); margin-bottom: 3px;
   }
   .cm-hint-doc { color: var(--muted); line-height: 1.45; }
-  #output { flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg); }
+  #output {
+    flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg);
+    overscroll-behavior: contain;
+  }
   .block { margin-bottom: 18px; cursor: pointer; }
   .block .head {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
