@@ -234,6 +234,10 @@ function serializeDocument(blocks) {
   return blocks.map(serializeBlock).join("\n\n");
 }
 
+function executableSource() {
+  return docBlocks.some((block) => block.kind === "tens") ? editor.value : null;
+}
+
 function recomputeSourceLines() {
   let line = 1;
   for (const block of docBlocks) {
@@ -1376,7 +1380,13 @@ async function run() {
     renderOutputs([]);
     return;
   }
-  const result = await invoke("run_tens", { source: editor.value });
+  const source = executableSource();
+  if (!source) {
+    renderOutputs([]);
+    lastGoodShown = true;
+    return;
+  }
+  const result = await invoke("run_tens", { source });
   if (!result.ok) {
     showError(result.error);
     return;
@@ -1390,7 +1400,13 @@ async function liveRun() {
     renderOutputs([]);
     return;
   }
-  const result = await invoke("run_tens", { source: editor.value });
+  const source = executableSource();
+  if (!source) {
+    renderOutputs([]);
+    lastGoodShown = true;
+    return;
+  }
+  const result = await invoke("run_tens", { source });
   if (!result.ok) {
     if (!lastGoodShown) showError(result.error);
     else {
@@ -1419,8 +1435,13 @@ async function analyzeForCompletion(seq, uptoLine) {
     setCompletionSymbols([]);
     return;
   }
+  const source = executableSource();
+  if (!source) {
+    if (seq === analyzeSeq) setCompletionSymbols([]);
+    return;
+  }
   const result = await invoke("analyze_tens", {
-    source: editor.value,
+    source,
     uptoLine,
   }).catch(() => null);
   if (seq !== analyzeSeq || !result?.ok) return;
