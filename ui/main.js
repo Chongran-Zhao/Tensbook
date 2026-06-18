@@ -14,11 +14,6 @@ const NOTE_CLOSE = "<!-- /tensorforge:note -->";
 
 const DEFAULT_SOURCE_URL = "start.tens";
 const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writing.";
-const LEGACY_DEFAULT_MARKERS = [
-  "# Incompressible uniaxial tension",
-  "Mooney-Rivlin material. Ordinary text is Markdown by default",
-  "P11 = simplify(diff(W, lam))",
-];
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 
@@ -111,6 +106,8 @@ function setCurrentPath(path) {
   currentPath = path;
   filenameEl.textContent = path ? path.split("/").pop() : "";
   filenameEl.title = path ?? "";
+  if (path) localStorage.setItem("tensorforge.path.v1", path);
+  else localStorage.removeItem("tensorforge.path.v1");
 }
 
 // ---- document model --------------------------------------------------------
@@ -167,13 +164,27 @@ function isNoteClose(line) {
 }
 
 function looksLikeTensorForgeSource(source) {
-  return /^\s*(display|export|[A-Za-z_]\w*\s*=|[A-Za-z_]\w*\[[^\]]+\]\s*=)/m.test(source);
+  for (const line of source.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    if (t.startsWith("#")) continue;
+    return (
+      /^(display|export)\s*\(/.test(t) ||
+      /^[A-Za-z_]\w*(?:\[[^\]]+\])+\s*=/.test(t) ||
+      /^[A-Za-z_]\w*\s*=/.test(t)
+    );
+  }
+  return false;
+}
+
+function blockKindForFreeform(source) {
+  return looksLikeTensorForgeSource(source) ? "tens" : "markdown";
 }
 
 function makeFreeformBlock(text) {
   const cleaned = trimOuterBlankLines(text);
   if (!cleaned.trim()) return null;
-  return makeBlock(looksLikeTensorForgeSource(cleaned) ? "tens" : "markdown", cleaned);
+  return makeBlock(blockKindForFreeform(cleaned), cleaned);
 }
 
 function parseLegacyNoteDocument(source) {
@@ -212,7 +223,8 @@ function parseSourceDocument(source) {
     i++;
     const codeStart = i;
     while (i < lines.length && !isTensClose(lines[i])) i++;
-    blocks.push(makeBlock("tens", lines.slice(codeStart, i).join("\n")));
+    const body = lines.slice(codeStart, i).join("\n");
+    blocks.push(makeBlock(blockKindForFreeform(body), body));
     start = i + 1;
   }
 
@@ -222,7 +234,7 @@ function parseSourceDocument(source) {
     return blocks.length ? blocks : [makeBlock("markdown", "")];
   }
 
-  return [makeBlock(looksLikeTensorForgeSource(source) ? "tens" : "markdown", source)];
+  return [makeBlock(blockKindForFreeform(source), source)];
 }
 
 function serializeBlock(block) {
@@ -251,7 +263,6 @@ function recomputeSourceLines() {
 function syncSourceFromBlocks() {
   recomputeSourceLines();
   editor.value = serializeDocument(docBlocks);
-  localStorage.setItem("tensorforge.source.v3", editor.value);
 }
 
 function setDocumentSource(source, options = {}) {
@@ -1766,15 +1777,19 @@ async function loadBundledDefaultSource() {
   return FALLBACK_DEFAULT_SOURCE;
 }
 
-function isLegacyBundledDefault(source) {
-  return LEGACY_DEFAULT_MARKERS.every((marker) => source.includes(marker));
-}
-
 async function boot() {
+  localStorage.removeItem("tensorforge.source.v3");
   const bundledDefault = await loadBundledDefaultSource();
-  const stored = localStorage.getItem("tensorforge.source.v3");
-  const source = !stored || isLegacyBundledDefault(stored) ? bundledDefault : stored;
-  setDocumentSource(source, { run: false });
+  const storedPath = localStorage.getItem("tensorforge.path.v1");
+  const opened =
+    invoke && storedPath ? await invoke("read_tens", { path: storedPath }).catch(() => null) : null;
+  if (opened) {
+    loadOpenedFile(opened);
+  } else {
+    if (storedPath) localStorage.removeItem("tensorforge.path.v1");
+    setCurrentPath(null);
+    setDocumentSource(bundledDefault, { run: false });
+  }
   restoreFileRail();
   scheduleLiveRun();
 }
