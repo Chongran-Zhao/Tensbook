@@ -83,11 +83,13 @@ struct SerializableDisplayCapability {
 }
 
 /// Result of an open dialog: `None` if the user cancelled.
+/// `save_path` is `None` for imported Markdown so Save becomes Save As .tens.
 /// `files` lists the sibling `.tens` files of the opened file's folder so
 /// the frontend can show a file rail.
 #[derive(Serialize)]
 struct OpenedFile {
     path: String,
+    save_path: Option<String>,
     source: String,
     folder: Option<String>,
     files: Vec<FileEntry>,
@@ -124,11 +126,25 @@ fn list_tens_files(dir: &std::path::Path) -> Vec<FileEntry> {
     files
 }
 
+fn is_tens_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("tens"))
+}
+
+fn with_tens_extension(mut path: std::path::PathBuf) -> std::path::PathBuf {
+    if !is_tens_path(&path) {
+        path.set_extension("tens");
+    }
+    path
+}
+
 fn opened_file(path: std::path::PathBuf) -> Result<OpenedFile, String> {
     let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let folder = path.parent().map(|p| p.to_path_buf());
+    let save_path = is_tens_path(&path).then(|| path.display().to_string());
     Ok(OpenedFile {
         path: path.display().to_string(),
+        save_path,
         source,
         folder: folder.as_ref().map(|p| p.display().to_string()),
         files: folder.as_deref().map(list_tens_files).unwrap_or_default(),
@@ -222,7 +238,9 @@ async fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> 
     let Some(path) = app
         .dialog()
         .file()
+        .add_filter("TensorForge / Markdown", &["tens", "md", "markdown"])
         .add_filter("TensorForge", &["tens"])
+        .add_filter("Markdown", &["md", "markdown"])
         .blocking_pick_file()
     else {
         return Ok(None);
@@ -259,6 +277,7 @@ async fn save_tens(
     app: tauri::AppHandle,
     source: String,
     path: Option<String>,
+    default_filename: Option<String>,
 ) -> Result<Option<String>, String> {
     let target = match path {
         Some(p) => std::path::PathBuf::from(p),
@@ -267,7 +286,7 @@ async fn save_tens(
                 .dialog()
                 .file()
                 .add_filter("TensorForge", &["tens"])
-                .set_file_name("untitled.tens")
+                .set_file_name(default_filename.as_deref().unwrap_or("untitled.tens"))
                 .blocking_save_file()
             else {
                 return Ok(None);
@@ -275,6 +294,7 @@ async fn save_tens(
             picked.into_path().map_err(|e| e.to_string())?
         }
     };
+    let target = with_tens_extension(target);
     std::fs::write(&target, source).map_err(|e| e.to_string())?;
     Ok(Some(target.display().to_string()))
 }

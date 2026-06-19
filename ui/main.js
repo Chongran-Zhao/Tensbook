@@ -16,6 +16,7 @@ const DEFAULT_SOURCE_URL = "start.tens";
 const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writing.";
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
+const SCROLL_SYNC_ANCHOR = 0.22;
 
 const editor = document.getElementById("editor"); // hidden serialized source
 const sourceEditor = document.getElementById("source-editor");
@@ -44,6 +45,7 @@ const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
 
 let currentPath = null;
+let currentSavePath = null;
 let lastRenderedOutputs = [];
 let liveTimer = null;
 let lastGoodShown = false;
@@ -54,6 +56,7 @@ let activeTextarea = null;
 let isDirty = false;
 let scrollSyncSource = null;
 let scrollSyncFrame = null;
+let scrollSyncSuppressedUntil = 0;
 let analyzeTimer = null;
 let analyzeSeq = 0;
 
@@ -103,10 +106,12 @@ document.addEventListener("click", (e) => {
   else window.open(a.href, "_blank");
 });
 
-function setCurrentPath(path) {
+function setCurrentPath(path, options = {}) {
   currentPath = path;
+  const hasSavePath = Object.prototype.hasOwnProperty.call(options, "savePath");
+  currentSavePath = hasSavePath ? (options.savePath ?? null) : path;
   updateFilename();
-  if (path) localStorage.setItem("tensorforge.path.v1", path);
+  if (currentSavePath) localStorage.setItem("tensorforge.path.v1", currentSavePath);
   else localStorage.removeItem("tensorforge.path.v1");
 }
 
@@ -304,6 +309,10 @@ function blockForSourceLine(line) {
     docBlocks.find((b) => line >= b.sourceLine && line <= b.sourceEndLine) ??
     docBlocks[docBlocks.length - 1]
   );
+}
+
+function blockForId(id) {
+  return docBlocks.find((b) => String(b.id) === String(id));
 }
 
 // ---- source editor ---------------------------------------------------------
@@ -896,6 +905,7 @@ function measureTextareaOffsetTop(textarea, offset) {
 }
 
 function jumpToSourceLine(line, options = {}) {
+  if (options.sync === false) suppressScrollSync();
   scrollEditorToLine(line, { behavior: options.behavior ?? "smooth" });
   if (options.focus) focusSourceLine(line);
 }
@@ -926,7 +936,12 @@ function newFile() {
 }
 
 function loadOpenedFile(opened) {
-  setCurrentPath(opened.path);
+  const savePath = Object.prototype.hasOwnProperty.call(opened, "save_path")
+    ? opened.save_path
+    : Object.prototype.hasOwnProperty.call(opened, "savePath")
+      ? opened.savePath
+      : opened.path;
+  setCurrentPath(opened.path, { savePath });
   setDocumentSource(opened.source, { dirty: false });
   renderFileRail(opened.folder, opened.files);
 }
@@ -936,7 +951,7 @@ function renderFileRail(folder, files) {
     railFolder.textContent = "";
     const empty = document.createElement("div");
     empty.className = "rail-empty";
-    empty.textContent = "Open a .tens file to browse its folder here.";
+    empty.textContent = "Open a .tens or Markdown file to browse its folder here.";
     railFiles.replaceChildren(empty);
     return;
   }
@@ -974,10 +989,11 @@ async function saveFile() {
   syncSourceFromBlocks();
   const path = await invoke("save_tens", {
     source: editor.value,
-    path: currentPath,
+    path: currentSavePath,
+    defaultFilename: defaultSaveName(),
   }).catch(showError);
   if (path) {
-    setCurrentPath(path);
+    setCurrentPath(path, { savePath: path });
     markClean();
     await refreshFolderListing(path);
   }
@@ -1160,6 +1176,10 @@ function renderMarkdown(markdown, baseLine = null) {
       out.push(`<h${level}${sourceLineAttr(sourceLine)}>${inlineMarkdown(heading[2])}</h${level}>`);
       continue;
     }
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      out.push(`<hr${sourceLineAttr(sourceLine)}>`);
+      continue;
+    }
     if (/^\s*[-*]\s+/.test(line)) {
       const startLine = sourceLine;
       const items = [];
@@ -1306,6 +1326,8 @@ function copyButton(label, text) {
 function renderMarkdownBlock(block) {
   const el = document.createElement("div");
   el.className = "block markdown-doc";
+  el.dataset.sourceBlockId = String(block.id);
+  el.dataset.sourceLine = String(block.sourceLine);
   el.innerHTML = renderMarkdown(block.text, block.sourceLine);
   makeBlockJump(el, block.sourceLine);
   return el;
@@ -1315,6 +1337,9 @@ function renderOutputBlock(item) {
   const { header, latex, line, error } = item;
   const block = document.createElement("div");
   block.className = "block";
+  const sourceBlock = Number.isFinite(line) ? blockForSourceLine(line) : null;
+  if (sourceBlock) block.dataset.sourceBlockId = String(sourceBlock.id);
+  if (Number.isFinite(line)) block.dataset.sourceLine = String(line);
   makeBlockJump(block, line);
   const head = document.createElement("div");
   head.className = "head";
@@ -1356,6 +1381,10 @@ function renderOutputBlock(item) {
 function renderOutputRowBlock(items) {
   const row = document.createElement("div");
   row.className = "output-row";
+  const firstLine = items.find((item) => Number.isFinite(item.line))?.line;
+  const sourceBlock = Number.isFinite(firstLine) ? blockForSourceLine(firstLine) : null;
+  if (sourceBlock) row.dataset.sourceBlockId = String(sourceBlock.id);
+  if (Number.isFinite(firstLine)) row.dataset.sourceLine = String(firstLine);
   for (const item of items) row.appendChild(renderOutputBlock(item));
   return row;
 }
@@ -1644,6 +1673,11 @@ function defaultExportName(ext) {
   return `${base}.${ext}`;
 }
 
+function defaultSaveName() {
+  const base = currentPath ? currentPath.split("/").pop().replace(/\.[^.]+$/, "") : "untitled";
+  return `${base || "untitled"}.tens`;
+}
+
 function downloadText(text, filename, type) {
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
@@ -1747,20 +1781,102 @@ function withScrollSyncSource(source, fn) {
   });
 }
 
-function scrollRatio(el) {
-  const max = el.scrollHeight - el.clientHeight;
-  return max <= 0 ? 0 : el.scrollTop / max;
+function suppressScrollSync(ms = 350) {
+  scrollSyncSuppressedUntil = Math.max(scrollSyncSuppressedUntil, performance.now() + ms);
+  cancelAnimationFrame(scrollSyncFrame);
+}
+
+function isScrollSyncSuppressed() {
+  return performance.now() < scrollSyncSuppressedUntil;
+}
+
+function clampScrollTop(el, top) {
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  return Math.max(0, Math.min(max, top));
+}
+
+function clampUnit(x) {
+  return Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0));
+}
+
+function anchorY(el) {
+  return el.scrollTop + el.clientHeight * SCROLL_SYNC_ANCHOR;
+}
+
+function sourceAnchor() {
+  const sections = [...sourceEditor.querySelectorAll(".source-block")];
+  if (sections.length === 0) return null;
+  const y = anchorY(sourceEditor);
+  let section = sections.find((el) => el.offsetTop + el.offsetHeight >= y);
+  section ??= sections[sections.length - 1];
+  const height = Math.max(1, section.offsetHeight);
+  return {
+    blockId: section.dataset.blockId,
+    progress: clampUnit((y - section.offsetTop) / height),
+  };
+}
+
+function previewChildren() {
+  return [...output.children].filter((el) => el.dataset?.sourceBlockId);
+}
+
+function previewGroupForBlock(blockId) {
+  const children = previewChildren().filter((el) => el.dataset.sourceBlockId === String(blockId));
+  if (children.length === 0) return null;
+  const top = Math.min(...children.map((el) => el.offsetTop));
+  const bottom = Math.max(...children.map((el) => el.offsetTop + el.offsetHeight));
+  return { blockId: String(blockId), top, bottom, height: Math.max(1, bottom - top) };
+}
+
+function nearestPreviewGroup(blockId) {
+  const block = blockForId(blockId);
+  if (!block) return null;
+  const groups = new Map();
+  for (const child of previewChildren()) {
+    const id = child.dataset.sourceBlockId;
+    if (!groups.has(id)) groups.set(id, previewGroupForBlock(id));
+  }
+  let best = null;
+  let bestDistance = Infinity;
+  for (const group of groups.values()) {
+    const candidate = blockForId(group.blockId);
+    if (!candidate) continue;
+    const distance = Math.abs(candidate.sourceLine - block.sourceLine);
+    if (distance < bestDistance) {
+      best = group;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function previewAnchor() {
+  const children = previewChildren();
+  if (children.length === 0) return null;
+  const y = anchorY(output);
+  let child = children.find((el) => el.offsetTop + el.offsetHeight >= y);
+  child ??= children[children.length - 1];
+  const group = previewGroupForBlock(child.dataset.sourceBlockId);
+  if (!group) return null;
+  return {
+    blockId: group.blockId,
+    progress: clampUnit((y - group.top) / group.height),
+  };
 }
 
 function syncOutputToEditor() {
+  if (isScrollSyncSuppressed()) return;
   if (scrollSyncSource === "output") return;
   cancelAnimationFrame(scrollSyncFrame);
   scrollSyncFrame = requestAnimationFrame(() => {
-    const targetMax = output.scrollHeight - output.clientHeight;
-    if (targetMax <= 0) return;
+    const anchor = sourceAnchor();
+    if (!anchor) return;
+    const group = previewGroupForBlock(anchor.blockId) ?? nearestPreviewGroup(anchor.blockId);
+    if (!group) return;
+    const target = group.top + anchor.progress * group.height - output.clientHeight * SCROLL_SYNC_ANCHOR;
     withScrollSyncSource("editor", () => {
       output.scrollTo({
-        top: Math.max(0, Math.min(targetMax, scrollRatio(sourceEditor) * targetMax)),
+        top: clampScrollTop(output, target),
         behavior: "auto",
       });
     });
@@ -1768,14 +1884,18 @@ function syncOutputToEditor() {
 }
 
 function syncEditorToOutput() {
+  if (isScrollSyncSuppressed()) return;
   if (scrollSyncSource === "editor") return;
   cancelAnimationFrame(scrollSyncFrame);
   scrollSyncFrame = requestAnimationFrame(() => {
-    const targetMax = sourceEditor.scrollHeight - sourceEditor.clientHeight;
-    if (targetMax <= 0) return;
+    const anchor = previewAnchor();
+    if (!anchor) return;
+    const section = sourceEditor.querySelector(`[data-block-id="${anchor.blockId}"]`);
+    if (!section) return;
+    const target = section.offsetTop + anchor.progress * section.offsetHeight - sourceEditor.clientHeight * SCROLL_SYNC_ANCHOR;
     withScrollSyncSource("output", () => {
       sourceEditor.scrollTo({
-        top: Math.max(0, Math.min(targetMax, scrollRatio(output) * targetMax)),
+        top: clampScrollTop(sourceEditor, target),
         behavior: "auto",
       });
     });
@@ -1788,7 +1908,7 @@ function makeBlockJump(el, line) {
   el.addEventListener("click", (e) => {
     if (e.target.closest("button")) return;
     const targetLine = Number(e.target.closest("[data-source-line]")?.dataset.sourceLine ?? line);
-    jumpToSourceLine(targetLine, { focus: true, behavior: "auto" });
+    jumpToSourceLine(targetLine, { focus: true, behavior: "auto", sync: false });
   });
 }
 
