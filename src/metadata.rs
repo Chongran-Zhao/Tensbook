@@ -15,6 +15,10 @@ pub enum ValueKind {
     Tensor { order: usize, dim: usize },
     ScalarSet { dim: usize },
     VectorSet { dim: usize },
+    Equation,
+    InitialCondition,
+    OdeClassification,
+    OdeSolution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +96,10 @@ pub fn value_kind(value: &Value, function_like: bool) -> ValueKind {
             order: t.order(),
             dim: t.dim(),
         },
+        Value::Equation(_) => ValueKind::Equation,
+        Value::InitialCondition(_) => ValueKind::InitialCondition,
+        Value::OdeClassification(_) => ValueKind::OdeClassification,
+        Value::OdeSolution(_) => ValueKind::OdeSolution,
     }
 }
 
@@ -126,7 +134,13 @@ pub fn display_capability_for_kind(kind: &ValueKind, mode: &str) -> DisplayCapab
     match (kind, mode) {
         (ValueKind::Scalar | ValueKind::ScalarFunctionLike, "symbol")
         | (ValueKind::ScalarSet { .. } | ValueKind::VectorSet { .. }, "symbol")
-        | (ValueKind::Tensor { .. }, "symbol") => DisplayCapability::available(mode),
+        | (ValueKind::Tensor { .. }, "symbol")
+        | (ValueKind::Equation, "symbol")
+        | (ValueKind::InitialCondition, "symbol")
+        | (ValueKind::OdeClassification, "symbol" | "details")
+        | (ValueKind::OdeSolution, "symbol" | "solution" | "steps") => {
+            DisplayCapability::available(mode)
+        }
         (ValueKind::Tensor { order: 1 | 2, .. }, "components" | "matrix") => {
             DisplayCapability::available(mode)
         }
@@ -154,6 +168,13 @@ pub fn display_capability_for_kind(kind: &ValueKind, mode: &str) -> DisplayCapab
         (ValueKind::ScalarSet { .. } | ValueKind::VectorSet { .. }, other) => {
             DisplayCapability::invalid(other, "set display only supports mode=symbol")
         }
+        (
+            ValueKind::Equation
+            | ValueKind::InitialCondition
+            | ValueKind::OdeClassification
+            | ValueKind::OdeSolution,
+            other,
+        ) => DisplayCapability::invalid(other, format!("mode={other} is not available")),
         (_, other) => DisplayCapability::invalid(other, format!("unknown display mode `{other}`")),
     }
 }
@@ -205,6 +226,13 @@ fn contains_diff_scalar(s: &crate::symbolic::ScalarExpr) -> bool {
         | crate::symbolic::ScalarExpr::Log(a)
         | crate::symbolic::ScalarExpr::Func { arg: a, .. }
         | crate::symbolic::ScalarExpr::SpecSum { body: a, .. } => contains_diff_scalar(a),
+        crate::symbolic::ScalarExpr::UnknownFunc { args, .. } => {
+            args.iter().any(|arg| contains_diff_scalar(arg))
+        }
+        crate::symbolic::ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => contains_diff_scalar(integrand) || contains_diff_scalar(variable),
         crate::symbolic::ScalarExpr::Sym { .. }
         | crate::symbolic::ScalarExpr::Num(_)
         | crate::symbolic::ScalarExpr::SetElem { .. } => false,
@@ -247,6 +275,13 @@ fn contains_set_elem_scalar(s: &crate::symbolic::ScalarExpr) -> bool {
         | crate::symbolic::ScalarExpr::Log(a)
         | crate::symbolic::ScalarExpr::Func { arg: a, .. }
         | crate::symbolic::ScalarExpr::SpecSum { body: a, .. } => contains_set_elem_scalar(a),
+        crate::symbolic::ScalarExpr::UnknownFunc { args, .. } => {
+            args.iter().any(|arg| contains_set_elem_scalar(arg))
+        }
+        crate::symbolic::ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => contains_set_elem_scalar(integrand) || contains_set_elem_scalar(variable),
         crate::symbolic::ScalarExpr::Det(t) | crate::symbolic::ScalarExpr::Tr(t) => {
             contains_set_elem(t)
         }

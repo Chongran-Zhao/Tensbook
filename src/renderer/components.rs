@@ -158,7 +158,7 @@ fn expandable(expr: &TensorExpr) -> Result<(), Error> {
              use mode=symbol",
         )),
         TensorExpr::Diff { .. } => Err(Error::msg(
-            "use display(diff(...), mode=components) on a derivative variable; \
+            "use dCdF.show(components) on a derivative variable; \
              nested derivative nodes inside expressions cannot be expanded",
         )),
         TensorExpr::Identity4 { .. } => Err(Error::msg(

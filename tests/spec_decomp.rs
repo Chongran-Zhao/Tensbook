@@ -19,7 +19,7 @@ N = VectorSet("\bm N", dim=3)
 #[test]
 fn filled_tensor_matrix_display() {
     let src = "lam = Var(\"\\lambda\")\nF = Tensor(\"\\bm F\", order=2, dim=3)\n\
-               F[1][1] = lam\nF[2][2] = 1\ndisplay(F, mode=matrix)";
+               F[1][1] = lam\nF[2][2] = 1\nF.show(matrix)";
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
     assert!(latex.contains("\\lambda & 0 & 0"), "got: {latex}");
@@ -32,7 +32,7 @@ fn filled_tensor_matrix_display() {
 
 #[test]
 fn derived_product_entries_simplify() {
-    let src = format!("{PRELUDE}\ndisplay(C, mode=matrix)");
+    let src = format!("{PRELUDE}\nC.show(matrix)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(latex.contains("{\\lambda}^{2} & 0 & 0"), "got: {latex}");
@@ -41,10 +41,10 @@ fn derived_product_entries_simplify() {
 
 #[test]
 fn spec_decomp_fills_eigenvalues_and_basis() {
-    let src = format!("{PRELUDE}\nx = c[1]\nexport(x, format=latex)\nv = N[2]\ndisplay(v)");
+    let src = format!("{PRELUDE}\nx = c[1]\nx.show()\nv = N[2]\nv.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
-        outputs[0].latex, "{\\lambda}^{2}",
+        outputs[0].latex, "x = {\\lambda}^{2}",
         "got: {}",
         outputs[0].latex
     );
@@ -59,7 +59,7 @@ fn spec_decomp_fills_eigenvalues_and_basis() {
 fn spectral_sum_expands_to_explicit_matrix() {
     // Hencky strain of uniaxial incompressible stretch:
     // E = Σ log(c_a) N_a ⊗ N_a → diag(2 ln λ, −ln λ, −ln λ) with c_a = λ_a².
-    let src = format!("{PRELUDE}\nEh = sum(log(c[a]) * N[a] & N[a], a)\ndisplay(Eh, mode=matrix)");
+    let src = format!("{PRELUDE}\nEh = Sum(log(c[a]) * N[a] & N[a], a)\nEh.show(matrix)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -97,7 +97,7 @@ fn spec_decomp_requires_declared_sets() {
 
 #[test]
 fn component_assignment_rejects_derived_targets() {
-    let src = format!("{PRELUDE}\nC[1][1] = lam\ndisplay(C)");
+    let src = format!("{PRELUDE}\nC[1][1] = lam\nC.show()");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message.contains("derived expression"),
@@ -120,20 +120,21 @@ fn bare_flag_error_suggests_keyword_form() {
 #[test]
 fn tensor_component_read() {
     // C = diag(λ², λ⁻¹, λ⁻¹); read individual components as scalars.
-    let src = format!("{PRELUDE}\nx = C[1][1]\nexport(x, format=latex)\ny = C[2][2]\nexport(y, format=latex)\nz = C[1][2]\nexport(z, format=latex)");
+    let src =
+        format!("{PRELUDE}\nx = C[1][1]\nx.show()\ny = C[2][2]\ny.show()\nz = C[1][2]\nz.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
-        outputs[0].latex, "{\\lambda}^{2}",
+        outputs[0].latex, "x = {\\lambda}^{2}",
         "got: {}",
         outputs[0].latex
     );
     assert_eq!(
-        outputs[1].latex, "{\\lambda}^{-1}",
+        outputs[1].latex, "y = {\\lambda}^{-1}",
         "got: {}",
         outputs[1].latex
     );
     assert_eq!(
-        outputs[2].latex, "0",
+        outputs[2].latex, "z = 0",
         "off-diagonal is zero: {}",
         outputs[2].latex
     );
@@ -145,16 +146,16 @@ fn display_component_read_uses_component_lhs() {
 lam = Var("\lambda")
 P = Tensor("\bm P", order=2, dim=3)
 P[1][1] = lam
-display(P[1][1])
+P[1][1].show()
 "#;
     let outputs = run_source(src).unwrap();
-    assert_eq!(outputs[0].header, "display P[1][1], mode=symbol");
+    assert_eq!(outputs[0].header, "P[1][1].show()");
     assert_eq!(outputs[0].latex, "{\\bm P}_{11} = \\lambda");
 }
 
 #[test]
 fn component_index_out_of_range_errors() {
-    let src = format!("{PRELUDE}\nx = C[4][1]\ndisplay(x)");
+    let src = format!("{PRELUDE}\nx = C[4][1]\nx.show()");
     let err = run_source(&src).unwrap_err();
     assert!(err.message.contains("out of range"), "got: {}", err.message);
 }

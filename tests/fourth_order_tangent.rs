@@ -12,10 +12,10 @@ C = F.T * F
 #[test]
 fn d_inverse_by_compound_symmetric_tensor() {
     // ∂(C⁻¹)/∂C = −C⁻¹ ⊠ C⁻¹ for symmetric C.
-    let src = format!("{PRELUDE}\nA = diff(inv(C), C)\nexport(A, format=latex)");
+    let src = format!("{PRELUDE}\nA = Diff(Inv(C), C)\nA.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
-        outputs[0].latex, "-\\bm C^{-1} \\boxtimes \\bm C^{-1}",
+        outputs[0].latex, "\\mathbb A = -\\bm C^{-1} \\boxtimes \\bm C^{-1}",
         "got: {}",
         outputs[0].latex
     );
@@ -25,19 +25,26 @@ fn d_inverse_by_compound_symmetric_tensor() {
 fn d_inverse_transpose_matches_inverse_for_symmetric() {
     // C^{-T} = C⁻¹ for symmetric C, so the derivatives agree.
     let src = format!(
-        "{PRELUDE}\nA = diff(inv(C), C)\nB = diff(inv(C).T, C)\n\
-         export(A, format=latex)\nexport(B, format=latex)"
+        "{PRELUDE}\nA = Diff(Inv(C), C)\nB = Diff(Inv(C).T, C)\n\
+         A.show()\nB.show()"
     );
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, outputs[1].latex);
+    assert_eq!(
+        outputs[0].latex,
+        "\\mathbb A = -\\bm C^{-1} \\boxtimes \\bm C^{-1}"
+    );
+    assert_eq!(
+        outputs[1].latex,
+        "\\mathbb B = -\\bm C^{-1} \\boxtimes \\bm C^{-1}"
+    );
 }
 
 #[test]
 fn product_rule_keeps_scalar_factors() {
-    // ∂(tr(C) C⁻¹)/∂C = −(tr C) C⁻¹ ⊠ C⁻¹ + C⁻¹ ⊗ I.
+    // ∂(Tr(C) C⁻¹)/∂C = −(tr C) C⁻¹ ⊠ C⁻¹ + C⁻¹ ⊗ I.
     // Regression: the simplifier used to drop the (tr C) factor when
     // factoring terms with equal numeric coefficients.
-    let src = format!("{PRELUDE}\nB = diff(tr(C) * inv(C), C)\nexport(B, format=latex)");
+    let src = format!("{PRELUDE}\nB = Diff(Tr(C) * Inv(C), C)\nB.show()");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -51,9 +58,9 @@ fn product_rule_keeps_scalar_factors() {
 fn isochoric_neo_hookean_material_tangent() {
     // The screenshot pipeline: S = 2 ∂Ψ/∂C, then ℂ = 2 ∂S/∂C.
     let src = format!(
-        "{PRELUDE}\nJ = det(F)\nC_bar = J^(-2/3) * C\nI_1_bar = tr(C_bar)\n\
-         Psi = 1/2 * mu * I_1_bar\nS = 2 * diff(Psi, C)\nCC = 2 * diff(S, C)\n\
-         display(CC, mode=symbol)"
+        "{PRELUDE}\nJ = Det(F)\nC_bar = J^(-2/3) * C\nI_1_bar = Tr(C_bar)\n\
+         Psi = 1/2 * mu * I_1_bar\nS = 2 * Diff(Psi, C)\nCC = 2 * Diff(S, C)\n\
+         CC.show(symbol)"
     );
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
@@ -81,10 +88,10 @@ fn isochoric_neo_hookean_material_tangent() {
 fn boxtimes_contracts_with_second_order_tensor() {
     // T : (A ⊠ B) = Aᵀ T B; with A = B = C⁻¹ and T = C this collapses to
     // C⁻¹ C C⁻¹ = C⁻¹ under the tensor cancellation rules.
-    let src = format!("{PRELUDE}\nA = diff(inv(C), C)\nT = C : A\nexport(T, format=latex)");
+    let src = format!("{PRELUDE}\nA = Diff(Inv(C), C)\nT = C : A\nT.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
-        outputs[0].latex, "-\\bm C^{-1}",
+        outputs[0].latex, "\\bm T = -\\bm C^{-1}",
         "C : (-C^-1 boxtimes C^-1) must collapse to -C^-1, got: {}",
         outputs[0].latex
     );

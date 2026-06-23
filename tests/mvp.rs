@@ -1,7 +1,7 @@
 //! MVP integration tests, covering the acceptance checklist:
 //! 1. Scalar parses; 2. Tensor parses; 3. `C = F.T * F` parses;
-//! 4. C is inferred symmetric; 5. display(C, mode=symbol);
-//! 6. display(C, mode=components) is a 3x3 matrix; 7. export(C, format=latex);
+//! 4. C is inferred symmetric; 5. C.show(symbol);
+//! 6. C.show(components) is a 3x3 matrix; 7. C.show();
 //! 8. the shipped start.tens feature tour runs end to end.
 
 use tensorforge::interpreter::Value;
@@ -39,7 +39,7 @@ $$
 ```
 
 mu = Scalar("\mu")
-display(mu, mode=symbol)
+mu.show(symbol)
 ```notes
 ## More notes
 
@@ -74,7 +74,7 @@ let x = 1;
 more prose after the inner fence
 <!-- /tensorforge:note -->
 mu = Scalar("\mu")
-display(mu, mode=symbol)
+mu.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -94,7 +94,7 @@ This prose is not TensorForge DSL.
 
 <!-- tensorforge:tens -->
 mu = Scalar("\mu")
-display(mu, mode=symbol)
+mu.show(symbol)
 <!-- /tensorforge:tens -->
 
 More Markdown with $W = \mu I_1$.
@@ -114,21 +114,21 @@ fn display_does_not_substitute_aliases_from_the_same_tens_block() {
 <!-- tensorforge:tens -->
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-display(C)
+C.show()
 <!-- /tensorforge:tens -->
 
 <!-- tensorforge:tens -->
 I1 = Scalar("I_1")
 I2 = Scalar("I_2")
-I1 = tr(C)
-I2 = 0.5 * ((tr(C))^2 - tr(C*C))
-display(I2)
+I1 = Tr(C)
+I2 = 0.5 * ((Tr(C))^2 - Tr(C*C))
+I2.show()
 <!-- /tensorforge:tens -->
 
 <!-- tensorforge:tens -->
 Psi = Scalar("\Psi")
 Psi = I1 + I2
-display(Psi)
+Psi.show()
 <!-- /tensorforge:tens -->
 "#;
     let outputs = run_source(src).unwrap();
@@ -157,8 +157,8 @@ I1 = Scalar("I_1")
 I2 = Scalar("I_2")
 I1 = 1
 I2 = 2
-[display(I1) display(I2)]
-display(I1)
+[I1.show() I2.show()]
+I1.show()
 "#;
     let outputs = run_source(src).unwrap();
     assert_eq!(outputs.len(), 3);
@@ -193,7 +193,7 @@ let x = 1;
 ```
 ```
 mu = Scalar("\mu")
-display(mu, mode=symbol)
+mu.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert_eq!(outputs.len(), 1);
@@ -286,10 +286,10 @@ P = F * G
 
 #[test]
 fn display_symbol_mode() {
-    let src = format!("{PRELUDE}\ndisplay(C, mode=symbol)");
+    let src = format!("{PRELUDE}\nC.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].header, "display C, mode=symbol");
+    assert_eq!(outputs[0].header, "C.show(symbol)");
     // Displayed as `\bm C = \bm F^{\mathsf{T}} \bm F`
     assert!(
         outputs[0].latex.contains("\\bm C ="),
@@ -307,7 +307,7 @@ fn display_symbol_mode() {
 fn scalar_display_rejects_tensor_modes_with_type_specific_message() {
     let src = r#"
 mu = Scalar("\mu")
-display(mu, mode=matrix)
+mu.show(matrix)
 "#;
     let err = run_source(src).unwrap_err();
     assert!(
@@ -326,7 +326,7 @@ F[1][1] = lam
 F[2][2] = lam^(-1/2)
 F[3][3] = lam^(-1/2)
 C = F.T * F
-display(C, mode=symbol)
+C.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
@@ -342,10 +342,10 @@ fn display_uses_named_definitions() {
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
 I1 = Scalar("I_1")
-I1 = tr(C)
+I1 = Tr(C)
 W = I1 - 3
-display(W, mode=symbol)
-export(W, format=latex)
+W.show(symbol)
+W.show()
 "#;
     let outputs = run_source(src).unwrap();
     for output in &outputs {
@@ -365,11 +365,11 @@ mu = Scalar("\mu")
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
 I1 = Scalar("I_1")
-I1 = tr(C)
+I1 = Tr(C)
 Psi = mu/2 * (I1 - 3)
-S = 2 * diff(Psi, C)
+S = 2 * Diff(Psi, C)
 P = F * S
-display(P, mode=symbol)
+P.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -387,7 +387,7 @@ C = Tensor("\bm C", order=2, dim=3, symmetric=true)
 I = Tensor("\bm I", order=2, dim=3, identity=true)
 S = 2 * (C1 * I + C2 * C)
 P = F * S
-display(P, mode=symbol)
+P.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -411,7 +411,7 @@ F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
 I = Tensor("\bm I", order=2, dim=3, identity=true)
 S = 2 * (C1 * I + C2/2 * (2 * I1 * I - (C.T + C.T)))
-display(S, mode=symbol)
+S.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -425,7 +425,7 @@ display(S, mode=symbol)
 
 #[test]
 fn display_components_mode_is_3x3() {
-    let src = format!("{PRELUDE}\ndisplay(C, mode=components)");
+    let src = format!("{PRELUDE}\nC.show(components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(latex.contains("\\begin{bmatrix}"), "got: {latex}");
@@ -446,11 +446,11 @@ fn display_components_mode_is_3x3() {
 }
 
 #[test]
-fn export_latex() {
-    let src = format!("{PRELUDE}\nexport(C, format=latex)");
+fn show_default_symbol_mode() {
+    let src = format!("{PRELUDE}\nC.show()");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].header, "export C, format=latex");
-    assert_eq!(outputs[0].latex, "\\bm F^{\\mathsf{T}} \\, \\bm F");
+    assert_eq!(outputs[0].header, "C.show()");
+    assert_eq!(outputs[0].latex, "\\bm C = \\bm F^{\\mathsf{T}} \\, \\bm F");
 }
 
 #[test]
@@ -458,10 +458,10 @@ fn scalar_invariants_render() {
     let src = r#"
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-J = det(F)
-I1 = tr(C)
-display(J, mode=symbol)
-display(I1, mode=symbol)
+J = Det(F)
+I1 = Tr(C)
+J.show(symbol)
+I1.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
@@ -487,8 +487,8 @@ fn start_example_runs_end_to_end() {
     // The tour demonstrates side-by-side rows, component reads, and
     // spectral sets.
     assert!(outputs.iter().any(|o| o.row.is_some()));
-    assert!(outputs.iter().any(|o| o.header.starts_with("display D13")));
-    assert!(outputs.iter().any(|o| o.header.starts_with("display ev")));
+    assert!(outputs.iter().any(|o| o.header.starts_with("D13.show")));
+    assert!(outputs.iter().any(|o| o.header.starts_with("ev.show")));
 
     // Psi is a scalar energy and S is its derived stress tensor.
     match interp.get("Psi") {
@@ -500,7 +500,7 @@ fn start_example_runs_end_to_end() {
 
     let s_out = outputs
         .iter()
-        .find(|o| o.header.starts_with("display S"))
+        .find(|o| o.header.starts_with("S.show"))
         .unwrap();
     assert!(
         !s_out.latex.contains("\\partial"),
@@ -519,13 +519,13 @@ fn start_example_runs_end_to_end() {
 #[test]
 fn declared_label_survives_reassignment() {
     // I1 = Scalar("I_1") declares the display label; the later
-    // I1 = tr(C) reassignment keeps using it on the display LHS.
+    // I1 = Tr(C) reassignment keeps using it on the display LHS.
     let src = r#"
 I1 = Scalar("I_1")
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-I1 = tr(C)
-display(I1, mode=symbol)
+I1 = Tr(C)
+I1.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
@@ -541,7 +541,7 @@ fn underived_single_char_tensor_gets_bold_lhs() {
     let src = r#"
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-display(C, mode=symbol)
+C.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
@@ -567,7 +567,7 @@ x = mu.T
     assert!(run_source(
         r#"
 mu = Scalar("\mu")
-x = det(mu)
+x = Det(mu)
 "#
     )
     .is_err());

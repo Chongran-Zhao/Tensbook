@@ -1,7 +1,7 @@
 //! Phase-2 tests: symbolic differentiation.
 //!
 //! Covers: dJ/dF = J F^{-T}; P = ∂W/∂F for neo-Hookean W;
-//! ∂C_ij/∂F_mn component formula with Kronecker deltas; ∂tr(C)/∂F = 2F;
+//! ∂C_ij/∂F_mn component formula with Kronecker deltas; ∂Tr(C)/∂F = 2F;
 //! order/shape bookkeeping of Diff nodes; unsupported-form errors.
 
 use tensorforge::interpreter::Value;
@@ -13,13 +13,13 @@ mu = Scalar("\mu")
 lambda = Scalar("\lambda")
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-J = det(F)
-I1 = tr(C)
+J = Det(F)
+I1 = Tr(C)
 "#;
 
 #[test]
 fn djdf_is_j_f_inverse_transpose() {
-    let src = format!("{PRELUDE}\ndJdF = diff(J, F)\ndisplay(dJdF, mode=symbol)");
+    let src = format!("{PRELUDE}\ndJdF = Diff(J, F)\ndJdF.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0].latex.contains("J \\, \\bm F^{-\\mathsf{T}}"),
@@ -30,7 +30,7 @@ fn djdf_is_j_f_inverse_transpose() {
 
 #[test]
 fn d_trace_c_by_f_is_2f() {
-    let src = format!("{PRELUDE}\ndI1dF = diff(I1, F)\ndisplay(dI1dF, mode=symbol)");
+    let src = format!("{PRELUDE}\ndI1dF = Diff(I1, F)\ndI1dF.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0].latex.contains("2 \\, \\bm F"),
@@ -40,11 +40,28 @@ fn d_trace_c_by_f_is_2f() {
 }
 
 #[test]
+fn diff_order_keyword_builds_material_tangent_when_supported() {
+    let src = format!("{PRELUDE}\nA = Diff(I1, F, order=2)\nA.show(symbol)");
+    let (outputs, interp) = run_source_with_env(&src).unwrap();
+    assert!(
+        outputs[0]
+            .latex
+            .contains("\\frac{\\partial \\left( 2 \\, \\bm F \\right)}{\\partial \\bm F}"),
+        "got: {}",
+        outputs[0].latex
+    );
+    match interp.get("A") {
+        Some(Value::Tensor(t)) => assert_eq!(t.order(), 4),
+        other => panic!("expected fourth-order Tensor, got {other:?}"),
+    }
+}
+
+#[test]
 fn first_piola_stress_neo_hookean() {
     // P = ∂W/∂F = mu F − mu F^{-T} + lambda log(J) F^{-T}
     let src = format!(
         "{PRELUDE}\nW = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2\n\
-         P = diff(W, F)\nexport(P, format=latex)"
+         P = Diff(W, F)\nP.show()"
     );
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
@@ -61,7 +78,7 @@ fn first_piola_stress_neo_hookean() {
 #[test]
 fn p_is_a_second_order_tensor() {
     let src = format!(
-        "{PRELUDE}\nW = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2\nP = diff(W, F)"
+        "{PRELUDE}\nW = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2\nP = Diff(W, F)"
     );
     let (_, interp) = run_source_with_env(&src).unwrap();
     match interp.get("P") {
@@ -75,7 +92,7 @@ fn p_is_a_second_order_tensor() {
 
 #[test]
 fn dcdf_is_order_4() {
-    let src = format!("{PRELUDE}\ndCdF = diff(C, F)");
+    let src = format!("{PRELUDE}\ndCdF = Diff(C, F)");
     let (_, interp) = run_source_with_env(&src).unwrap();
     match interp.get("dCdF") {
         Some(Value::Tensor(t)) => {
@@ -89,7 +106,7 @@ fn dcdf_is_order_4() {
 
 #[test]
 fn dcdf_component_formula_has_deltas() {
-    let src = format!("{PRELUDE}\ndCdF = diff(C, F)\ndisplay(dCdF, mode=components)");
+    let src = format!("{PRELUDE}\ndCdF = Diff(C, F)\ndCdF.show(components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -106,7 +123,7 @@ fn dcdf_component_formula_has_deltas() {
 
 #[test]
 fn dcdf_symbol_mode_renders_partial_fraction() {
-    let src = format!("{PRELUDE}\ndCdF = diff(C, F)\ndisplay(dCdF, mode=symbol)");
+    let src = format!("{PRELUDE}\ndCdF = Diff(C, F)\ndCdF.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0]
@@ -119,7 +136,7 @@ fn dcdf_symbol_mode_renders_partial_fraction() {
 
 #[test]
 fn diff_of_independent_scalar_is_zero() {
-    let src = format!("{PRELUDE}\nZ = diff(mu, F)\ndisplay(Z, mode=symbol)");
+    let src = format!("{PRELUDE}\nZ = Diff(mu, F)\nZ.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(outputs[0].latex.contains('0'), "got: {}", outputs[0].latex);
 }
@@ -127,8 +144,8 @@ fn diff_of_independent_scalar_is_zero() {
 #[test]
 fn diff_errors_are_reported() {
     // det F is rewritable through C2 = FᵀF (det C = (det F)²), so
-    // diff(J, C2) is now legal: ∂(det C)^{1/2}/∂C = J/2 C^{-T}.
-    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = diff(J, C2)\nexport(X, format=latex)");
+    // Diff(J, C2) is now legal: ∂(det C)^{1/2}/∂C = J/2 C^{-T}.
+    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = Diff(J, C2)\nX.show()");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0].latex.contains("^{-\\mathsf{T}}"),
@@ -136,16 +153,16 @@ fn diff_errors_are_reported() {
         outputs[0].latex
     );
 
-    // but tr(F) has no rewriting through C: hidden dependence is an error
-    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = diff(tr(F), C2)");
+    // but Tr(F) has no rewriting through C: hidden dependence is an error
+    let src = format!("{PRELUDE}\nC2 = F.T * F\nX = Diff(Tr(F), C2)");
     assert!(run_source(&src).is_err());
 
     // scalar denominator must be a declared symbol, not a compound scalar
-    let src = format!("{PRELUDE}\nX = diff(J, mu * mu)");
+    let src = format!("{PRELUDE}\nX = Diff(J, mu * mu)");
     assert!(run_source(&src).is_err());
 
-    // diff(J, mu) is now legal and is identically zero
-    let src = format!("{PRELUDE}\nX = diff(J, mu)\nexport(X, format=latex)");
+    // Diff(J, mu) is now legal and is identically zero
+    let src = format!("{PRELUDE}\nX = Diff(J, mu)\nX.show()");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "0");
+    assert_eq!(outputs[0].latex, "X = 0");
 }

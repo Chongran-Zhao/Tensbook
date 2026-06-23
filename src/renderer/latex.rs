@@ -25,7 +25,9 @@ fn sprec(expr: &ScalarExpr) -> u8 {
         | ScalarExpr::Log(..)
         | ScalarExpr::Det(..)
         | ScalarExpr::Tr(..)
-        | ScalarExpr::Func { .. } => 3,
+        | ScalarExpr::Func { .. }
+        | ScalarExpr::UnknownFunc { .. }
+        | ScalarExpr::Integral { .. } => 3,
         ScalarExpr::Sym { .. }
         | ScalarExpr::Num(_)
         | ScalarExpr::Div(..)
@@ -104,8 +106,23 @@ fn render_scalar(expr: &ScalarExpr) -> String {
                     };
                     format!("\\{name} {wrapped}")
                 }
-                other => format!("\\operatorname{{{other}}}\\left( {inner} \\right)"),
+                other => format!("{other}\\left( {inner} \\right)"),
             }
+        }
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => render_unknown_func(name, args, derivative_orders),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => {
+            format!(
+                "\\int {} \\, d{}",
+                render_scalar(integrand),
+                render_scalar(variable)
+            )
         }
         ScalarExpr::SetElem { latex, index, .. } => {
             format!("{{{latex}}}_{{{}}}", index.latex())
@@ -142,6 +159,44 @@ fn render_scalar(expr: &ScalarExpr) -> String {
             format!("{lhs} : {rhs}")
         }
     }
+}
+
+fn render_unknown_func(name: &str, args: &[Rc<ScalarExpr>], derivative_orders: &[usize]) -> String {
+    let total: usize = derivative_orders.iter().sum();
+    let rendered_args = args.iter().map(|a| render_scalar(a)).collect::<Vec<_>>();
+    let arg_list = rendered_args.join(", ");
+    if total == 0 {
+        return format!("{name}\\left( {arg_list} \\right)");
+    }
+    if args.len() == 1 {
+        let mark = match total {
+            1 => "'".to_string(),
+            2 => "''".to_string(),
+            3 => "'''".to_string(),
+            n => format!("^{{({n})}}"),
+        };
+        return format!("{name}{mark}\\left( {arg_list} \\right)");
+    }
+    let numerator = if total == 1 {
+        format!("\\partial {name}")
+    } else {
+        format!("\\partial^{{{total}}} {name}")
+    };
+    let denom = args
+        .iter()
+        .zip(derivative_orders.iter())
+        .filter(|(_, order)| **order > 0)
+        .map(|(arg, order)| {
+            let arg = render_scalar(arg);
+            if *order == 1 {
+                format!("\\partial {arg}")
+            } else {
+                format!("\\partial {arg}^{{{order}}}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("\\frac{{{numerator}}}{{{denom}}}")
 }
 
 fn render_num(n: f64) -> String {

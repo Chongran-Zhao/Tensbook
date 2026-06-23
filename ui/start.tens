@@ -17,7 +17,7 @@ the very end, as one worked application.
 | Tensors, properties, and display modes | 2 |
 | Building matrices by component, reading components | 3 |
 | Products, transpose, inverse, powers, contractions | 4 |
-| Side-by-side rows, export, and copy | 5 |
+| Side-by-side rows, toolbar export, and copy | 5 |
 | Symbolic differentiation (including fourth order) | 6 |
 | Algebraic and tensor simplification | 7 |
 | Indexed sets, sums, and user functions | 8 |
@@ -40,8 +40,8 @@ the way you expect, and there is a small library of built-in functions:
 a = Scalar("a")
 b = Scalar("b")
 
-display((a + b)^2)
-[display(log(a)), display(sqrt(a * b)), display(tanh(a))]
+((a + b)^2).show()
+[log(a).show(), sqrt(a * b).show(), tanh(a).show()]
 <!-- /tensorforge:tens -->
 
 `Var` declares a one-dimensional variable. A scalar expression built from a
@@ -51,7 +51,7 @@ display((a + b)^2)
 x = Var("x")
 sinh = (exp(x) - exp(-x)) / 2
 
-display(sinh(a))
+sinh(a).show()
 <!-- /tensorforge:tens -->
 
 ## 2. Tensors, properties, and display modes
@@ -64,14 +64,14 @@ engine reason about structure. Every result can be shown three ways:
 <!-- tensorforge:tens -->
 A = Tensor("\bm A", order=2, dim=3)
 
-display(A, mode=components)
+A.show(components)
 <!-- /tensorforge:tens -->
 
 The identity tensor is a property, not a special symbol.
 
 <!-- tensorforge:tens -->
 I = Tensor("\bm I", order=2, dim=3, identity=true)
-display(I, mode=matrix)
+I.show(matrix)
 <!-- /tensorforge:tens -->
 
 ## 3. Building matrices by component
@@ -88,7 +88,7 @@ D[1][1] = p
 D[2][2] = q
 D[3][3] = r
 
-display(D, mode=matrix)
+D.show(matrix)
 <!-- /tensorforge:tens -->
 
 A read returns an ordinary scalar. Here `D[1][3]` was never set, so it is zero.
@@ -99,35 +99,34 @@ D22 = Scalar("D_{22}")
 D13 = D[1][3]
 D22 = D[2][2]
 
-[display(D13), display(D22)]
+[D13.show(), D22.show()]
 <!-- /tensorforge:tens -->
 
 ## 4. Products, transpose, inverse, powers, contractions
 
-The matrix product is `*`, transpose is `.T`, and `inv` is the inverse. A
-tensor power is `^`. The trace is `tr` and the determinant is `det`. The
+The matrix product is `*`, transpose is `.T`, and `Inv` is the inverse. A
+tensor power is `^`. The trace is `Tr` and the determinant is `Det`. The
 double contraction `A : B` returns a scalar, while the outer product `A & B`
 builds a fourth-order tensor.
 
 <!-- tensorforge:tens -->
 B = Tensor("\bm B", order=2, dim=3)
 
-[display(A * B), display(A.T)]
-[display(inv(A)), display(A^3)]
-[display(tr(A)), display(det(A))]
-[display(A : B), display(A & B)]
+[(A * B).show(), A.T.show()]
+[Inv(A).show(), (A^3).show()]
+[Tr(A).show(), Det(A).show()]
+[(A : B).show(), (A & B).show()]
 <!-- /tensorforge:tens -->
 
-## 5. Rows, export, and copy
+## 5. Rows, toolbar export, and copy
 
-Wrapping several `display` calls in square brackets lays them out in one
+Wrapping several `.show(...)` calls in square brackets lays them out in one
 preview row (you have seen this above). Every formula has a `copy latex`
 button, and the toolbar **Export** writes the whole notebook to Markdown or
-PDF. You can also export a single result programmatically.
+PDF.
 
 <!-- tensorforge:tens -->
-export(A * B, format=latex)
-export(tr(A), format=markdown)
+[(A * B).show(), Tr(A).show()]
 <!-- /tensorforge:tens -->
 
 ## 6. Symbolic differentiation
@@ -139,51 +138,51 @@ so later results print it as `C` rather than re-expanding it.
 <!-- tensorforge:tens -->
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-display(C)
+C.show()
 <!-- /tensorforge:tens -->
 
 TensorForge differentiates scalar expressions with respect to tensors. The
 gradient of a scalar field is a tensor of the same order.
 
 <!-- tensorforge:tens -->
-f = 0.5 * tr(C * C)
+f = 0.5 * Tr(C * C)
 
-[display(f), display(2 * diff(f, C))]
+[f.show(), (2 * Diff(f, C)).show()]
 <!-- /tensorforge:tens -->
 
 Differentiating a *tensor* with respect to a tensor produces a fourth-order
 object. The derivative of the inverse uses the box-times product.
 
 <!-- tensorforge:tens -->
-display(diff(inv(C), C))
+Diff(Inv(C), C).show()
 <!-- /tensorforge:tens -->
 
 ## 7. Algebraic and tensor simplification
 
-`simplify` applies a chosen rule set: `algebra`, `tensor`, or `continuum`.
+`Simplify` applies a chosen rule set: `algebra`, `tensor`, or `continuum`.
 
 <!-- tensorforge:tens -->
 s = Scalar("s")
 M = Tensor("\bm M", order=2, dim=3)
 Id = Tensor("\bm I", order=2, dim=3, identity=true)
 
-[display(simplify(s - s, rules=algebra)), display(simplify(s * 1, rules=algebra))]
-[display(simplify((M.T).T, rules=tensor)), display(simplify(inv(inv(M)), rules=tensor))]
-display(simplify(M * Id, rules=tensor))
+[Simplify(s - s, rules=algebra).show(), Simplify(s * 1, rules=algebra).show()]
+[Simplify((M.T).T, rules=tensor).show(), Simplify(Inv(Inv(M)), rules=tensor).show()]
+Simplify(M * Id, rules=tensor).show()
 <!-- /tensorforge:tens -->
 
 ## 8. Indexed sets, sums, and user functions
 
 `ScalarSet` and `VectorSet` declare indexed families. `lambda[a]` is an
-element, `&` is the tensor product, and `sum(body, a)` sums over the index.
+element, `&` is the tensor product, and `Sum(body, a)` sums over the index.
 
 <!-- tensorforge:tens -->
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
 
-[display(lambda), display(N)]
-G = sum(lambda[a]^2 * N[a] & N[a], a)
-display(G)
+[lambda.show(), N.show()]
+G = Sum(lambda[a]^2 * N[a] & N[a], a)
+G.show()
 <!-- /tensorforge:tens -->
 
 A `Var`-based function can be applied to each element of a set — useful for
@@ -194,20 +193,19 @@ y = Var("y")
 m = Scalar("m")
 phi = (y^m - y^(-m)) / (2 * m)
 
-H = sum(phi(lambda[a]) * N[a] & N[a], a)
-display(H)
+H = Sum(phi(lambda[a]) * N[a] & N[a], a)
+H.show()
 <!-- /tensorforge:tens -->
 
 ## 9. Spectral decomposition and eigenpairs
 
-For a provably symmetric tensor, `eigvals` and `eigvecs` introduce its
-eigenvalues and eigenvectors as indexed sets you can compute with.
+For a provably symmetric tensor, `Spectral` introduces its eigenvalues and
+eigenvectors as indexed sets you can compute with.
 
 <!-- tensorforge:tens -->
-ev = eigvals(C, "\Lambda")
-Qv = eigvecs(C, "\bm Q")
+[ev, Qv] = Spectral(C, "\Lambda", "\bm Q")
 
-[display(ev), display(Qv)]
+[ev.show(), Qv.show()]
 <!-- /tensorforge:tens -->
 
 When the tensor is concrete and diagonal in the working basis, `Spec_Decomp`
@@ -223,7 +221,7 @@ nu = ScalarSet("\nu", dim=3)
 E = VectorSet("\bm E", dim=3)
 [nu, E] = Spec_Decomp(K)
 
-[display(nu[1]), display(nu[2]), display(nu[3])]
+[nu[1].show(), nu[2].show(), nu[3].show()]
 <!-- /tensorforge:tens -->
 
 ## 10. A worked application: hyperelasticity
@@ -239,9 +237,9 @@ tensor `C`, and the Jacobian `J`.
 mu = Scalar("\mu")
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-J = det(F)
+J = Det(F)
 
-[display(C), display(J)]
+[C.show(), J.show()]
 <!-- /tensorforge:tens -->
 
 Then the isochoric energy, its stress, and the tangent. Because `C` and `J`
@@ -249,12 +247,12 @@ come from the previous block, the results stay readable.
 
 <!-- tensorforge:tens -->
 C_bar = J^(-2/3) * C
-Psi = 0.5 * mu * tr(C_bar)
+Psi = 0.5 * mu * Tr(C_bar)
 
-S = 2 * diff(Psi, C)
-CC = 2 * diff(S, C)
+S = 2 * Diff(Psi, C)
+CC = 2 * Diff(S, C)
 
-[display(S), display(CC)]
+[S.show(), CC.show()]
 <!-- /tensorforge:tens -->
 
 This file is meant to be edited. Try switching a display mode, applying a

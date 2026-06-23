@@ -8,8 +8,8 @@ mu = Scalar("\mu")
 lambda = Scalar("\lambda")
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-J = det(F)
-I1 = tr(C)
+J = Det(F)
+I1 = Tr(C)
 W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
 "#;
 
@@ -18,8 +18,7 @@ W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
 #[test]
 fn simplify_inverse_cancellation() {
     // F^{-T} Fᵀ → I  (continuum rule from the spec)
-    let src =
-        format!("{PRELUDE}\nX = simplify(inv(F.T) * F.T, rules=tensor)\ndisplay(X, mode=symbol)");
+    let src = format!("{PRELUDE}\nX = Simplify(Inv(F.T) * F.T, rules=tensor)\nX.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
         outputs[0].latex, "\\bm X = \\bm I",
@@ -30,7 +29,7 @@ fn simplify_inverse_cancellation() {
 
 #[test]
 fn simplify_double_transpose() {
-    let src = format!("{PRELUDE}\nX = simplify((F.T).T)\ndisplay(X, mode=symbol)");
+    let src = format!("{PRELUDE}\nX = Simplify((F.T).T)\nX.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs[0].latex, "\\bm X = \\bm F");
 }
@@ -38,18 +37,18 @@ fn simplify_double_transpose() {
 #[test]
 fn simplify_transpose_of_symmetric() {
     // Cᵀ → C because C = FᵀF is provably symmetric
-    let src = format!("{PRELUDE}\nX = simplify(C.T)\nexport(X, format=latex)");
+    let src = format!("{PRELUDE}\nX = Simplify(C.T)\nX.show()");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "\\bm F^{\\mathsf{T}} \\, \\bm F");
+    assert_eq!(outputs[0].latex, "\\bm X = \\bm F^{\\mathsf{T}} \\, \\bm F");
 }
 
 #[test]
 fn simplify_det_transpose_and_tr_identity() {
     let src = format!(
         "{PRELUDE}\nI = Tensor(\"\\bm I\", order=2, dim=3, identity=true)\n\
-         a = simplify(det(F.T), rules=continuum)\n\
-         b = simplify(tr(I), rules=continuum)\n\
-         display(a, mode=symbol)\ndisplay(b, mode=symbol)"
+         a = Simplify(Det(F.T), rules=continuum)\n\
+         b = Simplify(Tr(I), rules=continuum)\n\
+         a.show(symbol)\nb.show(symbol)"
     );
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs[0].latex, "a = \\det \\bm F");
@@ -58,14 +57,14 @@ fn simplify_det_transpose_and_tr_identity() {
 
 #[test]
 fn simplify_trace_cyclic() {
-    // tr(AB) and tr(BA) canonicalize to the same expression
+    // Tr(AB) and Tr(BA) canonicalize to the same expression
     let src_ab = format!(
         "{PRELUDE}\nG = Tensor(\"\\bm G\", order=2, dim=3)\n\
-         x = simplify(tr(F * G), rules=continuum)\nexport(x, format=latex)"
+         x = Simplify(Tr(F * G), rules=continuum)\nx.show()"
     );
     let src_ba = format!(
         "{PRELUDE}\nG = Tensor(\"\\bm G\", order=2, dim=3)\n\
-         x = simplify(tr(G * F), rules=continuum)\nexport(x, format=latex)"
+         x = Simplify(Tr(G * F), rules=continuum)\nx.show()"
     );
     let a = run_source(&src_ab).unwrap();
     let b = run_source(&src_ba).unwrap();
@@ -76,7 +75,7 @@ fn simplify_trace_cyclic() {
 
 #[test]
 fn tangent_component_formula() {
-    let src = format!("{PRELUDE}\nP = diff(W, F)\nA = diff(P, F)\ndisplay(A, mode=components)");
+    let src = format!("{PRELUDE}\nP = Diff(W, F)\nA = Diff(P, F)\nA.show(components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -101,7 +100,7 @@ fn tangent_component_formula() {
 
 #[test]
 fn tangent_symbol_mode() {
-    let src = format!("{PRELUDE}\nP = diff(W, F)\nA = diff(P, F)\ndisplay(A, mode=symbol)");
+    let src = format!("{PRELUDE}\nP = Diff(W, F)\nA = Diff(P, F)\nA.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0]
@@ -116,7 +115,7 @@ fn tangent_symbol_mode() {
 
 #[test]
 fn dcdf_block_components_is_3x3_of_blocks() {
-    let src = format!("{PRELUDE}\ndCdF = diff(C, F)\ndisplay(dCdF, mode=block_components)");
+    let src = format!("{PRELUDE}\ndCdF = Diff(C, F)\ndCdF.show(block_components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -142,7 +141,7 @@ fn dcdf_block_components_is_3x3_of_blocks() {
 
 #[test]
 fn block_components_accepts_scaled_derivative_tensor() {
-    let src = format!("{PRELUDE}\nA = 2 * diff(C, F)\ndisplay(A, mode=block_components)");
+    let src = format!("{PRELUDE}\nA = 2 * Diff(C, F)\nA.show(block_components)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(
@@ -157,7 +156,7 @@ fn block_components_accepts_scaled_derivative_tensor() {
 
 #[test]
 fn block_components_rejects_non_derivative() {
-    let src = format!("{PRELUDE}\ndisplay(C, mode=block_components)");
+    let src = format!("{PRELUDE}\nC.show(block_components)");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message

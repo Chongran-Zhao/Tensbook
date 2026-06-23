@@ -1,10 +1,10 @@
 //! Symbolic differentiation.
 //!
 //! Phase-2 scope:
-//! - scalar-by-tensor: `diff(J, F)`, `diff(W, F)` — evaluated immediately
+//! - scalar-by-tensor: `Diff(J, F)`, `Diff(W, F)` — evaluated immediately
 //!   into a second-order tensor expression using continuum-mechanics rules
 //!   (`∂(det F)/∂F = det(F) F^{-T}`, `∂tr(FᵀF)/∂F = 2F`, chain rule, ...);
-//! - tensor-by-tensor: `diff(C, F)` — kept as an opaque order-4
+//! - tensor-by-tensor: `Diff(C, F)` — kept as an opaque order-4
 //!   [`TensorExpr::Diff`] node; compound denominators are first treated as a
 //!   synthetic independent variable, then their component formula is produced
 //!   on demand via the abstract-index engine ([`crate::indices`]).
@@ -35,7 +35,7 @@ use std::rc::Rc;
 ///
 /// Any remaining dependence on `X`'s underlying variables outside
 /// occurrences of `X` itself is rejected by [`check_independence_scalar`] —
-/// e.g. `diff(tr(F), C)` errors rather than silently returning 0.
+/// e.g. `Diff(Tr(F), C)` errors rather than silently returning 0.
 pub fn diff_scalar_by_tensor(
     s: &Rc<ScalarExpr>,
     x: &Rc<TensorExpr>,
@@ -88,7 +88,7 @@ pub fn diff_tensor_by_tensor(
         return Err(Error::msg(
             "manual spectral tensor functions must be differentiated with \
              respect to a matching stretch spectral decomposition \
-             C = sum(lambda[a]^2 * N[a] & N[a], a)",
+             C = Sum(lambda[a]^2 * N[a] & N[a], a)",
         ));
     }
     if matches!(&**x, TensorExpr::Var { .. }) {
@@ -492,6 +492,18 @@ fn collect_scalar_set_elems<'a>(
         ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
             collect_scalar_set_elems(a, index, out)
         }
+        ScalarExpr::UnknownFunc { args, .. } => {
+            for arg in args {
+                collect_scalar_set_elems(arg, index, out);
+            }
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => {
+            collect_scalar_set_elems(integrand, index, out);
+            collect_scalar_set_elems(variable, index, out);
+        }
         ScalarExpr::SpecSum { body, .. } => collect_scalar_set_elems(body, index, out),
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => collect_scalar_set_elems_tensor(t, index, out),
         ScalarExpr::Sym { .. } | ScalarExpr::Num(_) | ScalarExpr::SetElem { .. } => {}
@@ -566,6 +578,22 @@ fn replace_scalar_set_elem_with_var(
             name: name.clone(),
             arg: rs(arg),
         }),
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => Rc::new(ScalarExpr::UnknownFunc {
+            name: name.clone(),
+            args: args.iter().map(rs).collect(),
+            derivative_orders: derivative_orders.clone(),
+        }),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => Rc::new(ScalarExpr::Integral {
+            integrand: rs(integrand),
+            variable: rs(variable),
+        }),
         ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
             body: rs(body),
             index: index.clone(),
@@ -626,6 +654,22 @@ fn rewrite_scalar_for_compound(
         ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
             name: name.clone(),
             arg: rw(arg),
+        }),
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => Rc::new(ScalarExpr::UnknownFunc {
+            name: name.clone(),
+            args: args.iter().map(rw).collect(),
+            derivative_orders: derivative_orders.clone(),
+        }),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => Rc::new(ScalarExpr::Integral {
+            integrand: rw(integrand),
+            variable: rw(variable),
         }),
         ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
             body: rw(body),
@@ -788,6 +832,22 @@ fn replace_scalar(
         ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
             name: name.clone(),
             arg: rs(arg),
+        }),
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => Rc::new(ScalarExpr::UnknownFunc {
+            name: name.clone(),
+            args: args.iter().map(rs).collect(),
+            derivative_orders: derivative_orders.clone(),
+        }),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => Rc::new(ScalarExpr::Integral {
+            integrand: rs(integrand),
+            variable: rs(variable),
         }),
         ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(rt(t))),
         ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(rt(t))),
@@ -995,16 +1055,21 @@ fn func_derivative(name: &str, arg: &Rc<ScalarExpr>) -> Result<Rc<ScalarExpr>, E
         "sinh" => f("cosh"),
         "cosh" => f("sinh"),
         "sin" => f("cos"),
+        "cos" => Rc::new(ScalarExpr::Neg(f("sin"))),
+        "tan" => Rc::new(ScalarExpr::Add(
+            Rc::new(ScalarExpr::Num(1.0)),
+            Rc::new(ScalarExpr::Pow(f("tan"), Rc::new(ScalarExpr::Num(2.0)))),
+        )),
+        "tanh" => Rc::new(ScalarExpr::Sub(
+            Rc::new(ScalarExpr::Num(1.0)),
+            Rc::new(ScalarExpr::Pow(f("tanh"), Rc::new(ScalarExpr::Num(2.0)))),
+        )),
         // d/dx √x = 1/(2√x)
         "sqrt" => Rc::new(ScalarExpr::Div(
             Rc::new(ScalarExpr::Num(1.0)),
             Rc::new(ScalarExpr::Mul(Rc::new(ScalarExpr::Num(2.0)), f("sqrt"))),
         )),
-        other => {
-            return Err(Error::msg(format!(
-                "the derivative of `{other}` is not in the rule table yet"
-            )))
-        }
+        other => f(&format!("{other}'")),
     })
 }
 
@@ -1100,6 +1165,50 @@ fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExp
             };
             Ok(Some(fold_mul(&func_derivative(f, arg)?, &da)))
         }
+        ScalarExpr::UnknownFunc {
+            name: f,
+            args,
+            derivative_orders,
+        } => {
+            let mut acc: Option<Rc<ScalarExpr>> = None;
+            for (i, arg) in args.iter().enumerate() {
+                let Some(da) = d_scalar_scalar(arg, name)? else {
+                    continue;
+                };
+                let mut orders = derivative_orders.clone();
+                if i >= orders.len() {
+                    orders.resize(args.len(), 0);
+                }
+                orders[i] += 1;
+                let partial = Rc::new(ScalarExpr::UnknownFunc {
+                    name: f.clone(),
+                    args: args.clone(),
+                    derivative_orders: orders,
+                });
+                let term = if matches!(&*da, ScalarExpr::Num(n) if *n == 1.0) {
+                    partial
+                } else {
+                    fold_mul(&partial, &da)
+                };
+                acc = Some(match acc {
+                    None => term,
+                    Some(prev) => crate::symbolic::fold_add(prev, term),
+                });
+            }
+            Ok(acc)
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => {
+            if scalar_mentions_scalar(integrand, name) || scalar_mentions_scalar(variable, name) {
+                Err(Error::msg(
+                    "differentiating a formal Integral is not supported yet",
+                ))
+            } else {
+                Ok(None)
+            }
+        }
         ScalarExpr::SpecSum { body, index, dim } => Ok(d_scalar_scalar(body, name)?.map(|d| {
             Rc::new(ScalarExpr::SpecSum {
                 body: d,
@@ -1107,7 +1216,7 @@ fn d_scalar_scalar(s: &Rc<ScalarExpr>, name: &str) -> Result<Option<Rc<ScalarExp
                 dim: *dim,
             })
         })),
-        // det/tr/ddot of tensors: zero unless the scalar hides inside a
+        // det/tr/double contractions of tensors: zero unless the scalar hides inside a
         // tensor (ScalarMul coefficient), which is not supported yet.
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => {
             if tensor_mentions_scalar(t, name) {
@@ -1181,6 +1290,13 @@ pub(crate) fn scalar_mentions_scalar(s: &ScalarExpr, name: &str) -> bool {
         ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
             scalar_mentions_scalar(a, name)
         }
+        ScalarExpr::UnknownFunc { args, .. } => {
+            args.iter().any(|arg| scalar_mentions_scalar(arg, name))
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => scalar_mentions_scalar(integrand, name) || scalar_mentions_scalar(variable, name),
         ScalarExpr::SpecSum { body, .. } => scalar_mentions_scalar(body, name),
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => tensor_mentions_scalar(t, name),
         ScalarExpr::Ddot(a, b) => {
@@ -1223,7 +1339,7 @@ fn tensor_var_names(t: &TensorExpr, out: &mut Vec<String>) {
     }
 }
 
-/// Reject `diff(s, X)` for compound `X` when `s` depends on `X`'s underlying
+/// Reject `Diff(s, X)` for compound `X` when `s` depends on `X`'s underlying
 /// variables outside occurrences of `X` itself: differentiating would then
 /// silently produce a wrong result (the hidden dependence would read as 0).
 fn check_independence_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>) -> Result<(), Error> {
@@ -1258,6 +1374,19 @@ fn walk_scalar(s: &ScalarExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
         ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
             walk_scalar(a, x, vars)
         }
+        ScalarExpr::UnknownFunc { args, .. } => {
+            for arg in args {
+                walk_scalar(arg, x, vars)?;
+            }
+            Ok(())
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => {
+            walk_scalar(integrand, x, vars)?;
+            walk_scalar(variable, x, vars)
+        }
         ScalarExpr::SpecSum { body, .. } => walk_scalar(body, x, vars),
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => walk_tensor(t, x, vars),
         ScalarExpr::Ddot(a, b) => {
@@ -1291,7 +1420,7 @@ fn walk_tensor(t: &TensorExpr, x: &Rc<TensorExpr>, vars: &[String]) -> Result<()
                     "cannot differentiate with respect to this compound expression: \
                      the expression also depends on `{name}` outside of it; \
                      rewrite the energy in terms of the new variable \
-                     (e.g. use det(C) instead of det(F)) or differentiate \
+                     (e.g. use Det(C) instead of Det(F)) or differentiate \
                      with respect to `{name}` directly"
                 )))
             } else {
@@ -1340,7 +1469,7 @@ fn d_scalar(s: &Rc<ScalarExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
             if link.base != *x {
                 return Err(Error::msg(
                     "∂λ_a/∂X is only supported when X is the decomposed tensor \
-                     itself (declare the eigenvalues with eigvals(X, ...))",
+                     itself (declare the eigenvalues with [lambda, N] = Spectral(X, ...))",
                 ));
             }
             let n_a = || {
@@ -1458,6 +1587,28 @@ fn d_scalar(s: &Rc<ScalarExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorEx
             };
             Ok(Some(smul(func_derivative(name, arg)?, da)))
         }
+        ScalarExpr::UnknownFunc { args, .. } => {
+            if args.iter().any(|arg| s_contains(arg, x)) {
+                Err(Error::msg(
+                    "differentiating an unknown scalar function with tensor-valued \
+                     arguments is not supported yet",
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => {
+            if s_contains(integrand, x) || s_contains(variable, x) {
+                Err(Error::msg(
+                    "differentiating a formal Integral by a tensor is not supported yet",
+                ))
+            } else {
+                Ok(None)
+            }
+        }
         // ∂(Σ_a body)/∂X = Σ_a ∂body/∂X — the scalar sum becomes a tensor sum.
         ScalarExpr::SpecSum { body, index, dim } => Ok(d_scalar(body, x)?.map(|t| {
             Rc::new(TensorExpr::SumIdx {
@@ -1505,12 +1656,18 @@ fn d_trace(t: &Rc<TensorExpr>, x: &Rc<TensorExpr>) -> Result<Option<Rc<TensorExp
             let da = d_tensor(a, x)?;
             let db = d_tensor(b, x)?;
             let term_a = if let Some(da) = da {
-                Some(Rc::new(TensorExpr::ddot_tq(trace_partner(b.clone()), da)?))
+                Some(Rc::new(TensorExpr::double_contract_second_fourth(
+                    trace_partner(b.clone()),
+                    da,
+                )?))
             } else {
                 None
             };
             let term_b = if let Some(db) = db {
-                Some(Rc::new(TensorExpr::ddot_tq(trace_partner(a.clone()), db)?))
+                Some(Rc::new(TensorExpr::double_contract_second_fourth(
+                    trace_partner(a.clone()),
+                    db,
+                )?))
             } else {
                 None
             };
@@ -1665,6 +1822,11 @@ pub fn s_contains(s: &ScalarExpr, x: &TensorExpr) -> bool {
         ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
             s_contains(a, x)
         }
+        ScalarExpr::UnknownFunc { args, .. } => args.iter().any(|arg| s_contains(arg, x)),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => s_contains(integrand, x) || s_contains(variable, x),
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => t_contains(t, x),
         ScalarExpr::Ddot(a, b) => t_contains(a, x) || t_contains(b, x),
         ScalarExpr::SpecSum { body, .. } => s_contains(body, x),

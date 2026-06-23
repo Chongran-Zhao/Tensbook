@@ -30,9 +30,9 @@ pub enum Stmt {
         line: usize,
         block: usize,
     },
-    /// A bare expression statement, e.g. `display(C, mode=symbol)`.
+    /// A bare expression statement, e.g. `C.show(matrix)`.
     Expr(Expr, usize, usize),
-    /// A row of output calls, e.g. `[display(I1) display(I2)]`.
+    /// A row of output calls, e.g. `[I1.show() I2.show()]`.
     OutputRow {
         exprs: Vec<Expr>,
         line: usize,
@@ -81,6 +81,13 @@ pub enum Expr {
     Field {
         target: Box<Expr>,
         name: String,
+    },
+    /// Method call, e.g. `C.show(matrix)`.
+    MethodCall {
+        target: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+        kwargs: Vec<(String, Expr)>,
     },
     /// `callee(args..., key=value...)`
     Call {

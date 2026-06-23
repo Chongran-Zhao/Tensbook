@@ -1,6 +1,6 @@
 //! Symbolic scalar expressions.
 //!
-//! Scalars stay fully symbolic: `det`, `tr` and `log` are opaque nodes, not
+//! Scalars stay fully symbolic: `Det`, `Tr` and `log` are opaque nodes, not
 //! evaluated. Tensor-valued subexpressions appear inside scalar expressions
 //! through [`ScalarExpr::Det`] and [`ScalarExpr::Tr`].
 
@@ -53,6 +53,19 @@ pub enum ScalarExpr {
         name: String,
         arg: Rc<ScalarExpr>,
     },
+    /// Unknown applied-math function, e.g. `y(x)` or a formal derivative of
+    /// `u(x,y)`. `derivative_orders[i]` is the derivative order with respect
+    /// to `args[i]`.
+    UnknownFunc {
+        name: String,
+        args: Vec<Rc<ScalarExpr>>,
+        derivative_orders: Vec<usize>,
+    },
+    /// Unevaluated indefinite integral.
+    Integral {
+        integrand: Rc<ScalarExpr>,
+        variable: Rc<ScalarExpr>,
+    },
     Det(Rc<TensorExpr>),
     Tr(Rc<TensorExpr>),
     /// Double contraction of two second-order tensors, `A : B` (a scalar).
@@ -66,7 +79,7 @@ pub enum ScalarExpr {
     },
     /// Element of a user-declared scalar set: `lambda[a]` for
     /// `lambda = ScalarSet("\lambda", dim=3)`. `set_dim` is the family size.
-    /// When declared via `eigvals(C, ...)`, `eig` records the decomposed
+    /// When declared via `[lambda, N] = Spectral(C, ...)`, `eig` records the decomposed
     /// tensor and the LaTeX of the partner eigenvector set, enabling
     /// `∂λ_a/∂C = N_a ⊗ N_a`.
     SetElem {

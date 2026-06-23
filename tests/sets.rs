@@ -1,5 +1,5 @@
 //! Indexed families (`ScalarSet`/`VectorSet`), element access `lambda[a]`,
-//! and the `sum(body, a)` spectral-sum builtin.
+//! and the `Sum(body, a)` spectral-sum builtin.
 
 use tensorforge::metadata::{DisplayCapabilityState, ValueKind};
 use tensorforge::{run_source, run_source_with_env};
@@ -12,13 +12,12 @@ N = VectorSet("\bm N", dim=3)
 const EIG_PRELUDE: &str = r#"
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-lambda = eigvals(C, "\lambda")
-N = eigvecs(C, "\bm N")
+[lambda, N] = Spectral(C, "\lambda", "\bm N")
 "#;
 
 #[test]
 fn spectral_decomposition_written_by_hand() {
-    let src = format!("{PRELUDE}\nC = sum(lambda[a] * N[a] & N[a], a)\ndisplay(C)");
+    let src = format!("{PRELUDE}\nC = Sum(lambda[a] * N[a] & N[a], a)\nC.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
         outputs[0].latex,
@@ -30,25 +29,25 @@ fn spectral_decomposition_written_by_hand() {
 
 #[test]
 fn concrete_and_abstract_element_access() {
-    let src = format!("{PRELUDE}\nx = lambda[2]\nexport(x, format=latex)");
+    let src = format!("{PRELUDE}\nx = lambda[2]\nx.show()");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "{\\lambda}_{2}");
+    assert_eq!(outputs[0].latex, "x = {\\lambda}_{2}");
 
-    let src = format!("{PRELUDE}\nx = lambda[5]\nexport(x, format=latex)");
+    let src = format!("{PRELUDE}\nx = lambda[5]\nx.show()");
     let err = run_source(&src).unwrap_err();
     assert!(err.message.contains("out of range"), "got: {}", err.message);
 }
 
 #[test]
 fn scalar_sum_uses_spec_sum() {
-    let src = format!("{PRELUDE}\nI1 = sum(lambda[a], a)\nexport(I1, format=latex)");
+    let src = format!("{PRELUDE}\nSum(lambda[a], a).show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(outputs[0].latex, "\\sum_{a=1}^{3} {\\lambda}_{a}");
 }
 
 #[test]
 fn display_set_shows_family_and_index_range() {
-    let src = format!("{PRELUDE}\ndisplay(lambda)\ndisplay(N)");
+    let src = format!("{PRELUDE}\nlambda.show()\nN.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
         outputs[0].latex,
@@ -59,7 +58,7 @@ fn display_set_shows_family_and_index_range() {
 
 #[test]
 fn set_display_rejects_non_symbol_modes() {
-    let src = format!("{PRELUDE}\ndisplay(lambda, mode=matrix)");
+    let src = format!("{PRELUDE}\nlambda.show(matrix)");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message
@@ -71,7 +70,7 @@ fn set_display_rejects_non_symbol_modes() {
 
 #[test]
 fn sum_requires_the_index_in_the_body() {
-    let src = format!("{PRELUDE}\nI1 = sum(lambda[a], b)\ndisplay(I1)");
+    let src = format!("{PRELUDE}\nI1 = Sum(lambda[a], b)\nI1.show()");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message.contains("does not mention"),
@@ -87,7 +86,7 @@ fn hill_strain_from_function_and_sets() {
     let src = format!(
         "{PRELUDE}\nlam = Var(\"\\hat{{\\lambda}}\")\nm = Scalar(\"m\")\nn = Scalar(\"n\")\n\
          Ecr = (lam^m - lam^(-n))/(m + n)\n\
-         E = sum(Ecr(lambda[a]) * N[a] & N[a], a)\ndisplay(E)"
+         E = Sum(Ecr(lambda[a]) * N[a] & N[a], a)\nE.show()"
     );
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
@@ -109,7 +108,7 @@ fn hill_strain_from_function_and_sets() {
 
 #[test]
 fn indexing_a_non_set_errors() {
-    let src = "mu = Scalar(\"\\mu\")\nx = mu[1]\ndisplay(x)";
+    let src = "mu = Scalar(\"\\mu\")\nx = mu[1]\nx.show()";
     let err = run_source(src).unwrap_err();
     assert!(
         err.message.contains("requires a tensor"),
@@ -120,7 +119,7 @@ fn indexing_a_non_set_errors() {
 
 #[test]
 fn eigval_set_derivative_uses_projectors() {
-    let src = format!("{EIG_PRELUDE}\nW = sum(lambda[a]^2, a)\nS = diff(W, C)\ndisplay(S)");
+    let src = format!("{EIG_PRELUDE}\nW = Sum(lambda[a]^2, a)\nS = Diff(W, C)\nS.show()");
     let outputs = run_source(&src).unwrap();
     assert_eq!(
         outputs[0].latex,
@@ -132,7 +131,7 @@ fn eigval_set_derivative_uses_projectors() {
 
 #[test]
 fn eig_sets_require_symmetric_base() {
-    let src = "F = Tensor(\"\\bm F\", order=2, dim=3)\nlambda = eigvals(F, \"\\lambda\")";
+    let src = "F = Tensor(\"\\bm F\", order=2, dim=3)\n[lambda, N] = Spectral(F, \"\\lambda\", \"\\bm N\")";
     let err = run_source(src).unwrap_err();
     assert!(
         err.message
@@ -151,10 +150,10 @@ lam = Var("\lambda")
 Ecr = (lam^m - lam^(-n))/(m + n)
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
-C = sum(lambda[a]^2 * N[a] & N[a], a)
-E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
-Q = 2 * diff(E, C)
-display(Q)
+C = Sum(lambda[a]^2 * N[a] & N[a], a)
+E = Sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * Diff(E, C)
+Q.show()
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -201,9 +200,9 @@ lam = Var("\lambda")
 Ecr = (lam^m - lam^(-n))/(m + n)
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
-C = sum(lambda[a]^2 * N[a] & N[a], a)
-E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
-Q = 2 * diff(E, C)
+C = Sum(lambda[a]^2 * N[a] & N[a], a)
+E = Sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * Diff(E, C)
 "#;
     let (_, interp) = run_source_with_env(src).unwrap();
     let q = interp.symbol_info("Q").expect("Q metadata");
@@ -230,10 +229,10 @@ lam = Var("\lambda")
 Ecr = (lam^m - lam^(-n))/(m + n)
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
-C = sum(lambda[a]^2 * N[a] & N[a], a)
-E = sum(Ecr(lambda[a]) * N[a] & N[a], a)
-Q = 2 * diff(E, C)
-display(Q, mode=block_components)
+C = Sum(lambda[a]^2 * N[a] & N[a], a)
+E = Sum(Ecr(lambda[a]) * N[a] & N[a], a)
+Q = 2 * Diff(E, C)
+Q.show(block_components)
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -256,12 +255,12 @@ display(Q, mode=block_components)
 #[test]
 fn manual_spectral_q_supports_hencky_and_polynomial_scales() {
     let src = format!(
-        "{PRELUDE}\nC = sum(lambda[a]^2 * N[a] & N[a], a)\n\
+        "{PRELUDE}\nC = Sum(lambda[a]^2 * N[a] & N[a], a)\n\
          lam = Var(\"\\lambda\")\nEh = log(lam)\nEp = lam^2\n\
-         H = sum(Eh(lambda[a]) * N[a] & N[a], a)\n\
-         P = sum(Ep(lambda[a]) * N[a] & N[a], a)\n\
-         Qh = 2 * diff(H, C)\nQp = 2 * diff(P, C)\n\
-         display(Qh)\ndisplay(Qp)"
+         H = Sum(Eh(lambda[a]) * N[a] & N[a], a)\n\
+         P = Sum(Ep(lambda[a]) * N[a] & N[a], a)\n\
+         Qh = 2 * Diff(H, C)\nQp = 2 * Diff(P, C)\n\
+         Qh.show()\nQp.show()"
     );
     let outputs = run_source(&src).unwrap();
     assert!(
@@ -300,8 +299,8 @@ lam = Var("\lambda")
 Escale = lam^2
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
-E = sum(Escale(lambda[a]) * N[a] & N[a], a)
-Q = 2 * diff(E, C)
+E = Sum(Escale(lambda[a]) * N[a] & N[a], a)
+Q = 2 * Diff(E, C)
 "#;
     let err = run_source(src).unwrap_err();
     assert!(
@@ -319,9 +318,9 @@ lambda = ScalarSet("\lambda", dim=3)
 mu = ScalarSet("\mu", dim=3)
 N = VectorSet("\bm N", dim=3)
 M = VectorSet("\bm M", dim=3)
-C = sum(lambda[a]^2 * N[a] & N[a], a)
-E1 = sum(mu[a]^2 * N[a] & N[a], a)
-Q1 = 2 * diff(E1, C)
+C = Sum(lambda[a]^2 * N[a] & N[a], a)
+E1 = Sum(mu[a]^2 * N[a] & N[a], a)
+Q1 = 2 * Diff(E1, C)
 "#;
     let err = run_source(src).unwrap_err();
     assert!(
@@ -334,9 +333,9 @@ Q1 = 2 * diff(E1, C)
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
 M = VectorSet("\bm M", dim=3)
-C = sum(lambda[a]^2 * N[a] & N[a], a)
-E2 = sum(lambda[a]^2 * M[a] & M[a], a)
-Q2 = 2 * diff(E2, C)
+C = Sum(lambda[a]^2 * N[a] & N[a], a)
+E2 = Sum(lambda[a]^2 * M[a] & M[a], a)
+Q2 = 2 * Diff(E2, C)
 "#;
     let err = run_source(src).unwrap_err();
     assert!(

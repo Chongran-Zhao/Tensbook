@@ -255,6 +255,11 @@ fn scalar_depends(s: &ScalarExpr, base: &str) -> bool {
         | ScalarExpr::Pow(a, b) => scalar_depends(a, base) || scalar_depends(b, base),
         ScalarExpr::Neg(a) | ScalarExpr::Log(a) => scalar_depends(a, base),
         ScalarExpr::Func { arg, .. } => scalar_depends(arg, base),
+        ScalarExpr::UnknownFunc { args, .. } => args.iter().any(|arg| scalar_depends(arg, base)),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => scalar_depends(integrand, base) || scalar_depends(variable, base),
         ScalarExpr::SpecSum { body, .. } => scalar_depends(body, base),
         ScalarExpr::Det(t) | ScalarExpr::Tr(t) => tensor_mentions(t, base),
         ScalarExpr::Ddot(a, b) => tensor_mentions(a, base) || tensor_mentions(b, base),
@@ -415,7 +420,10 @@ fn d_scalar_comp(s: &Rc<ScalarExpr>, base: &str, m: &Idx, n: &Idx) -> Result<Vec
         ScalarExpr::Ddot(_, _) => Err(Error::msg(
             "component derivative of a double contraction is not supported yet",
         )),
-        ScalarExpr::Func { .. } | ScalarExpr::SpecSum { .. } => Err(Error::msg(
+        ScalarExpr::Func { .. }
+        | ScalarExpr::UnknownFunc { .. }
+        | ScalarExpr::Integral { .. }
+        | ScalarExpr::SpecSum { .. } => Err(Error::msg(
             "component derivatives of spectral/function coefficients are not \
                  supported yet",
         )),

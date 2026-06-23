@@ -46,7 +46,7 @@ pub enum TensorExpr {
     /// Order = num.order() + den.order() (e.g. ∂C/∂F is order 4).
     /// Component formulas are produced by the differentiation engine.
     /// `num_label` is an optional LaTeX label for the numerator (e.g.
-    /// `\bm C` when the user wrote `diff(C, F)`), used only for display.
+    /// `\bm C` when the user wrote `Diff(C, F)`), used only for display.
     Diff {
         num: Rc<TensorExpr>,
         den: Rc<TensorExpr>,
@@ -80,7 +80,7 @@ pub enum TensorExpr {
     Neg(Rc<TensorExpr>),
     /// Element of a user-declared tensor set: `N[a]` for
     /// `N = VectorSet("\bm N", dim=3)`. `set_dim` is the family size.
-    /// When declared via `eigvecs(C, ...)`, `base` records the decomposed
+    /// When declared via `[lambda, N] = Spectral(C, ...)`, `base` records the decomposed
     /// tensor (so dependence on `C` is tracked).
     SetElem {
         latex: String,
@@ -91,7 +91,7 @@ pub enum TensorExpr {
         base: Option<Rc<TensorExpr>>,
     },
     /// Sum over an abstract set index: `Σ_{index=1}^{range} body`, written
-    /// `sum(body, index)` in the DSL. Order/dim are the body's.
+    /// `Sum(body, index)` in the DSL. Order/dim are the body's.
     SumIdx {
         index: String,
         range: usize,
@@ -222,7 +222,10 @@ impl TensorExpr {
 
     /// `T : Q` — contract a second-order tensor with the first two indices
     /// of a fourth-order tensor.
-    pub fn ddot_tq(second: Rc<TensorExpr>, fourth: Rc<TensorExpr>) -> Result<TensorExpr, Error> {
+    pub fn double_contract_second_fourth(
+        second: Rc<TensorExpr>,
+        fourth: Rc<TensorExpr>,
+    ) -> Result<TensorExpr, Error> {
         if second.order() != 2 || fourth.order() != 4 {
             return Err(Error::msg(format!(
                 "T : Q requires a second-order and a fourth-order tensor, got \

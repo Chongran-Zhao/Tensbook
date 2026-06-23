@@ -1,4 +1,4 @@
-//! Tests for user-reported gaps: compound-denominator diff (diff(W, C)),
+//! Tests for user-reported gaps: compound-denominator diff (Diff(W, C)),
 //! the `:` operator, otimes alias, scalar-by-scalar diff.
 
 use tensorforge::interpreter::Value;
@@ -9,14 +9,13 @@ mu = Scalar("\mu")
 lambda = Scalar("\lambda")
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
-I1 = tr(C)
+I1 = Tr(C)
 "#;
 
 #[test]
 fn diff_by_compound_tensor() {
-    // S = 2 ∂W/∂C with W written in terms of C: ∂tr(C)/∂C = I.
-    let src =
-        format!("{PRELUDE}\nW = mu/2 * (I1 - 3)\nS = 2 * diff(W, C)\ndisplay(S, mode=symbol)");
+    // S = 2 ∂W/∂C with W written in terms of C: ∂Tr(C)/∂C = I.
+    let src = format!("{PRELUDE}\nW = mu/2 * (I1 - 3)\nS = 2 * Diff(W, C)\nS.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0].latex.contains("\\bm I"),
@@ -27,18 +26,18 @@ fn diff_by_compound_tensor() {
 
 #[test]
 fn diff_mooney_rivlin_invariants_by_c() {
-    // I2 = 1/2((tr C)^2 - tr(C C)) needs the trace product chain rule:
-    // d tr(C C)/dC = C + C.
+    // I2 = 1/2((tr C)^2 - Tr(C C)) needs the trace product chain rule:
+    // d Tr(C C)/dC = C + C.
     let src = r#"
 F = Tensor("\bm F", order=2, dim=3)
 C = F.T * F
 C1 = Scalar("C_1")
 C2 = Scalar("C_2")
-I1 = tr(C)
-I2 = 0.5 * ((tr(C))^2 - tr(C*C))
+I1 = Tr(C)
+I2 = 0.5 * ((Tr(C))^2 - Tr(C*C))
 Psi = C1 * (I1 - 3) + C2 * (I2 - 3)
-S = 2 * diff(Psi, C)
-export(S, format=latex)
+S = 2 * Diff(Psi, C)
+S.show()
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -50,14 +49,14 @@ export(S, format=latex)
     );
     assert!(
         latex.contains("C_2 \\, \\left( I1 \\, \\bm I - \\bm C \\right)"),
-        "missing simplified d tr(CC)/dC contribution: {latex}"
+        "missing simplified d Tr(CC)/dC contribution: {latex}"
     );
 }
 
 #[test]
 fn diff_by_compound_log_det() {
     // ∂log(det C)/∂C = C^{-T}
-    let src = format!("{PRELUDE}\nW = log(det(C))\nS = diff(W, C)\nexport(S, format=latex)");
+    let src = format!("{PRELUDE}\nW = log(Det(C))\nS = Diff(W, C)\nS.show()");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0].latex.contains("^{-\\mathsf{T}}"),
@@ -68,9 +67,9 @@ fn diff_by_compound_log_det() {
 
 #[test]
 fn diff_by_compound_rejects_hidden_dependence() {
-    // W = tr(F) depends on F in a way not expressible through C: must be
+    // W = Tr(F) depends on F in a way not expressible through C: must be
     // rejected rather than silently returning 0.
-    let src = format!("{PRELUDE}\nW = tr(F)\nS = diff(W, C)");
+    let src = format!("{PRELUDE}\nW = Tr(F)\nS = Diff(W, C)");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message.contains("compound"),
@@ -85,8 +84,8 @@ fn det_f_rewritten_through_c() {
     // C = FᵀF. det F is rewritten via det C = (det F)²:
     // ∂(-mu log J)/∂C = ∂(-mu/2 log det C)/∂C = -mu/2 C^{-T}.
     let src = format!(
-        "{PRELUDE}\nJ = det(F)\nW = mu/2 * (I1 - 3) - mu * log(J)\n\
-         S = 2 * diff(W, C)\nexport(S, format=latex)"
+        "{PRELUDE}\nJ = Det(F)\nW = mu/2 * (I1 - 3) - mu * log(J)\n\
+         S = 2 * Diff(W, C)\nS.show()"
     );
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
@@ -101,9 +100,9 @@ fn det_f_rewritten_through_c() {
 fn full_neo_hookean_second_piola() {
     // S = 2 ∂W/∂C for the full neo-Hookean energy written with J = det F.
     let src = format!(
-        "{PRELUDE}\nJ = det(F)\n\
+        "{PRELUDE}\nJ = Det(F)\n\
          W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2\n\
-         S = 2 * diff(W, C)\nexport(S, format=latex)"
+         S = 2 * Diff(W, C)\nS.show()"
     );
     let outputs = run_source(&src).unwrap();
     assert!(
@@ -115,7 +114,7 @@ fn full_neo_hookean_second_piola() {
 
 #[test]
 fn colon_operator_is_double_contraction() {
-    let src = format!("{PRELUDE}\ng = C : C\ndisplay(g, mode=symbol)");
+    let src = format!("{PRELUDE}\ng = C : C\ng.show(symbol)");
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert!(
         outputs[0].latex.contains(" : "),
@@ -128,8 +127,7 @@ fn colon_operator_is_double_contraction() {
 #[test]
 fn colon_with_diff_result() {
     // G = C : ∂W/∂C — the user's reported case.
-    let src =
-        format!("{PRELUDE}\nW = mu/2 * (I1 - 3)\nG = C : diff(W, C)\ndisplay(G, mode=symbol)");
+    let src = format!("{PRELUDE}\nW = mu/2 * (I1 - 3)\nG = C : Diff(W, C)\nG.show(symbol)");
     let outputs = run_source(&src).unwrap();
     assert!(
         outputs[0].latex.contains(" : "),
@@ -140,7 +138,7 @@ fn colon_with_diff_result() {
 
 #[test]
 fn tensor_by_compound_denominator_uses_synthetic_base() {
-    let src = format!("{PRELUDE}\nD = diff(C, C)\ndisplay(D, mode=symbol)");
+    let src = format!("{PRELUDE}\nD = Diff(C, C)\nD.show(symbol)");
     let outputs = run_source(&src).unwrap();
     let latex = &outputs[0].latex;
     assert!(latex.contains("\\mathbb{I}"), "got: {latex}");
@@ -152,7 +150,7 @@ fn tensor_by_compound_denominator_uses_synthetic_base() {
 
 #[test]
 fn tensor_by_compound_rejects_hidden_dependence() {
-    let src = format!("{PRELUDE}\nD = diff(F, C)");
+    let src = format!("{PRELUDE}\nD = Diff(F, C)");
     let err = run_source(&src).unwrap_err();
     assert!(
         err.message.contains("compound expression"),
@@ -166,18 +164,18 @@ fn isochoric_cbar_chain_rule_runs() {
     let src = r#"
 mu = Scalar("\mu")
 F = Tensor("\bm F", order=2, dim=3)
-J = det(F)
+J = Det(F)
 C = Tensor("\bm C", order=2, dim=3)
 C = F.T * F
 C_bar = Tensor("\bar{\bm C}", order=2, dim=3)
 C_bar = J^(-(2/3)) * C
 I_1_bar = Scalar("\bar{I}_1")
-I_1_bar = tr(C_bar)
+I_1_bar = Tr(C_bar)
 Psi = Scalar("\Psi")
 Psi = 1/2 * mu * I_1_bar
 S = Tensor("\bm S", order=2, dim=3)
-S = 2 * diff(Psi, C_bar) : diff(C_bar, C)
-display(S, mode=symbol)
+S = 2 * Diff(Psi, C_bar) : Diff(C_bar, C)
+S.show(symbol)
 "#;
     let (outputs, interp) = run_source_with_env(src).unwrap();
     match interp.get("S") {
@@ -202,18 +200,18 @@ fn isochoric_stress_direct_diff_by_c_runs_chain_rule() {
     let src = r#"
 mu = Scalar("\mu")
 F = Tensor("\bm F", order=2, dim=3)
-J = det(F)
+J = Det(F)
 C = Tensor("\bm C", order=2, dim=3)
 C = F.T * F
 C_bar = Tensor("\bar{\bm C}", order=2, dim=3)
 C_bar = J^(-(2/3)) * C
 I_1_bar = Scalar("\bar{I}_1")
-I_1_bar = tr(C_bar)
+I_1_bar = Tr(C_bar)
 Psi = Scalar("\Psi")
 Psi = 1/2 * mu * I_1_bar
 S = Tensor("\bm S", order=2, dim=3)
-S = 2 * diff(Psi, C)
-display(S, mode=symbol)
+S = 2 * Diff(Psi, C)
+S.show(symbol)
 "#;
     let (outputs, interp) = run_source_with_env(src).unwrap();
     match interp.get("S") {
@@ -245,7 +243,7 @@ display(S, mode=symbol)
     assert!(!latex.contains("2 \\, \\frac{1}{2}"), "got: {latex}");
     assert!(
         !latex.contains("\\partial"),
-        "direct diff(Psi, C) should apply the chain rule: {latex}"
+        "direct Diff(Psi, C) should apply the chain rule: {latex}"
     );
 }
 
@@ -253,13 +251,13 @@ display(S, mode=symbol)
 fn isochoric_cbar_derivative_symbol_includes_projection_terms() {
     let src = r#"
 F = Tensor("\bm F", order=2, dim=3)
-J = det(F)
+J = Det(F)
 C = Tensor("\bm C", order=2, dim=3)
 C = F.T * F
 C_bar = Tensor("\bar{\bm C}", order=2, dim=3)
 C_bar = J^(-(2/3)) * C
-D = diff(C_bar, C)
-display(D, mode=symbol)
+D = Diff(C_bar, C)
+D.show(symbol)
 "#;
     let (outputs, interp) = run_source_with_env(src).unwrap();
     match interp.get("D") {
@@ -296,11 +294,11 @@ display(D, mode=symbol)
 fn cauchy_green_determinant_displays_through_jacobian() {
     let src = r#"
 F = Tensor("\bm F", order=2, dim=3)
-J = det(F)
+J = Det(F)
 C = Tensor("\bm C", order=2, dim=3)
 C = F.T * F
-display(det(C), mode=symbol)
-display(det(C)^(-1/3), mode=symbol)
+Det(C).show(symbol)
+(Det(C)^(-1/3)).show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     assert!(
@@ -319,12 +317,12 @@ display(det(C)^(-1/3), mode=symbol)
 fn negative_fraction_exponent_renders_sign_outside_fraction() {
     let src = r#"
 F = Tensor("\bm F", order=2, dim=3)
-J = det(F)
+J = Det(F)
 C = Tensor("\bm C", order=2, dim=3)
 C = F.T * F
 C_bar = Tensor("\bar{\bm C}", order=2, dim=3)
 C_bar = J^(-2/3) * C
-display(C_bar, mode=symbol)
+C_bar.show(symbol)
 "#;
     let outputs = run_source(src).unwrap();
     let latex = &outputs[0].latex;
@@ -339,8 +337,8 @@ fn colon_rejects_scalar_operand() {
 }
 
 #[test]
-fn otimes_is_outer_alias() {
-    let src = format!("{PRELUDE}\nO = otimes(F, F)\ndisplay(O, mode=symbol)");
+fn ampersand_replaces_otimes_alias() {
+    let src = format!("{PRELUDE}\nO = F & F\nO.show(symbol)");
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert!(
         outputs[0].latex.contains("\\bm F \\otimes \\bm F"),
@@ -356,7 +354,7 @@ fn otimes_is_outer_alias() {
 #[test]
 fn diff_by_scalar() {
     // ∂W/∂mu for W = mu/2 (I1 - 3): the coefficient (I1 - 3)/2 survives.
-    let src = format!("{PRELUDE}\nW = mu/2 * (I1 - 3)\na = diff(W, mu)\ndisplay(a, mode=symbol)");
+    let src = format!("{PRELUDE}\nW = mu/2 * (I1 - 3)\na = Diff(W, mu)\na.show(symbol)");
     let (outputs, interp) = run_source_with_env(&src).unwrap();
     assert!(matches!(interp.get("a"), Some(Value::Scalar(_))));
     let latex = &outputs[0].latex;
@@ -373,15 +371,14 @@ fn diff_by_scalar() {
 #[test]
 fn diff_by_scalar_log_term() {
     // ∂(mu log J)/∂mu displays through the user-defined J.
-    let src =
-        format!("{PRELUDE}\nJ = det(F)\nW = mu * log(J)\na = diff(W, mu)\nexport(a, format=latex)");
+    let src = format!("{PRELUDE}\nJ = Det(F)\nW = mu * log(J)\na = Diff(W, mu)\na.show()");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "\\log J");
+    assert_eq!(outputs[0].latex, "a = \\log J");
 }
 
 #[test]
 fn diff_by_scalar_of_independent_expr_is_zero() {
-    let src = format!("{PRELUDE}\nW = lambda * (I1 - 3)\na = diff(W, mu)\nexport(a, format=latex)");
+    let src = format!("{PRELUDE}\nW = lambda * (I1 - 3)\na = Diff(W, mu)\na.show()");
     let outputs = run_source(&src).unwrap();
-    assert_eq!(outputs[0].latex, "0");
+    assert_eq!(outputs[0].latex, "a = 0");
 }

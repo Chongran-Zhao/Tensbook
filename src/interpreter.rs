@@ -1,6 +1,6 @@
 //! The interpreter: evaluates the syntactic AST into semantic values,
 //! maintains the environment, performs type checking, and executes
-//! `display` / `export` commands.
+//! `.show(...)` output commands.
 
 use crate::ast::{BinOp, Expr, Stmt, UnOp};
 use crate::differentiation::{
@@ -12,6 +12,7 @@ use crate::metadata::{
     display_capabilities_for_kind, display_capability_for_kind, tensor_characteristic, value_kind,
     DisplayCapabilityState, SymbolInfo, ValueKind,
 };
+use crate::ode::{Equation, InitialCondition, OdeClassification, OdeSolution};
 use crate::renderer::components::{tensor_to_block_component_matrix, tensor_to_component_matrix};
 use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
 use crate::simplifier::{simplify_scalar, simplify_tensor, RuleSet};
@@ -26,16 +27,20 @@ use std::rc::Rc;
 pub enum Value {
     Scalar(Rc<ScalarExpr>),
     Tensor(Rc<TensorExpr>),
+    Equation(Rc<Equation>),
+    InitialCondition(Rc<InitialCondition>),
+    OdeClassification(Rc<OdeClassification>),
+    OdeSolution(Rc<OdeSolution>),
 }
 
-/// One line of output produced by `display(...)` or `export(...)`.
+/// One line of output produced by `.show(...)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Output {
-    /// e.g. `display C, mode=symbol` or `export C, format=latex`
+    /// e.g. `C.show()` or `C.show(matrix)`.
     pub header: String,
     /// LaTeX payload.
     pub latex: String,
-    /// 1-based source line of the display/export statement.
+    /// 1-based source line of the show statement.
     pub line: usize,
     /// `Some(message)` if this statement failed (per-block error recovery).
     pub error: Option<String>,
@@ -48,7 +53,7 @@ pub struct Interpreter {
     env: HashMap<String, Value>,
     /// LaTeX display labels declared via `Scalar("...")` / `Tensor("...")`,
     /// keyed by variable name. Labels survive reassignment, so
-    /// `I1 = Scalar("I_1")` followed by `I1 = tr(C)` still displays as
+    /// `I1 = Scalar("I_1")` followed by `I1 = Tr(C)` still displays as
     /// `I_1 = ...`.
     labels: HashMap<String, String>,
     /// Definitions for display-time back-substitution, in insertion order:
@@ -61,7 +66,7 @@ pub struct Interpreter {
     display_values: HashMap<String, Value>,
     /// Names whose definitions are computed results rather than display
     /// aliases. These expand in later displays; foundational notation such as
-    /// `C = F.T * F`, `J = det(F)`, `I1 = tr(C)` remains aliasable.
+    /// `C = F.T * F`, `J = Det(F)`, `I1 = Tr(C)` remains aliasable.
     derived_names: HashSet<String>,
     /// Symbol names declared as function arguments via `Var("...")`, in
     /// declaration order. A scalar expression mentioning exactly one of
@@ -83,7 +88,7 @@ struct SetDecl {
     /// `true` for VectorSet (order-1 elements), `false` for ScalarSet.
     vector: bool,
     dim: usize,
-    /// The decomposed tensor when declared via `eigvals(...)`/`eigvecs(...)`.
+    /// The decomposed tensor when declared via `Spectral(...)`.
     base: Option<Rc<TensorExpr>>,
     /// Concrete element values filled in by `[a, b] = Spec_Decomp(C)`:
     /// scalar expressions for a ScalarSet, order-1 `Filled` vectors for a
@@ -98,6 +103,16 @@ struct OutputSubject {
     header: String,
     /// LaTeX left-hand side for display output.
     lhs: Option<String>,
+}
+
+enum DiffTarget {
+    Scalar {
+        name: String,
+    },
+    Tensor {
+        value: Rc<TensorExpr>,
+        label: Option<String>,
+    },
 }
 
 impl Interpreter {
@@ -166,16 +181,16 @@ impl Interpreter {
                     if callee == "ScalarSet" || callee == "VectorSet" {
                         return self.declare_set(name, callee, args, kwargs);
                     }
-                    if callee == "eigvals" || callee == "eigvecs" {
-                        return self.declare_eig_set(name, callee, args, kwargs);
-                    }
                 }
                 let value = self.eval(expr)?;
                 let display_value = self.eval_display_value(expr).ok();
                 // A direct Scalar("...")/Tensor("...") declaration also
                 // registers the display label for this variable name.
                 if let Expr::Call { callee, args, .. } = expr {
-                    if (callee == "Scalar" || callee == "Tensor" || callee == "Var")
+                    if (callee == "Scalar"
+                        || callee == "Tensor"
+                        || callee == "Var"
+                        || callee == "Function")
                         && !args.is_empty()
                     {
                         if let Expr::Str(latex) = &args[0] {
@@ -188,7 +203,12 @@ impl Interpreter {
                     Value::Tensor(t) if matches!(&**t, TensorExpr::Var { .. })
                 ) || matches!(
                     &value,
-                    Value::Scalar(s) if matches!(&**s, ScalarExpr::Sym { .. } | ScalarExpr::Num(_))
+                    Value::Scalar(s) if matches!(
+                        &**s,
+                        ScalarExpr::Sym { .. }
+                            | ScalarExpr::Num(_)
+                            | ScalarExpr::UnknownFunc { .. }
+                    )
                 );
                 let is_derived = self.expr_is_derived_display_result(expr);
                 // Register compound definitions for display-time
@@ -234,16 +254,15 @@ impl Interpreter {
                 ..
             } => self.exec_assign_pair(first, second, expr),
             Stmt::Expr(
-                Expr::Call {
-                    callee,
+                Expr::MethodCall {
+                    target,
+                    method,
                     args,
                     kwargs,
                 },
                 line,
                 block,
-            ) if callee == "display" || callee == "export" => {
-                self.exec_output(callee, args, kwargs, *line, *block, None)
-            }
+            ) if method == "show" => self.exec_show(target, args, kwargs, *line, *block, None),
             Stmt::OutputRow { exprs, line, block } => self.exec_output_row(exprs, *line, *block),
             Stmt::Expr(expr, _, _) => {
                 // Evaluate for the side effect of error checking.
@@ -266,6 +285,12 @@ impl Interpreter {
             Value::Scalar(s) => s,
             Value::Tensor(_) => {
                 return Err(Error::msg("a tensor component must be a scalar expression"))
+            }
+            other => {
+                return Err(Error::msg(format!(
+                    "a tensor component must be a scalar expression, got {}",
+                    kind(&other)
+                )))
             }
         };
         let (latex, order, dim, mut entries) = match self.env.get(name) {
@@ -295,6 +320,12 @@ impl Interpreter {
             },
             Some(Value::Scalar(_)) => {
                 return Err(Error::msg(format!("`{name}` is a scalar, not a tensor")))
+            }
+            Some(other) => {
+                return Err(Error::msg(format!(
+                    "`{name}` is {}, not a tensor",
+                    kind(other)
+                )))
             }
             None => {
                 return Err(Error::msg(format!(
@@ -334,8 +365,10 @@ impl Interpreter {
         Ok(())
     }
 
-    /// `[a, b] = Spec_Decomp(C)` — symbolic eigendecomposition of a
+    /// `[a, b] = Spec_Decomp(C)` — concrete eigendecomposition of a
     /// component-filled (diagonal) tensor into two pre-declared sets.
+    /// `[lambda, N] = Spectral(C, "\lambda", "\bm N")` — symbolic spectral
+    /// sets tied to a provably symmetric second-order tensor.
     fn exec_assign_pair(&mut self, first: &str, second: &str, expr: &Expr) -> Result<(), Error> {
         let Expr::Call {
             callee,
@@ -344,20 +377,37 @@ impl Interpreter {
         } = expr
         else {
             return Err(Error::msg(
-                "`[a, b] = ...` expects Spec_Decomp(C) on the right-hand side",
+                "`[a, b] = ...` expects Spec_Decomp(C) or Spectral(C, \"<scalar>\", \"<vector>\")",
             ));
         };
-        if callee != "Spec_Decomp" {
-            return Err(Error::msg(format!(
-                "`[a, b] = ...` expects Spec_Decomp(C), got `{callee}`"
-            )));
+        match callee.as_str() {
+            "Spec_Decomp" => self.exec_spec_decomp_pair(first, second, args, kwargs),
+            "Spectral" => self.declare_spectral_pair(first, second, args, kwargs),
+            _ => Err(Error::msg(format!(
+                "`[a, b] = ...` expects Spec_Decomp(...) or Spectral(...), got `{callee}`"
+            ))),
         }
+    }
+
+    fn exec_spec_decomp_pair(
+        &mut self,
+        first: &str,
+        second: &str,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<(), Error> {
         if args.len() != 1 || !kwargs.is_empty() {
             return Err(Error::msg("`Spec_Decomp` takes exactly one tensor"));
         }
         let c = match self.eval(&args[0])? {
             Value::Tensor(t) => t,
             Value::Scalar(_) => return Err(Error::msg("`Spec_Decomp` requires a tensor argument")),
+            other => {
+                return Err(Error::msg(format!(
+                    "`Spec_Decomp` requires a tensor argument, got {}",
+                    kind(&other)
+                )))
+            }
         };
         if c.order() != 2 {
             return Err(Error::msg("`Spec_Decomp` requires a second-order tensor"));
@@ -440,6 +490,76 @@ impl Interpreter {
         Ok(())
     }
 
+    fn declare_spectral_pair(
+        &mut self,
+        first: &str,
+        second: &str,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<(), Error> {
+        if args.len() != 3 || !kwargs.is_empty() {
+            return Err(Error::msg(format!(
+                "`Spectral` expects a tensor, a scalar LaTeX name, and a vector \
+                 LaTeX name: [{first}, {second}] = Spectral(C, \"<scalar>\", \"<vector>\")"
+            )));
+        }
+        let base = match self.eval(&args[0])? {
+            Value::Tensor(t) => t,
+            Value::Scalar(_) => return Err(Error::msg("`Spectral` requires a tensor argument")),
+            other => {
+                return Err(Error::msg(format!(
+                    "`Spectral` requires a tensor argument, got {}",
+                    kind(&other)
+                )))
+            }
+        };
+        if base.order() != 2 || !base.is_symmetric() {
+            return Err(Error::msg(
+                "`Spectral` requires a provably symmetric second-order tensor \
+                 (e.g. C = F.T * F)",
+            ));
+        }
+        let Expr::Str(scalar_latex) = &args[1] else {
+            return Err(Error::msg(
+                "`Spectral` expects a string LaTeX name for the scalar set",
+            ));
+        };
+        let Expr::Str(vector_latex) = &args[2] else {
+            return Err(Error::msg(
+                "`Spectral` expects a string LaTeX name for the vector set",
+            ));
+        };
+        self.labels.insert(first.to_string(), scalar_latex.clone());
+        self.labels.insert(second.to_string(), vector_latex.clone());
+        self.sets.insert(
+            first.to_string(),
+            SetDecl {
+                latex: scalar_latex.clone(),
+                vector: false,
+                dim: base.dim(),
+                base: Some(base.clone()),
+                values: None,
+            },
+        );
+        self.sets.insert(
+            second.to_string(),
+            SetDecl {
+                latex: vector_latex.clone(),
+                vector: true,
+                dim: base.dim(),
+                base: Some(base),
+                values: None,
+            },
+        );
+        if let Some(decl) = self.sets.get(first).cloned() {
+            self.register_set_symbol(first, &decl);
+        }
+        if let Some(decl) = self.sets.get(second).cloned() {
+            self.register_set_symbol(second, &decl);
+        }
+        Ok(())
+    }
+
     // ---- evaluation ------------------------------------------------------
 
     fn eval(&mut self, expr: &Expr) -> Result<Value, Error> {
@@ -451,7 +571,7 @@ impl Interpreter {
                 .cloned()
                 .ok_or_else(|| Error::msg(format!("undefined variable `{name}`"))),
             Expr::Str(_) | Expr::Bool(_) => Err(Error::msg(
-                "string/bool literals are only valid as arguments to Scalar/Tensor/display/export",
+                "string/bool literals are only valid as supported command arguments",
             )),
             Expr::Field { target, name } => {
                 let value = self.eval(target)?;
@@ -469,6 +589,10 @@ impl Interpreter {
             } => match self.eval(expr)? {
                 Value::Scalar(s) => Ok(Value::Scalar(Rc::new(ScalarExpr::Neg(s)))),
                 Value::Tensor(t) => Ok(Value::Tensor(Rc::new(TensorExpr::Neg(t)))),
+                other => Err(Error::msg(format!(
+                    "unary `-` is not defined for {}",
+                    kind(&other)
+                ))),
             },
             Expr::Binary { op, lhs, rhs } => {
                 let l = self.eval(lhs)?;
@@ -476,6 +600,12 @@ impl Interpreter {
                 self.eval_binary(*op, l, r)
             }
             Expr::Index { target, index } => self.eval_index(target, index),
+            Expr::MethodCall { method, .. } if method == "show" => Err(Error::msg(
+                "`.show(...)` is an output statement and cannot be used inside an expression",
+            )),
+            Expr::MethodCall { method, .. } => {
+                Err(Error::msg(format!("unknown method `.{method}(...)`")))
+            }
             Expr::Call {
                 callee,
                 args,
@@ -502,6 +632,10 @@ impl Interpreter {
             } => match self.eval_display_value(expr)? {
                 Value::Scalar(s) => Ok(Value::Scalar(Rc::new(ScalarExpr::Neg(s)))),
                 Value::Tensor(t) => Ok(Value::Tensor(Rc::new(TensorExpr::Neg(t)))),
+                other => Err(Error::msg(format!(
+                    "unary `-` is not defined for {}",
+                    kind(&other)
+                ))),
             },
             Expr::Binary { op, lhs, rhs } => {
                 let l = self.eval_display_value(lhs)?;
@@ -536,8 +670,12 @@ impl Interpreter {
             }
             (Ddot, Value::Tensor(a), Value::Tensor(b)) => match (a.order(), b.order()) {
                 (2, 2) => Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b)))),
-                (2, 4) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(a, b)?))),
-                (4, 2) => Ok(Value::Tensor(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                (2, 4) => Ok(Value::Tensor(Rc::new(
+                    TensorExpr::double_contract_second_fourth(a, b)?,
+                ))),
+                (4, 2) => Ok(Value::Tensor(Rc::new(
+                    TensorExpr::double_contract_second_fourth(b, a)?,
+                ))),
                 (oa, ob) => Err(Error::msg(format!(
                     "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
                      {oa} and {ob}"
@@ -576,8 +714,12 @@ impl Interpreter {
                     }
                     Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
                 }
-                (2, 4) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(a, b)?))),
-                (4, 2) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(b, a)?))),
+                (2, 4) => Ok(simplified_tensor_value(Rc::new(
+                    TensorExpr::double_contract_second_fourth(a, b)?,
+                ))),
+                (4, 2) => Ok(simplified_tensor_value(Rc::new(
+                    TensorExpr::double_contract_second_fourth(b, a)?,
+                ))),
                 (oa, ob) => Err(Error::msg(format!(
                     "`:` supports 2:2, 2:4 and 4:2 contractions, got orders \
                          {oa} and {ob}"
@@ -673,13 +815,18 @@ impl Interpreter {
         match callee {
             "Scalar" => self.builtin_scalar(args, kwargs),
             "Var" => self.builtin_var(args, kwargs),
+            "Function" => self.builtin_function(args, kwargs),
             "Tensor" => self.builtin_tensor(args, kwargs),
-            "sum" => self.builtin_sum(args, kwargs),
-            "ScalarSet" | "VectorSet" | "eigvals" | "eigvecs" => Err(Error::msg(format!(
+            "Sum" => self.builtin_sum(args, kwargs),
+            "ScalarSet" | "VectorSet" => Err(Error::msg(format!(
                 "`{callee}` declares a set and must be used in an assignment, \
                  e.g. lambda = {callee}(...)"
             ))),
-            "det" | "tr" => {
+            "Spectral" => Err(Error::msg(
+                "`Spectral` returns two sets and must be used as \
+                 `[lambda, N] = Spectral(C, \"\\lambda\", \"\\bm N\")`",
+            )),
+            "Det" | "Tr" => {
                 let t = self.expect_tensor_arg(callee, args, kwargs)?;
                 if t.order() != 2 {
                     return Err(Error::msg(format!(
@@ -687,14 +834,14 @@ impl Interpreter {
                         t.order()
                     )));
                 }
-                let node = if callee == "det" {
+                let node = if callee == "Det" {
                     ScalarExpr::Det(t)
                 } else {
                     ScalarExpr::Tr(t)
                 };
                 Ok(Value::Scalar(Rc::new(node)))
             }
-            "log" | "sqrt" | "exp" | "sinh" | "cosh" | "tanh" => {
+            "log" | "sqrt" | "exp" | "sinh" | "cosh" | "tanh" | "sin" | "cos" | "tan" => {
                 if args.len() != 1 || !kwargs.is_empty() {
                     return Err(Error::msg(format!("`{callee}` takes exactly one argument")));
                 }
@@ -708,50 +855,29 @@ impl Interpreter {
                     },
                     Value::Tensor(_) => Err(Error::msg(format!(
                         "`{callee}` of a tensor is not supported; write the spectral \
-                         form explicitly, e.g. sum({callee}(lambda[a]) * N[a] & N[a], a)"
+                         form explicitly, e.g. Sum({callee}(lambda[a]) * N[a] & N[a], a)"
+                    ))),
+                    other => Err(Error::msg(format!(
+                        "`{callee}` expects a scalar argument, got {}",
+                        kind(&other)
                     ))),
                 }
             }
-            "diff" => self.builtin_diff(args, kwargs),
-            "outer" | "otimes" => {
-                let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
-                Ok(Value::Tensor(Rc::new(TensorExpr::outer(a, b)?)))
-            }
-            // dot(A, B): single contraction — same operation as `A * B` for
-            // second-order tensors.
-            "dot" => {
-                let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
-                Ok(Value::Tensor(Rc::new(TensorExpr::matmul(a, b)?)))
-            }
-            // ddot(A, B): double contraction. 2:2 → scalar; 2:4 / 4:2 → order 2.
-            "ddot" => {
-                let (a, b) = self.expect_two_tensors(callee, args, kwargs)?;
-                match (a.order(), b.order()) {
-                    (2, 2) => {
-                        if a.dim() != b.dim() {
-                            return Err(Error::msg(format!(
-                                "dimension mismatch in ddot: {} vs {}",
-                                a.dim(),
-                                b.dim()
-                            )));
-                        }
-                        Ok(Value::Scalar(Rc::new(ScalarExpr::Ddot(a, b))))
-                    }
-                    (2, 4) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(a, b)?))),
-                    (4, 2) => Ok(simplified_tensor_value(Rc::new(TensorExpr::ddot_tq(b, a)?))),
-                    (oa, ob) => Err(Error::msg(format!(
-                        "`ddot` supports 2:2, 2:4 and 4:2 contractions, got orders \
-                         {oa} and {ob}"
-                    ))),
-                }
-            }
-            "inv" => {
+            "Diff" => self.builtin_diff(args, kwargs),
+            "Derivative" => self.builtin_derivative(args, kwargs),
+            "Equation" => self.builtin_equation(args, kwargs),
+            "Integrate" => self.builtin_integrate(args, kwargs),
+            "Integral" => self.builtin_integral(args, kwargs),
+            "IC" => self.builtin_ic(args, kwargs),
+            "ClassifyODE" => self.builtin_classify_ode(args, kwargs),
+            "SolveODE" => self.builtin_solve_ode(args, kwargs),
+            "Inv" => {
                 let t = self.expect_tensor_arg(callee, args, kwargs)?;
                 Ok(Value::Tensor(Rc::new(TensorExpr::inverse(t)?)))
             }
-            "simplify" => {
+            "Simplify" => {
                 if args.len() != 1 {
-                    return Err(Error::msg("`simplify` expects one expression argument"));
+                    return Err(Error::msg("`Simplify` expects one expression argument"));
                 }
                 let mut rules = RuleSet::Continuum;
                 for (key, value) in kwargs {
@@ -761,7 +887,7 @@ impl Interpreter {
                         }
                         (other, _) => {
                             return Err(Error::msg(format!(
-                                "unknown keyword `{other}` for `simplify`"
+                                "unknown keyword `{other}` for `Simplify`"
                             )))
                         }
                     }
@@ -769,11 +895,32 @@ impl Interpreter {
                 match self.eval(&args[0])? {
                     Value::Scalar(s) => Ok(Value::Scalar(simplify_scalar(&s, rules))),
                     Value::Tensor(t) => Ok(Value::Tensor(simplify_tensor(&t, rules))),
+                    other => Err(Error::msg(format!(
+                        "`Simplify` expects a scalar or tensor, got {}",
+                        kind(&other)
+                    ))),
                 }
             }
-            "display" | "export" => Err(Error::msg(format!(
-                "`{callee}` is a statement and cannot be used inside an expression"
+            "diff" => Err(renamed_builtin_error("diff", "Diff")),
+            "simplify" => Err(renamed_builtin_error("simplify", "Simplify")),
+            "sum" => Err(renamed_builtin_error("sum", "Sum")),
+            "det" => Err(renamed_builtin_error("det", "Det")),
+            "tr" => Err(renamed_builtin_error("tr", "Tr")),
+            "inv" => Err(renamed_builtin_error("inv", "Inv")),
+            "dot" => Err(Error::msg("`dot(A, B)` was removed; use `A * B`")),
+            "outer" | "otimes" => Err(Error::msg(format!(
+                "`{callee}(A, B)` was removed; use `A & B`"
             ))),
+            "display" => Err(Error::msg(
+                "`display(expr, mode=...)` was removed; use `expr.show(...)`",
+            )),
+            "export" => Err(Error::msg(
+                "`export(...)` was removed from the DSL; use the app Export button",
+            )),
+            "eigvals" | "eigvecs" => Err(Error::msg(
+                "`eigvals/eigvecs` were removed; use \
+                 `[lambda, N] = Spectral(C, \"\\lambda\", \"\\bm N\")`",
+            )),
             // A user-defined name bound to a scalar expression in a declared
             // `Var` argument is a function: `E(x)` substitutes the argument.
             other => match self.env.get(other).cloned() {
@@ -781,6 +928,10 @@ impl Interpreter {
                 Some(Value::Tensor(_)) => {
                     Err(Error::msg(format!("`{other}` is a tensor, not a function")))
                 }
+                Some(value) => Err(Error::msg(format!(
+                    "`{other}` is {}, not a function",
+                    kind(&value)
+                ))),
                 None => Err(Error::msg(format!("unknown function `{other}`"))),
             },
         }
@@ -800,118 +951,352 @@ impl Interpreter {
             Value::Scalar(_) => Err(Error::msg(format!(
                 "`{callee}` requires a tensor argument, got a scalar"
             ))),
+            other => Err(Error::msg(format!(
+                "`{callee}` requires a tensor argument, got {}",
+                kind(&other)
+            ))),
         }
     }
 
-    fn expect_two_tensors(
+    fn expect_scalar_value(&mut self, expr: &Expr, what: &str) -> Result<Rc<ScalarExpr>, Error> {
+        match self.eval(expr)? {
+            Value::Scalar(s) => Ok(s),
+            other => Err(Error::msg(format!(
+                "`{what}` expects a scalar expression, got {}",
+                kind(&other)
+            ))),
+        }
+    }
+
+    fn builtin_equation(
         &mut self,
-        callee: &str,
         args: &[Expr],
         kwargs: &[(String, Expr)],
-    ) -> Result<(Rc<TensorExpr>, Rc<TensorExpr>), Error> {
+    ) -> Result<Value, Error> {
         if args.len() != 2 || !kwargs.is_empty() {
-            return Err(Error::msg(format!(
-                "`{callee}` takes exactly two tensor arguments"
-            )));
+            return Err(Error::msg(
+                "`Equation` expects two scalar expressions: Equation(lhs, rhs)",
+            ));
         }
-        let a = match self.eval(&args[0])? {
-            Value::Tensor(t) => t,
-            Value::Scalar(_) => {
+        let lhs = self.expect_scalar_value(&args[0], "Equation")?;
+        let rhs = self.expect_scalar_value(&args[1], "Equation")?;
+        Ok(Value::Equation(Rc::new(crate::ode::equation(lhs, rhs))))
+    }
+
+    fn builtin_integrate(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() != 2 || !kwargs.is_empty() {
+            return Err(Error::msg(
+                "`Integrate` expects two arguments: Integrate(expr, x)",
+            ));
+        }
+        let expr = self.expect_scalar_value(&args[0], "Integrate")?;
+        let var = self.expect_scalar_value(&args[1], "Integrate")?;
+        Ok(Value::Scalar(crate::integration::integrate(&expr, &var)?))
+    }
+
+    fn builtin_integral(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() != 2 || !kwargs.is_empty() {
+            return Err(Error::msg(
+                "`Integral` expects two arguments: Integral(expr, x)",
+            ));
+        }
+        let expr = self.expect_scalar_value(&args[0], "Integral")?;
+        let var = self.expect_scalar_value(&args[1], "Integral")?;
+        Ok(Value::Scalar(crate::integration::formal_integral(
+            expr, var,
+        )))
+    }
+
+    fn builtin_ic(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
+        if args.len() != 2 || !kwargs.is_empty() {
+            return Err(Error::msg("`IC` expects two arguments: IC(y(x0), y0)"));
+        }
+        let function = self.expect_scalar_value(&args[0], "IC")?;
+        let point = match &*function {
+            ScalarExpr::UnknownFunc { args, .. } if args.len() == 1 => args[0].clone(),
+            _ => {
+                return Err(Error::msg(
+                    "`IC` first argument must be a function value such as y(1)",
+                ))
+            }
+        };
+        let value = self.expect_scalar_value(&args[1], "IC")?;
+        Ok(Value::InitialCondition(Rc::new(InitialCondition {
+            function,
+            point,
+            value,
+        })))
+    }
+
+    fn builtin_classify_ode(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() != 3 || !kwargs.is_empty() {
+            return Err(Error::msg("`ClassifyODE` expects ClassifyODE(eq, y, x)"));
+        }
+        let eq = match self.eval(&args[0])? {
+            Value::Equation(eq) => eq,
+            other => {
                 return Err(Error::msg(format!(
-                    "`{callee}` requires tensor arguments, got a scalar"
+                    "`ClassifyODE` expects an Equation as its first argument, got {}",
+                    kind(&other)
                 )))
             }
         };
-        let b = match self.eval(&args[1])? {
-            Value::Tensor(t) => t,
-            Value::Scalar(_) => {
+        let target = self.expect_scalar_value(&args[1], "ClassifyODE")?;
+        let independent = self.expect_scalar_value(&args[2], "ClassifyODE")?;
+        Ok(Value::OdeClassification(Rc::new(crate::ode::classify(
+            &eq,
+            &target,
+            &independent,
+        )?)))
+    }
+
+    fn builtin_solve_ode(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() != 3 {
+            return Err(Error::msg("`SolveODE` expects SolveODE(eq, y, x, ic=...)"));
+        }
+        let mut ic = None;
+        for (key, value) in kwargs {
+            match key.as_str() {
+                "ic" => match self.eval(value)? {
+                    Value::InitialCondition(v) => ic = Some((*v).clone()),
+                    other => {
+                        return Err(Error::msg(format!(
+                            "`SolveODE` keyword `ic` expects IC(...), got {}",
+                            kind(&other)
+                        )))
+                    }
+                },
+                other => {
+                    return Err(Error::msg(format!(
+                        "unknown keyword `{other}` for `SolveODE`"
+                    )))
+                }
+            }
+        }
+        let eq = match self.eval(&args[0])? {
+            Value::Equation(eq) => eq,
+            other => {
                 return Err(Error::msg(format!(
-                    "`{callee}` requires tensor arguments, got a scalar"
+                    "`SolveODE` expects an Equation as its first argument, got {}",
+                    kind(&other)
                 )))
             }
         };
-        Ok((a, b))
+        let target = self.expect_scalar_value(&args[1], "SolveODE")?;
+        let independent = self.expect_scalar_value(&args[2], "SolveODE")?;
+        Ok(Value::OdeSolution(Rc::new(crate::ode::solve(
+            &eq,
+            &target,
+            &independent,
+            ic,
+        )?)))
     }
 
     // ---- builtins: declarations ------------------------------------------
 
-    /// `diff(expr, X)` — symbolic derivative.
+    /// `Diff(expr, X, order=n)` — evaluated symbolic derivative. `order` defaults to 1;
+    /// higher orders are evaluated by repeated differentiation.
     ///
     /// Denominator forms:
-    /// - declared scalar symbol (`diff(W, mu)`) → scalar derivative;
-    /// - tensor variable or compound tensor expression (`diff(W, F)`,
-    ///   `diff(W, C)` with `C = F.T * F`) → tensor-valued derivative; a
+    /// - declared scalar symbol (`Diff(W, mu)`) → scalar derivative;
+    /// - tensor variable or compound tensor expression (`Diff(W, F)`,
+    ///   `Diff(W, C)` with `C = F.T * F`) → tensor-valued derivative; a
     ///   compound denominator is treated as the independent variable and
     ///   matched structurally, with a strict independence check rejecting
-    ///   hidden dependence (e.g. `det(F)` inside `diff(…, C)`).
+    ///   hidden dependence (e.g. `Det(F)` inside `Diff(..., C)`).
     /// - tensor / tensor → opaque order-4 `Diff` node.
     fn builtin_diff(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
-        if args.len() != 2 || !kwargs.is_empty() {
+        if args.len() != 2 {
             return Err(Error::msg(
-                "`diff` takes exactly two arguments: diff(expr, X)",
+                "`Diff` takes exactly two positional arguments: Diff(expr, X, order=1)",
             ));
         }
-        let num = self.eval(&args[0])?;
-        let den = self.eval(&args[1])?;
+        let mut order = 1usize;
+        for (key, value) in kwargs {
+            match key.as_str() {
+                "order" => order = expect_usize(value, "order")?,
+                other => return Err(Error::msg(format!("unknown keyword `{other}` for `Diff`"))),
+            }
+        }
 
-        // --- scalar denominator: d/d mu -----------------------------------
-        let den = match den {
+        let den = match self.eval(&args[1])? {
             Value::Scalar(ds) => {
                 let ScalarExpr::Sym { name, .. } = &*ds else {
                     return Err(Error::msg(
-                        "diff with respect to a scalar requires a declared scalar \
+                        "Diff with respect to a scalar requires a declared scalar \
                          symbol (e.g. mu), not a compound expression",
                     ));
                 };
-                return match num {
-                    Value::Scalar(s) => Ok(Value::Scalar(simplify_scalar(
-                        &diff_scalar_by_scalar(&s, name)?,
-                        RuleSet::Continuum,
-                    ))),
-                    Value::Tensor(_) => Err(Error::msg(
-                        "differentiating a tensor with respect to a scalar is not \
-                         supported yet",
-                    )),
-                };
+                DiffTarget::Scalar { name: name.clone() }
             }
-            Value::Tensor(t) => t,
-        };
-
-        if den.order() != 2 {
-            return Err(Error::msg(format!(
-                "diff denominator must be a second-order tensor, got order {}",
-                den.order()
-            )));
-        }
-        match num {
-            Value::Scalar(s) => Ok(Value::Tensor(simplify_tensor(
-                &diff_scalar_by_tensor(&s, &den)?,
-                RuleSet::Continuum,
-            ))),
             Value::Tensor(t) => {
                 if t.order() != 2 {
                     return Err(Error::msg(format!(
-                        "tensor-by-tensor diff currently requires a second-order \
-                         numerator, got order {}",
+                        "Diff denominator must be a second-order tensor, got order {}",
                         t.order()
                     )));
                 }
-                // Label the numerator with its source variable name (if any)
-                // so the symbol display reads ∂C/∂F rather than ∂(FᵀF)/∂F.
-                let num_label = match &args[0] {
+                let label = match &args[1] {
                     Expr::Ident(name) => self.display_lhs(name),
                     _ => None,
                 };
-                let den_label = match &args[1] {
-                    Expr::Ident(name) => self.display_lhs(name),
-                    _ => None,
-                };
-                Ok(Value::Tensor(simplify_tensor(
-                    &diff_tensor_by_tensor(&t, &den, num_label, den_label)?,
-                    RuleSet::Continuum,
+                DiffTarget::Tensor { value: t, label }
+            }
+            other => {
+                return Err(Error::msg(format!(
+                    "Diff denominator must be a scalar or second-order tensor, got {}",
+                    kind(&other)
                 )))
             }
+        };
+
+        let mut value = self.eval(&args[0])?;
+        if matches!(&value, Value::Scalar(s) if scalar_contains_unknown_function(s)) {
+            return Err(Error::msg(
+                "`Diff` evaluates explicit derivatives; use `Derivative(f, x, order=...)` \
+                 for formal derivatives of unknown `Function(...)` objects",
+            ));
         }
+        let first_num_label = match &args[0] {
+            Expr::Ident(name) => self.display_lhs(name),
+            _ => None,
+        };
+        for k in 0..order {
+            let num_label = (k == 0).then(|| first_num_label.clone()).flatten();
+            value = self.diff_once(value, &den, num_label)?;
+        }
+        Ok(value)
+    }
+
+    fn diff_once(
+        &self,
+        num: Value,
+        den: &DiffTarget,
+        num_label: Option<String>,
+    ) -> Result<Value, Error> {
+        match den {
+            DiffTarget::Scalar { name } => match num {
+                Value::Scalar(s) => Ok(Value::Scalar(simplify_scalar(
+                    &diff_scalar_by_scalar(&s, name)?,
+                    RuleSet::Continuum,
+                ))),
+                Value::Tensor(_) => Err(Error::msg(
+                    "differentiating a tensor with respect to a scalar is not \
+                     supported yet",
+                )),
+                other => Err(Error::msg(format!(
+                    "Diff numerator must be a scalar or tensor, got {}",
+                    kind(&other)
+                ))),
+            },
+            DiffTarget::Tensor { value: den, label } => match num {
+                Value::Scalar(s) => Ok(Value::Tensor(simplify_tensor(
+                    &diff_scalar_by_tensor(&s, den)?,
+                    RuleSet::Continuum,
+                ))),
+                Value::Tensor(t) => {
+                    if t.order() != 2 {
+                        return Err(Error::msg(format!(
+                            "tensor-by-tensor Diff currently requires a second-order \
+                             numerator, got order {}",
+                            t.order()
+                        )));
+                    }
+                    Ok(Value::Tensor(simplify_tensor(
+                        &diff_tensor_by_tensor(&t, den, num_label, label.clone())?,
+                        RuleSet::Continuum,
+                    )))
+                }
+                other => Err(Error::msg(format!(
+                    "Diff numerator must be a scalar or tensor, got {}",
+                    kind(&other)
+                ))),
+            },
+        }
+    }
+
+    /// `Derivative(f, x, order=n)` — formal derivative of an unknown
+    /// `Function(...)`. This intentionally does not evaluate explicit scalar
+    /// expressions; use `Diff(...)` for those.
+    fn builtin_derivative(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() != 2 {
+            return Err(Error::msg(
+                "`Derivative` takes exactly two positional arguments: \
+                 Derivative(f, x, order=1)",
+            ));
+        }
+        let mut order = 1usize;
+        for (key, value) in kwargs {
+            match key.as_str() {
+                "order" => order = expect_usize(value, "order")?,
+                other => {
+                    return Err(Error::msg(format!(
+                        "unknown keyword `{other}` for `Derivative`"
+                    )))
+                }
+            }
+        }
+
+        let func = self.expect_scalar_value(&args[0], "Derivative")?;
+        let variable = self.expect_scalar_value(&args[1], "Derivative")?;
+        let var_name = scalar_symbol_name(&variable).ok_or_else(|| {
+            Error::msg(
+                "`Derivative` expects a declared variable as its second argument; \
+                 use `Diff(expr, x)` for explicit scalar differentiation",
+            )
+        })?;
+
+        let ScalarExpr::UnknownFunc {
+            name,
+            args: fn_args,
+            derivative_orders,
+        } = &*func
+        else {
+            return Err(Error::msg(
+                "`Derivative` only constructs formal derivatives of unknown \
+                 `Function(...)` objects; use `Diff(expr, x)` for explicit expressions",
+            ));
+        };
+
+        let Some(index) = fn_args
+            .iter()
+            .position(|arg| scalar_symbol_name(arg).is_some_and(|arg_name| arg_name == var_name))
+        else {
+            return Err(Error::msg(format!(
+                "`Derivative` variable `{var_name}` is not one of this function's arguments"
+            )));
+        };
+
+        let mut orders = derivative_orders.clone();
+        if index >= orders.len() {
+            orders.resize(fn_args.len(), 0);
+        }
+        orders[index] += order;
+        Ok(Value::Scalar(Rc::new(ScalarExpr::UnknownFunc {
+            name: name.clone(),
+            args: fn_args.clone(),
+            derivative_orders: orders,
+        })))
     }
 
     /// `Var("\lambda")` — declare a scalar *function argument*. Any scalar
@@ -968,54 +1353,6 @@ impl Interpreter {
                 vector: callee == "VectorSet",
                 dim,
                 base: None,
-                values: None,
-            },
-        );
-        if let Some(decl) = self.sets.get(name).cloned() {
-            self.register_set_symbol(name, &decl);
-        }
-        Ok(())
-    }
-
-    /// `lambda = eigvals(C, "\lambda")` / `N = eigvecs(C, "\bm N")` —
-    /// eigenvalue/eigenvector sets bound to a provably symmetric tensor.
-    fn declare_eig_set(
-        &mut self,
-        name: &str,
-        callee: &str,
-        args: &[Expr],
-        kwargs: &[(String, Expr)],
-    ) -> Result<(), Error> {
-        if args.len() != 2 || !kwargs.is_empty() {
-            return Err(Error::msg(format!(
-                "`{callee}` expects a tensor and a LaTeX name: {callee}(C, \"<latex>\")"
-            )));
-        }
-        let base = match self.eval(&args[0])? {
-            Value::Tensor(t) => t,
-            Value::Scalar(_) => {
-                return Err(Error::msg(format!("`{callee}` requires a tensor argument")))
-            }
-        };
-        if base.order() != 2 || !base.is_symmetric() {
-            return Err(Error::msg(format!(
-                "`{callee}` requires a provably symmetric second-order tensor \
-                 (e.g. C = F.T * F)"
-            )));
-        }
-        let Expr::Str(latex) = &args[1] else {
-            return Err(Error::msg(format!(
-                "`{callee}` expects a string LaTeX name as its second argument"
-            )));
-        };
-        self.labels.insert(name.to_string(), latex.clone());
-        self.sets.insert(
-            name.to_string(),
-            SetDecl {
-                latex: latex.clone(),
-                vector: callee == "eigvecs",
-                dim: base.dim(),
-                base: Some(base),
                 values: None,
             },
         );
@@ -1128,6 +1465,12 @@ impl Interpreter {
                     "component indexing `[i][j]` requires a tensor (or a declared set)",
                 ))
             }
+            other => {
+                return Err(Error::msg(format!(
+                    "component indexing `[i][j]` requires a tensor, got {}",
+                    kind(&other)
+                )))
+            }
         };
         let order = t.order();
         if idx_exprs.len() != order {
@@ -1151,15 +1494,15 @@ impl Interpreter {
         )))
     }
 
-    /// `sum(body, a)` — sum the body over the abstract set index `a`.
+    /// `Sum(body, a)` — sum the body over the abstract set index `a`.
     fn builtin_sum(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
         if args.len() != 2 || !kwargs.is_empty() {
             return Err(Error::msg(
-                "`sum` expects two arguments: sum(<expr>, <index>)",
+                "`Sum` expects two arguments: Sum(<expr>, <index>)",
             ));
         }
         let Expr::Ident(index) = &args[1] else {
-            return Err(Error::msg("the second argument of `sum` is an index name"));
+            return Err(Error::msg("the second argument of `Sum` is an index name"));
         };
         match self.eval(&args[0])? {
             Value::Tensor(t) => {
@@ -1187,6 +1530,10 @@ impl Interpreter {
                     dim: range,
                 })))
             }
+            other => Err(Error::msg(format!(
+                "`Sum` expects a scalar or tensor summand, got {}",
+                kind(&other)
+            ))),
         }
     }
 
@@ -1381,6 +1728,25 @@ impl Interpreter {
                 name: name.clone(),
                 arg: self.instantiate_scalar(arg, bound)?,
             }),
+            ScalarExpr::UnknownFunc {
+                name,
+                args,
+                derivative_orders,
+            } => Rc::new(ScalarExpr::UnknownFunc {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| self.instantiate_scalar(arg, bound))
+                    .collect::<Result<Vec<_>, _>>()?,
+                derivative_orders: derivative_orders.clone(),
+            }),
+            ScalarExpr::Integral {
+                integrand,
+                variable,
+            } => Rc::new(ScalarExpr::Integral {
+                integrand: self.instantiate_scalar(integrand, bound)?,
+                variable: self.instantiate_scalar(variable, bound)?,
+            }),
             ScalarExpr::Det(t) => Rc::new(ScalarExpr::Det(self.instantiate_tensor(t, bound)?)),
             ScalarExpr::Tr(t) => Rc::new(ScalarExpr::Tr(self.instantiate_tensor(t, bound)?)),
             ScalarExpr::Ddot(a, b) => Rc::new(ScalarExpr::Ddot(
@@ -1435,7 +1801,11 @@ impl Interpreter {
             Value::Tensor(_) => Err(Error::msg(format!(
                 "`{name}` is a scalar function; applying it to a tensor is not \
                  supported; write the spectral form explicitly, e.g. \
-                 sum({name}(lambda[a]) * N[a] & N[a], a)"
+                 Sum({name}(lambda[a]) * N[a] & N[a], a)"
+            ))),
+            other => Err(Error::msg(format!(
+                "`{name}` is a scalar function; applying it to {} is not supported",
+                kind(&other)
             ))),
         }
     }
@@ -1453,6 +1823,47 @@ impl Interpreter {
         Ok(Value::Scalar(Rc::new(ScalarExpr::Sym {
             name: latex.clone(),
             latex,
+        })))
+    }
+
+    /// `Function("y", x)` / `Function("u", x, y)` — declare an unknown
+    /// scalar function of declared `Var` arguments.
+    fn builtin_function(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<Value, Error> {
+        if args.len() < 2 || !kwargs.is_empty() {
+            return Err(Error::msg(
+                "`Function` expects a name and at least one variable: Function(\"<latex>\", x)",
+            ));
+        }
+        let latex = match &args[0] {
+            Expr::Str(s) => s.clone(),
+            _ => return Err(Error::msg("`Function` expects a string LaTeX name")),
+        };
+        let mut fn_args = Vec::new();
+        for arg in &args[1..] {
+            let value = self.expect_scalar_value(arg, "Function")?;
+            match self.free_fn_vars(&value).as_slice() {
+                [_] => fn_args.push(value),
+                [] => {
+                    return Err(Error::msg(
+                        "`Function` arguments must mention declared `Var(...)` symbols",
+                    ))
+                }
+                vars => {
+                    return Err(Error::msg(format!(
+                        "each `Function` argument must be one `Var(...)`; got {}",
+                        vars.join(", ")
+                    )))
+                }
+            }
+        }
+        Ok(Value::Scalar(Rc::new(ScalarExpr::UnknownFunc {
+            name: latex,
+            derivative_orders: vec![0; fn_args.len()],
+            args: fn_args,
         })))
     }
 
@@ -1502,70 +1913,26 @@ impl Interpreter {
         })))
     }
 
-    // ---- display / export -------------------------------------------------
+    // ---- show output ------------------------------------------------------
 
-    fn exec_output(
+    fn exec_show(
         &mut self,
-        callee: &str,
+        target: &Expr,
         args: &[Expr],
         kwargs: &[(String, Expr)],
         line: usize,
         block: usize,
         row: Option<usize>,
     ) -> Result<(), Error> {
-        if args.len() != 1 {
-            return Err(Error::msg(format!(
-                "`{callee}` expects exactly one expression argument"
-            )));
-        }
-        let subject = self.output_subject(&args[0]);
+        let mode = show_mode(args, kwargs)?;
+        let subject = self.output_subject(target);
 
         if let Some(name) = subject.name.as_deref() {
             if let Some(set) = self.sets.get(name) {
-                let mut mode = "symbol".to_string();
-                let mut format = "latex".to_string();
-                for (key, raw) in kwargs {
-                    let val = match raw {
-                        Expr::Ident(s) | Expr::Str(s) => s.clone(),
-                        other => {
-                            return Err(Error::msg(format!("invalid value for `{key}`: {other:?}")))
-                        }
-                    };
-                    match key.as_str() {
-                        "mode" if callee == "display" => mode = val,
-                        "format" if callee == "export" => format = val,
-                        other => {
-                            return Err(Error::msg(format!(
-                                "unknown keyword `{other}` for `{callee}`"
-                            )))
-                        }
-                    }
-                }
-
-                let latex = match callee {
-                    "display" => {
-                        self.ensure_set_display_mode(set, &mode)?;
-                        render_set_decl(set)
-                    }
-                    "export" => match format.as_str() {
-                        "latex" => render_set_decl(set),
-                        "markdown" => format!("$$\n{}\n$$", render_set_decl(set)),
-                        other => {
-                            return Err(Error::msg(format!(
-                                "unknown export format `{other}` (supported: latex, markdown)"
-                            )))
-                        }
-                    },
-                    _ => unreachable!(),
-                };
-                let detail = if callee == "display" {
-                    format!("mode={mode}")
-                } else {
-                    format!("format={format}")
-                };
+                self.ensure_set_display_mode(set, &mode)?;
                 self.outputs.push(Output {
-                    header: format!("{callee} {name}, {detail}"),
-                    latex,
+                    header: show_header(name, &mode, args.is_empty()),
+                    latex: render_set_decl(set),
                     line,
                     error: None,
                     row,
@@ -1574,28 +1941,8 @@ impl Interpreter {
             }
         }
 
-        let mut mode = "symbol".to_string();
-        let mut format = "latex".to_string();
-        for (key, raw) in kwargs {
-            // display(C, mode=symbol): mode values arrive as bare identifiers.
-            let val = match raw {
-                Expr::Ident(s) | Expr::Str(s) => s.clone(),
-                other => return Err(Error::msg(format!("invalid value for `{key}`: {other:?}"))),
-            };
-            match key.as_str() {
-                "mode" if callee == "display" => mode = val,
-                "format" if callee == "export" => format = val,
-                other => {
-                    return Err(Error::msg(format!(
-                        "unknown keyword `{other}` for `{callee}`"
-                    )))
-                }
-            }
-        }
-
-        let value = self.eval(&args[0])?;
-        let uses_raw_display_value = callee == "display"
-            && mode == "symbol"
+        let value = self.eval(target)?;
+        let uses_raw_display_value = mode == "symbol"
             && subject
                 .name
                 .as_deref()
@@ -1615,8 +1962,8 @@ impl Interpreter {
         // display follows user-defined names such as `C` and `I_1`. Internal
         // values stay expanded; this is presentation only. Derivative nodes
         // are exempt because they need the expanded structure.
-        let skip_subst =
-            matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }));
+        let skip_subst = matches!(&value, Value::Tensor(t) if matches!(&**t, TensorExpr::Diff { .. }))
+            || !matches!(&value, Value::Scalar(_) | Value::Tensor(_));
         let value = if skip_subst {
             value
         } else {
@@ -1629,18 +1976,9 @@ impl Interpreter {
             Self::simplify_presentation_value(value)
         };
 
-        let latex = match callee {
-            "display" => self.render_display(&value, subject.lhs.as_deref(), &mode)?,
-            "export" => self.render_export(&value, &format)?,
-            _ => unreachable!(),
-        };
-        let detail = if callee == "display" {
-            format!("mode={mode}")
-        } else {
-            format!("format={format}")
-        };
+        let latex = self.render_display(&value, subject.lhs.as_deref(), &mode)?;
         self.outputs.push(Output {
-            header: format!("{callee} {}, {detail}", subject.header),
+            header: show_header(&subject.header, &mode, args.is_empty()),
             latex,
             line,
             error: None,
@@ -1653,24 +1991,25 @@ impl Interpreter {
         self.next_output_row += 1;
         let row = Some(self.next_output_row);
         for expr in exprs {
-            let Expr::Call {
-                callee,
+            let Expr::MethodCall {
+                target,
+                method,
                 args,
                 kwargs,
             } = expr
             else {
                 return Err(Error::new(
-                    "display row items must be display(...) or export(...) calls",
+                    "output row items must be `.show(...)` calls",
                     Some(line),
                 ));
             };
-            if callee != "display" && callee != "export" {
+            if method != "show" {
                 return Err(Error::new(
-                    "display row items must be display(...) or export(...) calls",
+                    "output row items must be `.show(...)` calls",
                     Some(line),
                 ));
             }
-            self.exec_output(callee, args, kwargs, line, block, row)?;
+            self.exec_show(target, args, kwargs, line, block, row)?;
         }
         Ok(())
     }
@@ -1738,6 +2077,7 @@ impl Interpreter {
         match value {
             Value::Scalar(s) => Value::Scalar(simplify_scalar(&s, RuleSet::Tensor)),
             Value::Tensor(t) => Value::Tensor(simplify_tensor(&t, RuleSet::Tensor)),
+            other => other,
         }
     }
 
@@ -1745,11 +2085,12 @@ impl Interpreter {
         let function_like = match value {
             Value::Scalar(s) => !self.free_fn_vars(s).is_empty(),
             Value::Tensor(_) => false,
+            _ => false,
         };
         let kind = value_kind(value, function_like);
         let characteristic = match value {
             Value::Tensor(t) => Some(tensor_characteristic(t, derived)),
-            Value::Scalar(_) => None,
+            _ => None,
         };
         let latex = self
             .display_label(name, value)
@@ -1809,12 +2150,26 @@ impl Interpreter {
                 self.expr_is_derived_display_result(target)
                     || self.expr_is_derived_display_result(index)
             }
+            Expr::MethodCall {
+                target,
+                args,
+                kwargs,
+                ..
+            } => {
+                self.expr_is_derived_display_result(target)
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_is_derived_display_result(arg))
+                    || kwargs
+                        .iter()
+                        .any(|(_, value)| self.expr_is_derived_display_result(value))
+            }
             Expr::Call {
                 callee,
                 args,
                 kwargs,
             } => {
-                callee == "diff"
+                callee == "Diff"
                     || args
                         .iter()
                         .any(|arg| self.expr_is_derived_display_result(arg))
@@ -1837,6 +2192,18 @@ impl Interpreter {
         match (value, mode) {
             (Value::Scalar(s), "symbol") => Ok(format!("{lhs}{}", scalar_to_latex(s))),
             (Value::Tensor(t), "symbol") => Ok(format!("{lhs}{}", tensor_to_latex(t))),
+            (Value::Equation(eq), "symbol") => Ok(crate::ode::render_equation(eq)),
+            (Value::InitialCondition(ic), "symbol") => Ok(format!(
+                "{} = {}",
+                scalar_to_latex(&ic.function),
+                scalar_to_latex(&ic.value)
+            )),
+            (Value::OdeClassification(class), "symbol" | "details") => {
+                Ok(crate::ode::render_classification(class, mode))
+            }
+            (Value::OdeSolution(sol), "symbol" | "solution" | "steps") => {
+                Ok(crate::ode::render_solution(sol, mode))
+            }
             // Derivative components use the abstract-index engine and carry
             // their own ∂C_ij/∂F_mn left-hand side.
             (Value::Tensor(t), "components" | "matrix" | "block_components")
@@ -1903,6 +2270,7 @@ impl Interpreter {
             }
             (Value::Tensor(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
             (Value::Scalar(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
+            (_, other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
         }
     }
 
@@ -1959,22 +2327,7 @@ impl Interpreter {
         }
     }
 
-    fn render_export(&self, value: &Value, format: &str) -> Result<String, Error> {
-        let latex = match value {
-            Value::Scalar(s) => scalar_to_latex(s),
-            Value::Tensor(t) => tensor_to_latex(t),
-        };
-        match format {
-            "latex" => Ok(latex),
-            // Markdown: LaTeX in a $$ display-math block.
-            "markdown" => Ok(format!("$$\n{latex}\n$$")),
-            other => Err(Error::msg(format!(
-                "unknown export format `{other}` (supported: latex, markdown)"
-            ))),
-        }
-    }
-
-    /// LaTeX for the left-hand side of `display(X, ...)`, in order of
+    /// LaTeX for the left-hand side of `X.show(...)`, in order of
     /// preference:
     /// 1. the label declared via `Scalar("...")`/`Tensor("...")` for this
     ///    name (kept across reassignment);
@@ -2008,6 +2361,36 @@ fn render_set_decl(set: &SetDecl) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!("{{{}}}_{{a}}\\quad \\text{{with }} a={values}", set.latex)
+}
+
+fn show_mode(args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, Error> {
+    if !kwargs.is_empty() {
+        return Err(Error::msg(
+            "`.show(...)` takes an optional positional mode; use `A.show(matrix)`, not `mode=`",
+        ));
+    }
+    match args {
+        [] => Ok("symbol".to_string()),
+        [Expr::Ident(mode)] | [Expr::Str(mode)] => Ok(mode.clone()),
+        [_] => Err(Error::msg(
+            "`.show(...)` mode must be a bare identifier such as `matrix`",
+        )),
+        _ => Err(Error::msg(
+            "`.show(...)` takes at most one mode: symbol, components, matrix, or block_components",
+        )),
+    }
+}
+
+fn show_header(subject: &str, mode: &str, implicit_symbol: bool) -> String {
+    if implicit_symbol {
+        format!("{subject}.show()")
+    } else {
+        format!("{subject}.show({mode})")
+    }
+}
+
+fn renamed_builtin_error(old: &str, new: &str) -> Error {
+    Error::msg(format!("`{old}(...)` was renamed; use `{new}(...)`"))
 }
 
 fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
@@ -2131,6 +2514,13 @@ fn scalar_index_range(s: &ScalarExpr, idx: &str) -> Option<usize> {
         ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
             scalar_index_range(a, idx)
         }
+        ScalarExpr::UnknownFunc { args, .. } => {
+            args.iter().find_map(|arg| scalar_index_range(arg, idx))
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => scalar_index_range(integrand, idx).or_else(|| scalar_index_range(variable, idx)),
         ScalarExpr::SpecSum { index, body, .. } => {
             if index == idx {
                 None
@@ -2143,10 +2533,51 @@ fn scalar_index_range(s: &ScalarExpr, idx: &str) -> Option<usize> {
     }
 }
 
+fn scalar_symbol_name(expr: &ScalarExpr) -> Option<&str> {
+    match expr {
+        ScalarExpr::Sym { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
+fn scalar_contains_unknown_function(expr: &ScalarExpr) -> bool {
+    match expr {
+        ScalarExpr::UnknownFunc { .. } => true,
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Pow(a, b) => {
+            scalar_contains_unknown_function(a) || scalar_contains_unknown_function(b)
+        }
+        ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
+            scalar_contains_unknown_function(a)
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => {
+            scalar_contains_unknown_function(integrand)
+                || scalar_contains_unknown_function(variable)
+        }
+        ScalarExpr::SpecSum { body, .. } => scalar_contains_unknown_function(body),
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Det(_)
+        | ScalarExpr::Tr(_)
+        | ScalarExpr::Ddot(_, _)
+        | ScalarExpr::SetElem { .. } => false,
+    }
+}
+
 fn kind(v: &Value) -> &'static str {
     match v {
         Value::Scalar(_) => "Scalar",
         Value::Tensor(_) => "Tensor",
+        Value::Equation(_) => "Equation",
+        Value::InitialCondition(_) => "InitialCondition",
+        Value::OdeClassification(_) => "OdeClassification",
+        Value::OdeSolution(_) => "OdeSolution",
     }
 }
 

@@ -3,7 +3,7 @@
 //! When the user writes `C = F.T * F` and later displays an expression
 //! containing the subtree `FᵀF`, the display should read `\bm C`, not the
 //! expanded form. This module substitutes registered definitions (most
-//! recent first, so derived definitions like `I1 = tr(C)` win over their
+//! recent first, so derived definitions like `I1 = Tr(C)` win over their
 //! ingredients) into a value *at display time only* — internal values stay
 //! fully expanded so differentiation keeps working.
 
@@ -22,9 +22,9 @@ pub struct Def {
 }
 
 /// Substitute all definitions into `v`. `defs` is in insertion order; they
-/// are applied most-recent-first so derived definitions like `I1 = tr(C)`
+/// are applied most-recent-first so derived definitions like `I1 = Tr(C)`
 /// win over their ingredients. Definitions whose value equals the whole
-/// expression are skipped (so `display(C)` still shows `C = FᵀF`).
+/// expression are skipped (so `C.show()` still shows `C = FᵀF`).
 pub fn substitute(v: &Value, defs: &[Def]) -> Value {
     let mut cur = v.clone();
     for def in defs.iter().rev() {
@@ -52,6 +52,7 @@ pub fn substitute(v: &Value, defs: &[Def]) -> Value {
                 match &cur {
                     Value::Tensor(t) => Value::Tensor(subst_t(t, target, &replacement)),
                     Value::Scalar(s) => Value::Scalar(subst_s_tensor(s, target, &replacement)),
+                    other => other.clone(),
                 }
             }
             Value::Scalar(target) => {
@@ -62,8 +63,10 @@ pub fn substitute(v: &Value, defs: &[Def]) -> Value {
                 match &cur {
                     Value::Tensor(t) => Value::Tensor(subst_t_scalar(t, target, &replacement)),
                     Value::Scalar(s) => Value::Scalar(subst_s(s, target, &replacement)),
+                    other => other.clone(),
                 }
             }
+            _ => cur.clone(),
         };
     }
     substitute_derived_invariants(&cur, defs)
@@ -84,6 +87,7 @@ fn substitute_derived_invariants(v: &Value, defs: &[Def]) -> Value {
     match v {
         Value::Tensor(t) => Value::Tensor(rewrite_derived_tensor(t, &aliases)),
         Value::Scalar(s) => Value::Scalar(rewrite_derived_scalar(s, &aliases)),
+        other => other.clone(),
     }
 }
 
@@ -439,6 +443,22 @@ fn rebuild_scalar(
         ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
             name: name.clone(),
             arg: rs(arg),
+        }),
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => Rc::new(ScalarExpr::UnknownFunc {
+            name: name.clone(),
+            args: args.iter().map(rs).collect(),
+            derivative_orders: derivative_orders.clone(),
+        }),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => Rc::new(ScalarExpr::Integral {
+            integrand: rs(integrand),
+            variable: rs(variable),
         }),
         ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
             body: rs(body),

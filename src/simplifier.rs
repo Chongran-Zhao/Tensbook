@@ -1,6 +1,6 @@
 //! Expression simplification.
 //!
-//! `simplify(expr)` / `simplify(expr, rules=algebra|tensor|continuum)`.
+//! `Simplify(expr)` / `Simplify(expr, rules=algebra|tensor|continuum)`.
 //! Rule sets are cumulative: `tensor` includes `algebra`, `continuum`
 //! includes both. Rules are applied bottom-up to a fixed point; every rule
 //! is an exact mathematical identity (no guessing), e.g.:
@@ -468,6 +468,22 @@ fn scalar_pass(s: &Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             name: name.clone(),
             arg: scalar_pass(arg, rules),
         }),
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => Rc::new(ScalarExpr::UnknownFunc {
+            name: name.clone(),
+            args: args.iter().map(|arg| scalar_pass(arg, rules)).collect(),
+            derivative_orders: derivative_orders.clone(),
+        }),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => Rc::new(ScalarExpr::Integral {
+            integrand: scalar_pass(integrand, rules),
+            variable: scalar_pass(variable, rules),
+        }),
         ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
             body: scalar_pass(body, rules),
             index: index.clone(),
@@ -529,12 +545,14 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             _ => with_coeff_from_product(&s),
         },
         ScalarExpr::Div(a, b) => match (&**a, &**b) {
+            (ScalarExpr::Num(x), ScalarExpr::Num(y)) => Rc::new(ScalarExpr::Num(x / y)),
             (ScalarExpr::Num(x), _) if *x == 0.0 => Rc::new(ScalarExpr::Num(0.0)),
             (_, ScalarExpr::Num(x)) if *x == 1.0 => a.clone(),
             _ if a == b => Rc::new(ScalarExpr::Num(1.0)),
             _ => s,
         },
         ScalarExpr::Pow(a, b) => match (&**a, &**b) {
+            (ScalarExpr::Num(x), ScalarExpr::Num(n)) => Rc::new(ScalarExpr::Num(x.powf(*n))),
             (_, ScalarExpr::Num(n)) if *n == 1.0 => a.clone(),
             (_, ScalarExpr::Num(n)) if *n == 0.0 => Rc::new(ScalarExpr::Num(1.0)),
             // (x^p)^q → x^{pq} (exact for the positive bases — dets,

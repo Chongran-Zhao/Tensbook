@@ -126,14 +126,14 @@ A = Tensor("\mathbb A", order=4, dim=3)
 
 软件不应该默认自动展开张量分量，因为展开结果可能很大。
 
-需要通过显式函数手动展开：
+需要通过显式 `.show(...)` 手动展开：
 
 ```text
-display(C, mode=symbol)
-display(C, mode=components)
-display(C, mode=matrix)
-display(A, mode=symbol)
-display(A, mode=block_components)
+C.show()
+C.show(components)
+C.show(matrix)
+A.show()
+A.show(block_components)
 ```
 
 # 6. 四阶张量显示方式
@@ -149,7 +149,7 @@ display(A, mode=block_components)
 希望支持将其按照后两个指标 `k,L` 展开为 9 个二阶张量块：
 
 ```text
-display(A, mode=block_components)
+A.show(block_components)
 ```
 
 显示结构类似：
@@ -179,8 +179,6 @@ TensorForge 的张量运算应支持以下运算：
 *        标量乘法、二阶张量乘法
 :        双指标缩并的显示符号
 &        张量积
-dot()    单指标缩并
-ddot()   双指标缩并
 contract(A, B, indices=...) 一般缩并
 ```
 
@@ -189,7 +187,7 @@ contract(A, B, indices=...) 一般缩并
 ```text
 C = F.T * F
 A = F & F
-s = ddot(A, B)
+s = A : B
 R = contract(A, B, indices=...)
 ```
 
@@ -225,29 +223,28 @@ F = Tensor("\bm F", order=2, dim=3)
 I = Tensor("\bm I", order=2, dim=3, identity=true)
 
 C = F.T * F
-J = det(F)
-I1 = tr(C)
+J = Det(F)
+I1 = Tr(C)
 
 W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
 
-dCdF = diff(C, F)
-dJdF = diff(J, F)
-P = diff(W, F)
-A = diff(P, F)
+dCdF = Diff(C, F)
+dJdF = Diff(J, F)
+P = Diff(W, F)
+A = Diff(P, F)
 
-C = simplify(C, rules=continuum)
-P = simplify(P, rules=continuum)
-A = simplify(A, rules=continuum)
+C = Simplify(C, rules=continuum)
+P = Simplify(P, rules=continuum)
+A = Simplify(A, rules=continuum)
 
-display(C, mode=symbol)
-display(C, mode=components)
-display(dCdF, mode=components)
-display(dJdF, mode=symbol)
-display(P, mode=symbol)
-display(A, mode=block_components)
+C.show()
+C.show(components)
+dCdF.show(components)
+dJdF.show()
+P.show()
+A.show(block_components)
 
-export(A, format=latex)
-export(A, format=markdown)
+// LaTeX / Markdown export is handled by the app Export button.
 ```
 
 # 9. 自动属性推断
@@ -279,14 +276,14 @@ C.symmetric = true
 TensorForge 必须支持以下类型的符号求导：
 
 ```text
-diff(scalar, scalar)
-diff(scalar, vector)
-diff(scalar, tensor)
-diff(vector, vector)
-diff(tensor, tensor)
-diff(second_order_tensor, second_order_tensor)
-diff(scalar_energy, second_order_tensor)
-diff(second_order_stress, second_order_tensor)
+Diff(scalar, scalar)
+Diff(scalar, vector)
+Diff(scalar, tensor)
+Diff(vector, vector)
+Diff(tensor, tensor)
+Diff(second_order_tensor, second_order_tensor)
+Diff(scalar_energy, second_order_tensor)
+Diff(second_order_stress, second_order_tensor)
 ```
 
 核心目标包括：
@@ -318,8 +315,8 @@ diff(second_order_stress, second_order_tensor)
 若：
 
 ```text
-P = diff(W, F)
-A = diff(P, F)
+P = Diff(W, F)
+A = Diff(P, F)
 ```
 
 且 `P` 和 `F` 都是二阶张量，则 `A` 是四阶张量。
@@ -333,7 +330,7 @@ A_{iJkL} = \frac{\partial P_{iJ}}{\partial F_{kL}}
 也就是：
 
 ```text
-diff(P[i,J], F[k,L]) -> A[i,J,k,L]
+Diff(P[i,J], F[k,L]) -> A[i,J,k,L]
 ```
 
 规则原则：
@@ -383,10 +380,10 @@ I_1 = \operatorname{tr}\bm C
 软件应允许用户调用：
 
 ```text
-simplify(expr)
-simplify(expr, rules=algebra)
-simplify(expr, rules=tensor)
-simplify(expr, rules=continuum)
+Simplify(expr)
+Simplify(expr, rules=algebra)
+Simplify(expr, rules=tensor)
+Simplify(expr, rules=continuum)
 ```
 
 其中 `rules=continuum` 使用连续介质力学相关规则。
@@ -410,8 +407,8 @@ simplify(expr, rules=continuum)
 
 ```text
 C = F.T * F
-dCdF = diff(C, F)
-display(dCdF, mode=components)
+dCdF = Diff(C, F)
+dCdF.show(components)
 ```
 
 应能得到类似：
@@ -432,7 +429,7 @@ display(dCdF, mode=components)
 ```text
 lambda = ScalarSet("\lambda", dim=3)
 N = VectorSet("\bm N", dim=3)
-C = sum(lambda[a]^2 * N[a] & N[a], a)
+C = Sum(lambda[a]^2 * N[a] & N[a], a)
 ```
 
 ```latex
@@ -440,7 +437,7 @@ C = sum(lambda[a]^2 * N[a] & N[a], a)
 ```
 
 基于谱分解的张量函数(`sqrt(C)`、`log(C)` 等)同样用 set 形式显式书写,
-例如 `sum(log(lambda[a]) * N[a] & N[a], a)`。
+例如 `Sum(log(lambda[a]) * N[a] & N[a], a)`。
 
 # 14. 不需要优先考虑的功能
 
@@ -476,25 +473,24 @@ F = Tensor("\bm F", order=2, dim=3)
 I = Tensor("\bm I", order=2, dim=3, identity=true)
 
 C = F.T * F
-J = det(F)
-I1 = tr(C)
+J = Det(F)
+I1 = Tr(C)
 
 W = mu/2 * (I1 - 3) - mu * log(J) + lambda/2 * log(J)^2
 
-dCdF = diff(C, F)
-dJdF = diff(J, F)
-P = diff(W, F)
-A = diff(P, F)
+dCdF = Diff(C, F)
+dJdF = Diff(J, F)
+P = Diff(W, F)
+A = Diff(P, F)
 
-display(C, mode=symbol)
-display(C, mode=components)
-display(dCdF, mode=components)
-display(dJdF, mode=symbol)
-display(P, mode=symbol)
-display(A, mode=block_components)
+C.show()
+C.show(components)
+dCdF.show(components)
+dJdF.show()
+P.show()
+A.show(block_components)
 
-export(P, format=latex)
-export(A, format=markdown)
+// LaTeX / Markdown export is handled by the app Export button.
 ```
 
 期望输出：

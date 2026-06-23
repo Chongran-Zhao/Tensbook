@@ -52,6 +52,10 @@ struct SerializableSymbolInfo {
 enum SerializableValueKind {
     Scalar,
     ScalarFunctionLike,
+    Equation,
+    InitialCondition,
+    OdeClassification,
+    OdeSolution,
     Tensor { order: usize, dim: usize },
     ScalarSet { dim: usize },
     VectorSet { dim: usize },
@@ -252,7 +256,11 @@ async fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> 
 /// Read a specific `.tens` file (file-rail click), re-listing its folder.
 #[tauri::command]
 async fn read_tens(path: String) -> Result<OpenedFile, String> {
-    opened_file(std::path::PathBuf::from(path))
+    let path = std::path::PathBuf::from(path);
+    if !is_tens_path(&path) {
+        return Err("read_tens only accepts .tens files".to_string());
+    }
+    opened_file(path)
 }
 
 /// Re-list a folder (file-rail restore on startup).
@@ -344,6 +352,10 @@ impl From<ValueKind> for SerializableValueKind {
         match kind {
             ValueKind::Scalar => Self::Scalar,
             ValueKind::ScalarFunctionLike => Self::ScalarFunctionLike,
+            ValueKind::Equation => Self::Equation,
+            ValueKind::InitialCondition => Self::InitialCondition,
+            ValueKind::OdeClassification => Self::OdeClassification,
+            ValueKind::OdeSolution => Self::OdeSolution,
             ValueKind::Tensor { order, dim } => Self::Tensor { order, dim },
             ValueKind::ScalarSet { dim } => Self::ScalarSet { dim },
             ValueKind::VectorSet { dim } => Self::VectorSet { dim },

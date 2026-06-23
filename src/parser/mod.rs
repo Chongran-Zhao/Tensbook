@@ -9,7 +9,7 @@
 //! multiplicative := unary (("*" | "/") unary)*
 //! unary     := "-" unary | power
 //! power     := postfix ("^" unary)?          # right associative
-//! postfix   := primary ("." IDENT | "[" expr "]")*
+//! postfix   := primary ("." IDENT ["(" callargs ")"] | "[" expr "]")*
 //! primary   := NUM | STR | true | false | IDENT | IDENT "(" callargs ")" | "(" expr ")"
 //! callargs  := (expr | IDENT "=" expr) ("," ...)*
 //! ```
@@ -317,7 +317,7 @@ impl Parser {
         ) && matches!(self.tokens.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Eq))
     }
 
-    /// `[display(A) display(B)]` or `[display(A), display(B)]`.
+    /// `[A.show() B.show()]` or `[A.show(), B.show()]`.
     fn parse_output_row(&mut self, line: usize, block: usize) -> Result<Stmt, Error> {
         self.expect(&Tok::LBracket, "`[`")?;
         let mut exprs = Vec::new();
@@ -496,10 +496,21 @@ impl Parser {
                     self.next();
                     match self.next() {
                         Tok::Ident(name) => {
-                            expr = Expr::Field {
-                                target: Box::new(expr),
-                                name,
-                            };
+                            if matches!(self.peek(), Tok::LParen) {
+                                self.next();
+                                let (args, kwargs) = self.parse_call_args()?;
+                                expr = Expr::MethodCall {
+                                    target: Box::new(expr),
+                                    method: name,
+                                    args,
+                                    kwargs,
+                                };
+                            } else {
+                                expr = Expr::Field {
+                                    target: Box::new(expr),
+                                    name,
+                                };
+                            }
                         }
                         tok => {
                             return Err(Error::new(
