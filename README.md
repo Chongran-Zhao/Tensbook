@@ -22,6 +22,24 @@ brew update
 brew upgrade --cask tensorforge
 ```
 
+## Release Preparation
+
+Before tagging a release, update all version-bearing files from one entry point:
+
+```sh
+scripts/prepare-release.sh 1.1.0
+```
+
+If you are rendering the checked-in Homebrew cask manually, pass the built DMG
+checksum:
+
+```sh
+scripts/prepare-release.sh 1.1.0 --sha256 <64-hex-sha>
+```
+
+The GitHub release workflow still computes the real DMG checksum and renders the
+tap cask automatically when a `v*` tag is pushed.
+
 ## Editor
 
 Markdown blocks use native spellcheck for English prose while keeping automatic
