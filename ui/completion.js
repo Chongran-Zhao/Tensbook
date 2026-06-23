@@ -1,52 +1,75 @@
-// Editor completion: ghost-text suggestions + function signature hints.
-//
-// A hidden "mirror" div replicates the textarea's text up to the caret to
-// measure the caret's pixel position; the ghost suggestion and the signature
-// card are absolutely positioned at those coordinates. No dependencies.
-//
-// Keys: Tab accepts the ghost suggestion (or indents), Esc dismisses.
+// Completion data and CodeMirror completion sources.
 
-const BUILTINS = [
+export const BUILTINS = [
   { name: "Scalar", sig: 'Scalar("\\mu")', doc: "declare a symbolic scalar" },
   {
     name: "Tensor",
-    sig: 'Tensor("\\bm F", order=2, dim=3, …)',
+    sig: 'Tensor("\\bm F", order=2, dim=3, ...)',
     doc: "declare a tensor; kwargs: order, dim, identity, symmetric, antisymmetric, orthogonal, isotropic",
   },
-  { name: "diff", sig: "diff(expr, X)", doc: "symbolic derivative ∂expr/∂X — X: tensor variable, compound tensor (e.g. C = F.T*F), or scalar symbol" },
-  { name: "det", sig: "det(A)", doc: "determinant, kept symbolic" },
-  { name: "tr", sig: "tr(A)", doc: "trace, kept symbolic" },
-  { name: "log", sig: "log(x)", doc: "scalar logarithm; tensor spectral forms are written with sum(log(c[a]) * N[a] & N[a], a)" },
+  { name: "Diff", sig: "Diff(expr, X, order=1)", doc: "evaluated derivative for explicit scalar/tensor expressions" },
+  { name: "Derivative", sig: "Derivative(f, x, order=1)", doc: "formal derivative or partial derivative of an unknown Function(...)" },
+  { name: "Det", sig: "Det(A)", doc: "determinant, kept symbolic" },
+  { name: "Tr", sig: "Tr(A)", doc: "trace, kept symbolic" },
+  { name: "Inv", sig: "Inv(A)", doc: "symbolic tensor inverse" },
+  { name: "Simplify", sig: "Simplify(expr, rules=...)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
+  { name: "Sum", sig: "Sum(expr, a)", doc: "indexed symbolic sum over the set index a" },
+  { name: "log", sig: "log(x)", doc: "scalar logarithm; tensor spectral forms are written with Sum(log(c[a]) * N[a] & N[a], a)" },
   { name: "sqrt", sig: "sqrt(x)", doc: "scalar square root; tensor spectral forms are written with indexed sums" },
   { name: "exp", sig: "exp(x)", doc: "scalar exponential; tensor spectral forms are written with indexed sums" },
+  { name: "sin", sig: "sin(x)", doc: "scalar sine with symbolic derivative and integration rules" },
+  { name: "cos", sig: "cos(x)", doc: "scalar cosine with symbolic derivative and integration rules" },
+  { name: "tan", sig: "tan(x)", doc: "scalar tangent with symbolic derivative and integration rules" },
   { name: "sinh", sig: "sinh(x)", doc: "hyperbolic sine (symbolic, with derivative rule)" },
   { name: "cosh", sig: "cosh(x)", doc: "hyperbolic cosine (symbolic, with derivative rule)" },
+  { name: "tanh", sig: "tanh(x)", doc: "hyperbolic tangent (symbolic, with derivative rule)" },
   { name: "Var", sig: 'Var("\\lambda")', doc: "declare a scalar function argument" },
+  { name: "Function", sig: 'Function("y", x)', doc: "declare an unknown scalar function; accepts one or more Var arguments" },
+  { name: "Equation", sig: "Equation(lhs, rhs)", doc: "declare a scalar equation for ODE/PDE classification and solving" },
+  { name: "Integrate", sig: "Integrate(expr, x)", doc: "rule-based scalar integration; returns Integral(...) when unsupported" },
+  { name: "Integral", sig: "Integral(expr, x)", doc: "formal unevaluated scalar integral" },
+  { name: "ClassifyODE", sig: "ClassifyODE(eq, y, x)", doc: "classify an ODE/PDE by order, linearity, and first-order subtype" },
+  { name: "SolveODE", sig: "SolveODE(eq, y, x, ic=IC(y(x0), y0))", doc: "solve supported first-order linear, separable, or exact ODEs" },
+  { name: "IC", sig: "IC(y(x0), y0)", doc: "initial condition for supported ODE solvers" },
   { name: "ScalarSet", sig: 'ScalarSet("\\lambda", dim=3)', doc: "declare an indexed scalar family lambda[a]" },
   { name: "VectorSet", sig: 'VectorSet("\\bm N", dim=3)', doc: "declare an indexed vector family N[a]" },
-  { name: "sum", sig: "sum(expr, a)", doc: "indexed symbolic sum over the set index a" },
   { name: "Spec_Decomp", sig: "[c, N] = Spec_Decomp(C)", doc: "symbolic eigendecomposition of a diagonal component-filled tensor into declared sets" },
-  { name: "inv", sig: "inv(A)", doc: "symbolic tensor inverse" },
-  { name: "dot", sig: "dot(A, B)", doc: "single contraction AB" },
-  { name: "ddot", sig: "ddot(A, B)", doc: "double contraction A : B — infix `A : B` also works" },
-  { name: "simplify", sig: "simplify(expr, rules=…)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
-  { name: "display", sig: "display(expr, mode=…)", doc: "shows available modes for the current expression" },
-  { name: "export", sig: "export(expr, format=…)", doc: "format = latex | markdown" },
+  { name: "Spectral", sig: '[lambda, N] = Spectral(C, "\\lambda", "\\bm N")', doc: "declare symbolic eigenvalue/eigenvector sets for a symmetric tensor" },
 ];
 
-const BUILTIN_MAP = new Map(BUILTINS.map((b) => [b.name, b]));
-
 const ENUM_VALUES = {
-  mode: ["symbol", "components", "matrix", "block_components"],
-  format: ["latex", "markdown"],
   rules: ["algebra", "tensor", "continuum"],
 };
 
+const SHOW_MODES = ["symbol", "components", "matrix", "block_components", "details", "solution", "steps"];
 const TENSOR_KWARGS = [
-  "order", "dim", "identity", "symmetric", "antisymmetric", "orthogonal", "isotropic",
+  "order",
+  "dim",
+  "identity",
+  "symmetric",
+  "antisymmetric",
+  "orthogonal",
+  "isotropic",
+];
+const KEYWORDS = ["true", "false"];
+
+export const MARKDOWN_COMMANDS = [
+  { name: "h1", sig: "/h1", doc: "insert a level-1 heading", text: "# ", cursor: 2 },
+  { name: "h2", sig: "/h2", doc: "insert a level-2 heading", text: "## ", cursor: 3 },
+  { name: "h3", sig: "/h3", doc: "insert a level-3 heading", text: "### ", cursor: 4 },
+  { name: "bold", sig: "/bold", doc: "insert bold text markers", text: "****", cursor: 2 },
+  { name: "italic", sig: "/italic", doc: "insert italic text markers", text: "**", cursor: 1 },
+  { name: "quote", sig: "/quote", doc: "insert a block quote marker", text: "> ", cursor: 2 },
+  { name: "list", sig: "/list", doc: "insert a bullet list item", text: "- ", cursor: 2 },
+  { name: "todo", sig: "/todo", doc: "insert a task list item", text: "- [ ] ", cursor: 6 },
+  { name: "link", sig: "/link", doc: "insert a Markdown link", text: "[](url)", cursor: 1 },
+  { name: "image", sig: "/image", doc: "insert a Markdown image placeholder", text: "![alt](url)", cursor: 2 },
+  { name: "code", sig: "/code", doc: "insert a fenced code block", text: "```\n\n```", cursor: 4 },
+  { name: "math", sig: "/math", doc: "insert a display-math block", text: "$$\n\n$$", cursor: 3 },
+  { name: "table", sig: "/table", doc: "insert a small Markdown table", text: "|   |   |\n| --- | --- |\n|   |   |", cursor: 2 },
+  { name: "hr", sig: "/hr", doc: "insert a horizontal rule", text: "---", cursor: 3 },
 ];
 
-const KEYWORDS = ["true", "false"];
 let completionSymbols = new Map();
 
 export function setCompletionSymbols(symbols = []) {
@@ -54,210 +77,130 @@ export function setCompletionSymbols(symbols = []) {
   window.dispatchEvent(new CustomEvent("tensorforge:completion-symbols"));
 }
 
-export function setupCompletion(editor) {
-  const wrap = editor.parentElement; // #editor-wrap, position: relative
+export function completionSymbolsSnapshot() {
+  return completionSymbols;
+}
 
-  const mirror = document.createElement("div");
-  mirror.className = "cm-mirror";
-  const ghost = document.createElement("span");
-  ghost.className = "cm-ghost";
-  const hint = document.createElement("div");
-  hint.className = "cm-hint";
-  wrap.append(mirror, ghost, hint);
+function cmOption(label, detail = "", info = "", apply = null) {
+  const option = { label, type: "keyword" };
+  if (detail) option.detail = detail;
+  if (info) option.info = info;
+  if (apply) option.apply = apply;
+  return option;
+}
 
-  let suggestion = null; // remainder text currently shown as ghost
+function wordBefore(context) {
+  return context.matchBefore(/[A-Za-z_]\w*/);
+}
 
-  function syncMirrorStyles() {
-    const cs = getComputedStyle(editor);
-    for (const prop of [
-      "fontFamily", "fontSize", "lineHeight", "letterSpacing",
-      "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-      "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
-      "tabSize",
-    ]) {
-      mirror.style[prop] = cs[prop];
-    }
-    mirror.style.left = editor.offsetLeft + "px";
-    mirror.style.width = editor.clientWidth + "px";
-  }
+function linePrefix(context) {
+  const line = context.state.doc.lineAt(context.pos);
+  return context.state.doc.sliceString(line.from, context.pos);
+}
 
-  /** Pixel position of the caret, relative to the wrapper. */
-  function caretPosition() {
-    syncMirrorStyles();
-    mirror.textContent = "";
-    mirror.appendChild(
-      document.createTextNode(editor.value.slice(0, editor.selectionStart)),
-    );
-    const marker = document.createElement("span");
-    marker.textContent = "​";
-    mirror.appendChild(marker);
-    return {
-      left: editor.offsetLeft + marker.offsetLeft - editor.scrollLeft,
-      top: marker.offsetTop - editor.scrollTop,
-      height: marker.offsetHeight,
-    };
-  }
-
-  /** Identifiers assigned in the buffer, e.g. C, J, W. */
-  function userVariables() {
-    const vars = new Set();
-    for (const m of editor.value.matchAll(/^[ \t]*([A-Za-z_]\w*)[ \t]*=/gm)) {
-      vars.add(m[1]);
-    }
-    return [...vars];
-  }
-
-  function displayModeCandidates(upto) {
-    const m = upto.match(/display\s*\(\s*([^,\n)]*)\s*,\s*mode\s*=\s*$/);
-    if (!m) return ENUM_VALUES.mode;
-    const expr = m[1].trim();
-    const component = expr.match(/^([A-Za-z_]\w*)(\[[^\]]+\])+$/);
-    if (component && completionSymbols.has(component[1])) return ["symbol"];
-    const info = completionSymbols.get(expr);
-    const modes = info?.display_modes
-      ?.filter((mode) => mode.state === "available")
-      .map((mode) => mode.mode);
-    return modes?.length ? modes : ENUM_VALUES.mode;
-  }
-
-  function displayExpressionBeforeCaret() {
-    const upto = editor.value.slice(0, editor.selectionStart);
-    const line = upto.slice(upto.lastIndexOf("\n") + 1);
-    const m = line.match(/display\s*\(\s*([^,\n)]*)/);
-    return m ? m[1].trim() : "";
-  }
-
-  function displayHintInfo() {
-    const expr = displayExpressionBeforeCaret();
-    const modes = displayModeCandidates(`display(${expr}, mode=`);
-    const label = expr || "expr";
-    return {
-      sig: `display(${label}, mode=...)`,
-      doc: `mode: ${modes.join(" | ")}`,
-    };
-  }
-
-  /** The identifier being typed immediately before the caret. */
-  function currentToken() {
-    const upto = editor.value.slice(0, editor.selectionStart);
-    const m = upto.match(/([A-Za-z_]\w*)$/);
-    return m ? m[1] : "";
-  }
-
-  /** Innermost unclosed call before the caret, e.g. "diff" or "Tensor". */
-  function enclosingCall() {
-    const upto = editor.value.slice(0, editor.selectionStart);
-    let depth = 0;
-    for (let i = upto.length - 1; i >= 0; i--) {
-      const ch = upto[i];
-      if (ch === ")") depth++;
-      else if (ch === "(") {
-        if (depth === 0) {
-          const head = upto.slice(0, i).match(/([A-Za-z_]\w*)\s*$/);
-          return head ? head[1] : null;
-        }
-        depth--;
-      } else if (ch === "\n" && depth === 0) {
-        return null; // calls don't span lines in .tens
+function enclosingCall(prefix) {
+  let depth = 0;
+  for (let i = prefix.length - 1; i >= 0; i--) {
+    const ch = prefix[i];
+    if (ch === ")") depth++;
+    else if (ch === "(") {
+      if (depth === 0) {
+        const head = prefix.slice(0, i).match(/([A-Za-z_]\w*)\s*$/);
+        return head ? head[1] : null;
       }
+      depth--;
     }
-    return null;
   }
+  return null;
+}
 
-  /** Ordered completion candidates for the current context. */
-  function candidates(token) {
-    const upto = editor.value.slice(0, editor.selectionStart - token.length);
-    // value position: `mode=`, `format=`, `rules=` directly before the token
-    const kw = upto.match(/([A-Za-z_]\w*)\s*=\s*$/);
-    if (kw?.[1] === "mode") return displayModeCandidates(upto);
-    if (kw && ENUM_VALUES[kw[1]]) return ENUM_VALUES[kw[1]];
-    if (kw) return KEYWORDS; // identity=tru… etc.
+function showExpressionBefore(prefix) {
+  const m = prefix.match(/\.show\s*\([^()\n]*$/);
+  if (!m) return "";
+  let expr = prefix.slice(0, m.index).trim();
+  const rowStart = Math.max(expr.lastIndexOf("["), expr.lastIndexOf(","));
+  if (rowStart >= 0) expr = expr.slice(rowStart + 1).trim();
+  return expr;
+}
 
-    const call = enclosingCall();
-    const out = [];
-    if (call === "Tensor") out.push(...TENSOR_KWARGS);
-    out.push(...BUILTINS.map((b) => b.name));
-    out.push(...KEYWORDS);
-    out.push(...completionSymbols.keys());
-    out.push(...userVariables());
-    return [...new Set(out)];
-  }
+function showModeCandidates(expr = "") {
+  const component = expr.match(/^([A-Za-z_]\w*)(\[[^\]]+\])+$/);
+  if (component && completionSymbols.has(component[1])) return ["symbol"];
+  const info = completionSymbols.get(expr);
+  const modes = info?.display_modes
+    ?.filter((mode) => mode.state === "available")
+    .map((mode) => mode.mode);
+  return modes?.length ? modes : SHOW_MODES;
+}
 
-  function updateGhost() {
-    suggestion = null;
-    ghost.style.display = "none";
-    if (editor.selectionStart !== editor.selectionEnd) return;
-    const token = currentToken();
-    if (!token) return;
-    // only complete at the end of the token (nothing word-like after caret)
-    if (/^\w/.test(editor.value.slice(editor.selectionStart))) return;
-    const match = candidates(token).find(
-      (c) => c.startsWith(token) && c !== token,
+function assignedNames(source) {
+  const names = [];
+  for (const m of source.matchAll(/^[ \t]*([A-Za-z_]\w*)[ \t]*=/gm)) names.push(m[1]);
+  return names;
+}
+
+export function tensorForgeCompletionSource(context) {
+  const word = wordBefore(context);
+  const prefix = linePrefix(context);
+  const dotShow = prefix.endsWith(".");
+  if (!word && !dotShow && !context.explicit) return null;
+
+  const from = dotShow ? context.pos : (word?.from ?? context.pos);
+  const kw = prefix.slice(0, from - context.state.doc.lineAt(context.pos).from).match(/([A-Za-z_]\w*)\s*=\s*$/);
+  const call = enclosingCall(prefix);
+  const options = [];
+
+  if (dotShow) {
+    options.push(cmOption("show", "method", "render output", "show()"));
+  } else if (call === "show") {
+    const expr = showExpressionBefore(prefix);
+    options.push(...showModeCandidates(expr).map((mode) => cmOption(mode, "show mode")));
+  } else if (kw && ENUM_VALUES[kw[1]]) {
+    options.push(...ENUM_VALUES[kw[1]].map((name) => cmOption(name, "value")));
+  } else if (kw) {
+    options.push(...KEYWORDS.map((name) => cmOption(name, "value")));
+  } else {
+    if (call === "Tensor") options.push(...TENSOR_KWARGS.map((name) => cmOption(name, "kwarg")));
+    options.push(
+      ...BUILTINS.map((b) => cmOption(b.name, b.sig, b.doc)),
+      ...KEYWORDS.map((name) => cmOption(name, "keyword")),
+      ...[...completionSymbols.keys()].map((name) => cmOption(name, "symbol")),
+      ...assignedNames(context.state.doc.toString()).map((name) => cmOption(name, "variable")),
     );
-    if (!match) return;
-    suggestion = match.slice(token.length);
-    const pos = caretPosition();
-    ghost.textContent = suggestion;
-    ghost.style.left = pos.left + "px";
-    ghost.style.top = pos.top + "px";
-    ghost.style.display = "block";
   }
 
-  function updateHint() {
-    const call = enclosingCall();
-    const info = call === "display" ? displayHintInfo() : call && BUILTIN_MAP.get(call);
-    if (!info) {
-      hint.style.display = "none";
-      return;
-    }
-    hint.innerHTML = "";
-    const sig = document.createElement("div");
-    sig.className = "cm-hint-sig";
-    sig.textContent = info.sig;
-    const doc = document.createElement("div");
-    doc.className = "cm-hint-doc";
-    doc.textContent = info.doc;
-    hint.append(sig, doc);
-    const pos = caretPosition();
-    hint.style.left = Math.min(pos.left, wrap.clientWidth - 280) + "px";
-    hint.style.top = pos.top + pos.height + 4 + "px";
-    hint.style.display = "block";
-  }
+  const seen = new Set();
+  return {
+    from,
+    options: options.filter((option) => {
+      if (seen.has(option.label)) return false;
+      seen.add(option.label);
+      return true;
+    }),
+  };
+}
 
-  function refresh() {
-    updateGhost();
-    updateHint();
-  }
-
-  function dismiss() {
-    suggestion = null;
-    ghost.style.display = "none";
-    hint.style.display = "none";
-  }
-
-  editor.addEventListener("input", refresh);
-  editor.addEventListener("click", refresh);
-  window.addEventListener("tensorforge:completion-symbols", refresh);
-  editor.addEventListener("scroll", dismiss);
-  editor.addEventListener("blur", dismiss);
-  editor.addEventListener("keyup", (e) => {
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
-      refresh();
-    }
-  });
-  editor.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      dismiss();
-      return;
-    }
-    if (e.key !== "Tab" || e.metaKey || e.ctrlKey || e.altKey) return;
-    e.preventDefault();
-    const start = editor.selectionStart;
-    const insert = suggestion ?? "    ";
-    // execCommand keeps the undo stack intact (still the sane option for textarea)
-    if (!document.execCommand("insertText", false, insert)) {
-      editor.setRangeText(insert, start, editor.selectionEnd, "end");
-    }
-    refresh();
-  });
+export function markdownSlashCompletionSource(context) {
+  const line = context.state.doc.lineAt(context.pos);
+  const prefix = context.state.doc.sliceString(line.from, context.pos);
+  const match = prefix.match(/^(\s*)\/([A-Za-z-]*)$/);
+  if (!match && !context.explicit) return null;
+  if (!match) return null;
+  const from = line.from + match[1].length;
+  const token = match[2].toLowerCase();
+  return {
+    from,
+    options: MARKDOWN_COMMANDS.filter((command) => command.name.startsWith(token)).map((command) => ({
+      label: `/${command.name}`,
+      type: "keyword",
+      detail: command.sig,
+      info: command.doc,
+      apply(view, _completion, fromPos, toPos) {
+        view.dispatch({
+          changes: { from: fromPos, to: toPos, insert: command.text },
+          selection: { anchor: fromPos + command.cursor },
+        });
+      },
+    })),
+  };
 }

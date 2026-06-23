@@ -117,6 +117,10 @@
     border-radius: 8px; box-shadow: var(--shadow);
     display: none;
   }
+  #table-menu {
+    min-width: 310px;
+    max-width: 340px;
+  }
   .menu.show { display: block; }
   .menu button {
     display: block; width: 100%; min-width: 0;
@@ -124,6 +128,24 @@
     padding: 6px 9px; background: transparent;
   }
   .menu button:hover { background: var(--panel-2); border-color: transparent; }
+  .menu .menu-section {
+    padding: 5px 6px 3px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .menu .menu-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px;
+    padding: 0 3px 5px;
+  }
+  .menu .menu-grid button {
+    padding: 5px 7px;
+    font-size: 12px;
+  }
   .menu .menu-row {
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 4px 9px; font-size: 12.5px; color: var(--muted);
@@ -219,160 +241,6 @@
     background: var(--border); opacity: 0.6;
   }
   #split-resizer:hover, #split-resizer.dragging { background: var(--accent); opacity: 1; }
-  #source-editor {
-    flex: 1; overflow-y: auto; overflow-x: hidden;
-    padding: 18px 20px 42px;
-    overscroll-behavior: contain;
-  }
-  #source-gutter {
-    flex: 0 0 34px; overflow: hidden;
-    padding: 18px 0 42px;
-    border-right: 1px solid var(--border);
-    color: var(--muted);
-    background: var(--panel);
-    user-select: none;
-    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
-  }
-  .gutter-block {
-    margin: 0 0 14px;
-  }
-  .gutter-block.gutter-tens {
-    padding: 6px 0;
-  }
-  .gutter-line {
-    height: 21.45px;
-    padding-right: 8px;
-    text-align: right;
-    box-sizing: border-box;
-  }
-  #editor {
-    display: none;
-  }
-  .source-block {
-    position: relative;
-    margin: 0 0 14px;
-  }
-  .source-editor-layer {
-    position: relative;
-  }
-  .source-highlight {
-    position: absolute; inset: 0;
-    margin: 0; pointer-events: none;
-    overflow: hidden;
-    white-space: pre-wrap; word-wrap: break-word;
-    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
-    tab-size: 4;
-    color: var(--text);
-  }
-  .source-block textarea {
-    position: relative; z-index: 1;
-    display: block; width: 100%;
-    resize: none; border: 0; outline: none;
-    background: transparent; color: transparent; caret-color: var(--text);
-    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
-    tab-size: 4; overflow: hidden;
-    white-space: pre-wrap; word-wrap: break-word;
-  }
-  .source-block textarea::selection {
-    background: color-mix(in srgb, var(--accent) 34%, transparent);
-  }
-  .source-markdown textarea {
-    padding: 0;
-    min-height: 28px;
-  }
-  .source-markdown .source-highlight {
-    padding: 0;
-    min-height: 28px;
-  }
-  .source-tens {
-    border: 1px solid var(--tens-frame);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--tens-frame) 8%, transparent);
-    padding: 5px 11px;
-    box-sizing: border-box;
-  }
-  .source-markdown::before {
-    content: ""; position: absolute;
-    left: -12px; top: 1px; bottom: 1px; width: 3px;
-    border-radius: 2px; background: var(--note-accent); opacity: 0.5;
-  }
-  .source-tens textarea {
-    min-height: 22px;
-  }
-  .source-tens .source-highlight {
-    min-height: 22px;
-  }
-  .source-block textarea::placeholder {
-    color: var(--muted);
-    opacity: 0.55;
-  }
-  .hl-md-marker,
-  .hl-md-fence,
-  .hl-tens-op {
-    color: var(--muted);
-  }
-  .hl-md-heading {
-    color: var(--accent);
-    font-weight: 650;
-  }
-  .hl-md-strong {
-    color: var(--syntax-strong);
-    font-weight: 650;
-  }
-  .hl-md-em {
-    color: var(--syntax-keyword);
-    font-style: italic;
-  }
-  .hl-md-code,
-  .hl-tens-string {
-    color: var(--syntax-string);
-  }
-  .hl-md-math {
-    color: var(--syntax-math);
-  }
-  .hl-tens-comment {
-    color: var(--syntax-comment);
-    font-style: italic;
-  }
-  .hl-tens-number {
-    color: var(--syntax-number);
-  }
-  .hl-tens-builtin {
-    color: var(--syntax-function);
-    font-weight: 600;
-  }
-  .hl-tens-keyword {
-    color: var(--syntax-keyword);
-  }
-  .hl-tens-ident {
-    color: var(--text);
-  }
-  /* hidden mirror used to measure caret position */
-  .cm-mirror {
-    position: absolute; top: 0; left: 0;
-    visibility: hidden; pointer-events: none;
-    white-space: pre-wrap; word-wrap: break-word;
-    overflow: hidden;
-  }
-  .cm-ghost {
-    position: absolute; display: none; pointer-events: none;
-    color: var(--muted); opacity: 0.55;
-    font: 13px/1.65 "SF Mono", Menlo, Consolas, monospace;
-    white-space: pre;
-  }
-  .cm-hint {
-    position: absolute; display: none; z-index: 5;
-    max-width: 270px;
-    background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px 11px;
-    box-shadow: var(--shadow);
-    font-size: 12px; pointer-events: none;
-  }
-  .cm-hint-sig {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    color: var(--accent); margin-bottom: 3px;
-  }
-  .cm-hint-doc { color: var(--muted); line-height: 1.45; }
   #output {
     flex: 1; overflow: auto; padding: 16px 20px; background: var(--bg);
     overscroll-behavior: contain;
@@ -566,8 +434,22 @@
     <button id="save">Save</button>
     <button id="add-note">Add&nbsp;Tens</button>
     <div class="menu-wrap">
-      <button id="insert-table" title="Insert a Markdown table">Table</button>
+      <button id="insert-table" title="Insert Markdown blocks and templates">Markdown</button>
       <div id="table-menu" class="menu">
+        <div class="menu-section">Blocks</div>
+        <div class="menu-grid">
+          <button data-md-template="h2">Heading</button>
+          <button data-md-template="math">Math</button>
+          <button data-md-template="code">Code</button>
+          <button data-md-template="quote">Quote</button>
+          <button data-md-template="list">List</button>
+          <button data-md-template="todo">Todo</button>
+          <button data-md-template="bold">Bold</button>
+          <button data-md-template="link">Link</button>
+          <button data-md-template="hr">Rule</button>
+          <button data-md-template="image">Image</button>
+        </div>
+        <div class="menu-section">Table</div>
         <label class="menu-row">Rows <input id="table-rows" type="number" min="1" max="20" value="2"></label>
         <label class="menu-row">Cols <input id="table-cols" type="number" min="1" max="10" value="3"></label>
         <label class="menu-row">Align
@@ -578,6 +460,15 @@
           </select>
         </label>
         <button id="table-insert">Insert</button>
+        <div class="menu-section">Diagrams</div>
+        <div class="menu-grid">
+          <button data-md-template="logic-tree">Logic tree</button>
+          <button data-md-template="three-cases">3 cases</button>
+          <button data-md-template="lecture-ode">ODE lecture</button>
+          <button data-md-template="ode-classification">ODE classify</button>
+          <button data-md-template="integrating-factor">Int. factor</button>
+          <button data-md-template="exact-ode">Exact ODE</button>
+        </div>
       </div>
     </div>
     <div class="menu-wrap">
@@ -601,11 +492,7 @@
       <div id="rail-files"><div class="rail-empty">Open a .tens file to browse its folder here.</div></div>
     </div>
     <div id="rail-resizer" aria-hidden="true"></div>
-    <div id="editor-wrap">
-      <div id="source-gutter" aria-hidden="true"></div>
-      <div id="source-editor" aria-label="TensorForge document editor"></div>
-      <textarea id="editor" aria-hidden="true"></textarea>
-    </div>
+    <div id="editor-wrap" aria-label="TensorForge document editor"></div>
     <div id="split-resizer" aria-hidden="true"></div>
     <div id="output"><div class="placeholder">Run a .tens program to see results</div></div>
   </main>

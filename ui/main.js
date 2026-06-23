@@ -1,9 +1,37 @@
-// TensorForge frontend. The visible editor is a small document/block editor:
-// Markdown is the default, TensorForge code lives in blue .tens blocks. The
-// saved/runner source is still the plain .tens text format with hidden
-// tensorforge:tens sentinels, so files stay backward compatible.
+// TensorForge frontend. The visible editor is a single CodeMirror source
+// buffer: Markdown is the default, TensorForge code lives inside the saved
+// tensorforge:tens sentinels. The on-disk .tens format stays unchanged.
 
-import { setCompletionSymbols, setupCompletion } from "./completion.js";
+import {
+  Annotation,
+  Decoration,
+  EditorState,
+  EditorView,
+  HighlightStyle,
+  RangeSetBuilder,
+  ViewPlugin,
+  autocompletion,
+  completionKeymap,
+  defaultKeymap,
+  drawSelection,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  history,
+  historyKeymap,
+  indentWithTab,
+  keymap,
+  lineNumbers,
+  markdown,
+  searchKeymap,
+  syntaxHighlighting,
+  tags,
+} from "./vendor/codemirror/cm.bundle.js";
+import {
+  BUILTINS,
+  markdownSlashCompletionSource,
+  setCompletionSymbols,
+  tensorForgeCompletionSource,
+} from "./completion.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
@@ -17,10 +45,27 @@ const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writin
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 const SCROLL_SYNC_ANCHOR = 0.22;
+const TENS_BUILTINS = new Set([...BUILTINS.map((b) => b.name), "show"]);
+const TENS_KEYWORDS = new Set([
+  "true",
+  "false",
+  "order",
+  "dim",
+  "rules",
+  "identity",
+  "symmetric",
+  "antisymmetric",
+  "orthogonal",
+  "isotropic",
+  "symbol",
+  "components",
+  "matrix",
+  "block_components",
+  "algebra",
+  "tensor",
+  "continuum",
+]);
 
-const editor = document.getElementById("editor"); // hidden serialized source
-const sourceEditor = document.getElementById("source-editor");
-const sourceGutter = document.getElementById("source-gutter");
 const editorWrap = document.getElementById("editor-wrap");
 const mainEl = document.querySelector("main");
 const output = document.getElementById("output");
@@ -51,8 +96,8 @@ let liveTimer = null;
 let lastGoodShown = false;
 let nextBlockId = 1;
 let docBlocks = [];
-let activeBlockId = null;
-let activeTextarea = null;
+let editorView = null;
+let replacingDocument = false;
 let isDirty = false;
 let scrollSyncSource = null;
 let scrollSyncFrame = null;
@@ -143,36 +188,7 @@ function confirmDiscardUnsaved() {
 
 // ---- document model --------------------------------------------------------
 
-function makeBlock(kind, text, sourceLine = 1) {
-  if (kind === "markdown") text = cleanMarkdownText(text);
-  return { id: nextBlockId++, kind, text, sourceLine, sourceEndLine: sourceLine };
-}
-
-function trimOuterBlankLines(text) {
-  return text.replace(/^\s*\n/, "").replace(/\n\s*$/, "");
-}
-
-function cleanMarkdownText(text) {
-  let lines = text
-    .split(/\r?\n/)
-    .filter((line) => {
-      const trimmed = line.trim().toLowerCase();
-      return ![
-        TENS_OPEN.toLowerCase(),
-        TENS_CLOSE.toLowerCase(),
-        NOTE_OPEN.toLowerCase(),
-        NOTE_CLOSE.toLowerCase(),
-      ].includes(trimmed);
-    });
-
-  // Older note UI sometimes stored an empty ```notes fenced wrapper. It was
-  // an editor implementation detail, not user-authored Markdown.
-  if (lines[0]?.trim().toLowerCase() === "```notes") {
-    const close = lines.findIndex((line, i) => i > 0 && /^```\s*$/.test(line.trim()));
-    if (close !== -1) lines = [...lines.slice(1, close), ...lines.slice(close + 1)];
-  }
-  return trimOuterBlankLines(lines.join("\n"));
-}
+const internalEdit = Annotation.define();
 
 function lineCount(text) {
   return text.length === 0 ? 1 : text.split(/\r?\n/).length;
@@ -200,7 +216,9 @@ function looksLikeTensorForgeSource(source) {
     if (!t) continue;
     if (t.startsWith("#")) continue;
     return (
-      /^(display|export)\s*\(/.test(t) ||
+      /\.show\s*\(/.test(t) ||
+      /^(?:Scalar|Var|Function|Tensor|ScalarSet|VectorSet|Diff|Derivative|Simplify|Sum|Det|Tr|Inv|Equation|Integrate|Integral|ClassifyODE|SolveODE|IC|log|sqrt|exp|sin|cos|tan|sinh|cosh|tanh)\s*\(/.test(t) ||
+      /^\[[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*\]\s*=\s*(?:Spec_Decomp|Spectral)\s*\(/.test(t) ||
       /^[A-Za-z_]\w*(?:\[[^\]]+\])+\s*=/.test(t) ||
       /^[A-Za-z_]\w*\s*=/.test(t)
     );
@@ -212,10 +230,33 @@ function blockKindForFreeform(source) {
   return looksLikeTensorForgeSource(source) ? "tens" : "markdown";
 }
 
-function makeFreeformBlock(text) {
-  const cleaned = trimOuterBlankLines(text);
+function trimBlockLines(lines, startLine) {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].trim() === "") start++;
+  while (end > start && lines[end - 1].trim() === "") end--;
+  return {
+    text: lines.slice(start, end).join("\n"),
+    sourceLine: startLine + start,
+    sourceEndLine: Math.max(startLine + start, startLine + end - 1),
+  };
+}
+
+function makeParsedBlock(kind, text, sourceLine, sourceEndLine = sourceLine + lineCount(text) - 1) {
+  return { id: nextBlockId++, kind, text, sourceLine, sourceEndLine };
+}
+
+function makeFreeformBlock(text, sourceLine = 1) {
+  const lines = text.split(/\r?\n/);
+  const trimmed = trimBlockLines(lines, sourceLine);
+  const cleaned = trimmed.text;
   if (!cleaned.trim()) return null;
-  return makeBlock(blockKindForFreeform(cleaned), cleaned);
+  return makeParsedBlock(
+    blockKindForFreeform(cleaned),
+    cleaned,
+    trimmed.sourceLine,
+    trimmed.sourceEndLine,
+  );
 }
 
 function parseLegacyNoteDocument(source) {
@@ -224,18 +265,20 @@ function parseLegacyNoteDocument(source) {
   let start = 0;
   for (let i = 0; i < lines.length; i++) {
     if (!isNoteOpen(lines[i])) continue;
-    const before = makeFreeformBlock(lines.slice(start, i).join("\n"));
+    const before = makeFreeformBlock(lines.slice(start, i).join("\n"), start + 1);
     if (before) blocks.push(before);
     i++;
     const noteStart = i;
     while (i < lines.length && !isNoteClose(lines[i])) i++;
-    const note = trimOuterBlankLines(lines.slice(noteStart, i).join("\n"));
-    if (note.trim()) blocks.push(makeBlock("markdown", note));
+    const note = trimBlockLines(lines.slice(noteStart, i), noteStart + 1);
+    if (note.text.trim()) {
+      blocks.push(makeParsedBlock("markdown", note.text, note.sourceLine, note.sourceEndLine));
+    }
     start = i + 1;
   }
-  const tail = makeFreeformBlock(lines.slice(start).join("\n"));
+  const tail = makeFreeformBlock(lines.slice(start).join("\n"), start + 1);
   if (tail) blocks.push(tail);
-  return blocks.length ? blocks : [makeBlock("markdown", "")];
+  return blocks.length ? blocks : [makeParsedBlock("markdown", "", 1, 1)];
 }
 
 function parseSourceDocument(source) {
@@ -249,57 +292,57 @@ function parseSourceDocument(source) {
   for (let i = 0; i < lines.length; i++) {
     if (!isTensOpen(lines[i])) continue;
     sawTens = true;
-    const md = trimOuterBlankLines(lines.slice(start, i).join("\n"));
-    if (md.trim()) blocks.push(makeBlock("markdown", md));
+    const md = trimBlockLines(lines.slice(start, i), start + 1);
+    if (md.text.trim()) {
+      blocks.push(makeParsedBlock("markdown", md.text, md.sourceLine, md.sourceEndLine));
+    }
     i++;
     const codeStart = i;
     while (i < lines.length && !isTensClose(lines[i])) i++;
     const body = lines.slice(codeStart, i).join("\n");
-    blocks.push(makeBlock(blockKindForFreeform(body), body));
+    blocks.push(
+      makeParsedBlock(
+        "tens",
+        body,
+        codeStart + 1,
+        Math.max(codeStart + 1, i),
+      ),
+    );
     start = i + 1;
   }
 
   if (sawTens) {
-    const tail = trimOuterBlankLines(lines.slice(start).join("\n"));
-    if (tail.trim()) blocks.push(makeBlock("markdown", tail));
-    return blocks.length ? blocks : [makeBlock("markdown", "")];
+    const tail = trimBlockLines(lines.slice(start), start + 1);
+    if (tail.text.trim()) {
+      blocks.push(makeParsedBlock("markdown", tail.text, tail.sourceLine, tail.sourceEndLine));
+    }
+    return blocks.length ? blocks : [makeParsedBlock("markdown", "", 1, 1)];
   }
 
-  return [makeBlock(blockKindForFreeform(source), source)];
+  return [makeParsedBlock(blockKindForFreeform(source), source, 1, lineCount(source))];
 }
 
-function serializeBlock(block) {
-  if (block.kind === "tens") return `${TENS_OPEN}\n${block.text}\n${TENS_CLOSE}`;
-  return block.text;
-}
-
-function serializeDocument(blocks) {
-  return blocks.map(serializeBlock).join("\n\n");
+function documentSource() {
+  return editorView?.state.doc.toString() ?? "";
 }
 
 function executableSource() {
-  return docBlocks.some((block) => block.kind === "tens") ? editor.value : null;
+  return docBlocks.some((block) => block.kind === "tens") ? documentSource() : null;
 }
 
-function recomputeSourceLines() {
-  let line = 1;
-  for (const block of docBlocks) {
-    block.sourceLine = line;
-    const count = block.kind === "tens" ? lineCount(block.text) + 2 : lineCount(block.text);
-    block.sourceEndLine = line + count - 1;
-    line += count + 2; // blank separator inserted by serializeDocument
-  }
-}
-
-function syncSourceFromBlocks() {
-  recomputeSourceLines();
-  editor.value = serializeDocument(docBlocks);
+function refreshDocumentModel() {
+  nextBlockId = 1;
+  docBlocks = parseSourceDocument(documentSource());
 }
 
 function setDocumentSource(source, options = {}) {
-  docBlocks = parseSourceDocument(source);
-  syncSourceFromBlocks();
-  renderSourceEditor();
+  replacingDocument = true;
+  try {
+    replaceEditorSource(source);
+  } finally {
+    replacingDocument = false;
+  }
+  refreshDocumentModel();
   if (options.dirty === false) markClean();
   if (options.run !== false) scheduleLiveRun();
 }
@@ -315,216 +358,89 @@ function blockForId(id) {
   return docBlocks.find((b) => String(b.id) === String(id));
 }
 
-// ---- source editor ---------------------------------------------------------
+// ---- CodeMirror source editor ---------------------------------------------
 
-function renderSourceEditor() {
-  sourceEditor.replaceChildren();
-  for (const block of docBlocks) sourceEditor.appendChild(renderSourceBlock(block));
-  renderSourceGutter();
-  resizeAllTextareas();
-  updateInsertTableState();
-}
-
-function renderSourceGutter() {
-  sourceGutter.replaceChildren(
-    ...docBlocks.map((block) => {
-      const section = document.createElement("section");
-      section.className = `gutter-block ${block.kind === "tens" ? "gutter-tens" : "gutter-markdown"}`;
-      const firstLine = block.kind === "tens" ? block.sourceLine + 1 : block.sourceLine;
-      const lines = lineCount(block.text);
-      for (let i = 0; i < lines; i++) {
-        const row = document.createElement("div");
-        row.className = "gutter-line";
-        row.textContent = String(firstLine + i);
-        section.appendChild(row);
-      }
-      return section;
-    }),
-  );
-}
-
-const TENS_BUILTINS = new Set([
-  "Scalar",
-  "Tensor",
-  "Var",
-  "ScalarSet",
-  "VectorSet",
-  "Spec_Decomp",
-  "eigvals",
-  "eigvecs",
-  "display",
-  "export",
-  "diff",
-  "det",
-  "tr",
-  "log",
-  "sqrt",
-  "exp",
-  "sinh",
-  "cosh",
-  "sum",
-  "inv",
-  "dot",
-  "ddot",
-  "outer",
-  "otimes",
-  "simplify",
-]);
-
-const TENS_KEYWORDS = new Set([
-  "true",
-  "false",
-  "order",
-  "dim",
-  "mode",
-  "format",
-  "rules",
-  "identity",
-  "symmetric",
-  "antisymmetric",
-  "orthogonal",
-  "isotropic",
-  "symbol",
-  "components",
-  "matrix",
-  "block_components",
-  "latex",
-  "markdown",
-  "algebra",
-  "tensor",
-  "continuum",
-]);
-
-function span(className, text) {
-  return `<span class="${className}">${escapeHtml(text)}</span>`;
-}
-
-function highlightSource(kind, text) {
-  const html = kind === "tens" ? highlightTens(text) : highlightMarkdownSource(text);
-  return html || " ";
-}
-
-function updateHighlight(textarea) {
-  const blockEl = textarea.closest(".source-block");
-  const highlight = blockEl?.querySelector(".source-highlight");
-  if (!highlight) return;
-  highlight.innerHTML = highlightSource(
-    blockEl.classList.contains("source-tens") ? "tens" : "markdown",
-    textarea.value,
-  );
-}
-
-function highlightMarkdownSource(text) {
-  const lines = text.split("\n");
-  let inFence = false;
-  return lines
-    .map((line) => {
-      const fence = line.match(/^(\s*```)(.*)$/);
-      if (fence) {
-        inFence = !inFence;
-        return span("hl-md-fence", fence[1]) + span("hl-md-code", fence[2]);
-      }
-      if (inFence) return span("hl-md-code", line);
-
-      const heading = line.match(/^(#{1,6})(\s+.*)$/);
-      if (heading) {
-        return span("hl-md-marker", heading[1]) + span("hl-md-heading", heading[2]);
-      }
-
-      const list = line.match(/^(\s*[-*+]\s+)(.*)$/);
-      if (list) {
-        return span("hl-md-marker", list[1]) + highlightMarkdownInline(list[2]);
-      }
-
-      const quote = line.match(/^(\s*>\s+)(.*)$/);
-      if (quote) {
-        return span("hl-md-marker", quote[1]) + highlightMarkdownInline(quote[2]);
-      }
-
-      if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-        return highlightMarkdownTableLine(line);
-      }
-
-      return highlightMarkdownInline(line);
-    })
-    .join("\n");
-}
-
-function highlightMarkdownTableLine(line) {
-  let out = "";
-  for (let i = 0; i < line.length; ) {
-    if (line[i] === "|") {
-      out += span("hl-md-marker", "|");
-      i++;
-      continue;
-    }
-    const end = line.indexOf("|", i);
-    const j = end === -1 ? line.length : end;
-    out += highlightMarkdownInline(line.slice(i, j));
-    i = j;
+function tensRegions(source) {
+  const lines = source.split(/\r?\n/);
+  const regions = [];
+  let line = 1;
+  let inTens = false;
+  for (const text of lines) {
+    const trimmed = text.trim().toLowerCase();
+    const sentinel = isTensOpen(text) || isTensClose(text);
+    if (isTensOpen(text)) inTens = true;
+    regions.push({ line, kind: sentinel ? "sentinel" : inTens ? "tens" : "markdown" });
+    if (isTensClose(text)) inTens = false;
+    line++;
   }
-  return out;
+  return regions;
 }
 
-function highlightMarkdownInline(text) {
-  let out = "";
-  for (let i = 0; i < text.length; ) {
-    if (text.startsWith("**", i)) {
-      const end = text.indexOf("**", i + 2);
-      if (end !== -1) {
-        out += span("hl-md-marker", "**");
-        out += span("hl-md-strong", text.slice(i + 2, end));
-        out += span("hl-md-marker", "**");
-        i = end + 2;
-        continue;
-      }
-    }
-    if (text[i] === "`") {
-      const end = text.indexOf("`", i + 1);
-      if (end !== -1) {
-        out += span("hl-md-marker", "`");
-        out += span("hl-md-code", text.slice(i + 1, end));
-        out += span("hl-md-marker", "`");
-        i = end + 1;
-        continue;
-      }
-    }
-    if (text[i] === "$") {
-      const end = findInlineMathEnd(text, i + 1);
-      if (end !== -1) {
-        out += span("hl-md-marker", "$");
-        out += span("hl-md-math", text.slice(i + 1, end));
-        out += span("hl-md-marker", "$");
-        i = end + 1;
-        continue;
-      }
-    }
-    if (text[i] === "*" && text[i + 1] !== "*") {
-      const end = text.indexOf("*", i + 1);
-      if (end !== -1) {
-        out += span("hl-md-marker", "*");
-        out += span("hl-md-em", text.slice(i + 1, end));
-        out += span("hl-md-marker", "*");
-        i = end + 1;
-        continue;
-      }
-    }
-    out += escapeHtml(text[i]);
-    i++;
+function regionKindAtLine(lineNumber) {
+  const source = documentSource();
+  return tensRegions(source).find((region) => region.line === lineNumber)?.kind ?? "markdown";
+}
+
+function regionKindAtPos(pos) {
+  if (!editorView) return "markdown";
+  return regionKindAtLine(editorView.state.doc.lineAt(pos).number);
+}
+
+function isMarkdownAtPos(pos) {
+  return regionKindAtPos(pos) === "markdown";
+}
+
+function sentinelRanges(doc) {
+  const ranges = [];
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (!isSentinelDocLine(doc, n)) continue;
+    ranges.push({
+      from: line.from,
+      to: n < doc.lines ? doc.line(n + 1).from : line.to,
+    });
   }
-  return out;
+  return ranges;
 }
 
-function highlightTens(text) {
-  let out = "";
+function isSentinelDocLine(doc, lineNumber) {
+  if (!doc || lineNumber < 1 || lineNumber > doc.lines) return false;
+  const line = doc.line(lineNumber);
+  return isTensOpen(line.text) || isTensClose(line.text);
+}
+
+function firstEditableDocPos(doc) {
+  if (!doc) return 0;
+  for (let n = 1; n <= doc.lines; n++) {
+    if (!isSentinelDocLine(doc, n)) return doc.line(n).from;
+  }
+  return 0;
+}
+
+function protectSentinels() {
+  return EditorState.transactionFilter.of((tr) => {
+    if (!tr.docChanged || tr.annotation(internalEdit)) return tr;
+    const ranges = sentinelRanges(tr.startState.doc);
+    let allowed = true;
+    tr.changes.iterChanges((fromA, toA) => {
+      if (!allowed) return;
+      allowed = !ranges.some((range) => fromA < range.to && toA > range.from);
+    });
+    return allowed ? tr : [];
+  });
+}
+
+function addMark(builder, line, from, to, className) {
+  if (to > from) builder.add(line.from + from, line.from + to, Decoration.mark({ class: className }));
+}
+
+function decorateTensTokens(builder, line) {
+  const text = line.text;
   for (let i = 0; i < text.length; ) {
     const ch = text[i];
     if (ch === "#") {
-      const end = text.indexOf("\n", i);
-      const j = end === -1 ? text.length : end;
-      out += span("hl-tens-comment", text.slice(i, j));
-      i = j;
-      continue;
+      addMark(builder, line, i, text.length, "tf-token-comment");
+      break;
     }
     if (ch === '"') {
       let j = i + 1;
@@ -539,13 +455,13 @@ function highlightTens(text) {
         }
         j++;
       }
-      out += span("hl-tens-string", text.slice(i, j));
+      addMark(builder, line, i, j, "tf-token-string");
       i = j;
       continue;
     }
     if (/[0-9]/.test(ch)) {
       const m = text.slice(i).match(/^\d+(?:\.\d+)?/);
-      out += span("hl-tens-number", m[0]);
+      addMark(builder, line, i, i + m[0].length, "tf-token-number");
       i += m[0].length;
       continue;
     }
@@ -553,361 +469,293 @@ function highlightTens(text) {
       const m = text.slice(i).match(/^[A-Za-z_]\w*/);
       const word = m[0];
       const cls = TENS_BUILTINS.has(word)
-        ? "hl-tens-builtin"
+        ? "tf-token-builtin"
         : TENS_KEYWORDS.has(word)
-          ? "hl-tens-keyword"
-          : "hl-tens-ident";
-      out += span(cls, word);
+          ? "tf-token-keyword"
+          : "tf-token-ident";
+      addMark(builder, line, i, i + word.length, cls);
       i += word.length;
       continue;
     }
-    if ("+-*/^=.:,&[]()".includes(ch)) {
-      out += span("hl-tens-op", ch);
-      i++;
-      continue;
-    }
-    out += escapeHtml(ch);
+    if ("+-*/^=.:,&[]()".includes(ch)) addMark(builder, line, i, i + 1, "tf-token-op");
     i++;
   }
-  return out;
 }
 
-function renderSourceBlock(block) {
-  const section = document.createElement("section");
-  section.className = `source-block ${block.kind === "tens" ? "source-tens" : "source-markdown"}`;
-  section.dataset.blockId = String(block.id);
-  section.dataset.sourceLine = String(block.sourceLine);
-
-  const layer = document.createElement("div");
-  layer.className = "source-editor-layer";
-
-  const highlight = document.createElement("pre");
-  highlight.className = `source-highlight ${block.kind === "tens" ? "highlight-tens" : "highlight-markdown"}`;
-  highlight.setAttribute("aria-hidden", "true");
-  highlight.innerHTML = highlightSource(block.kind, block.text);
-
-  const textarea = document.createElement("textarea");
-  textarea.className = "source-textarea";
-  textarea.spellcheck = block.kind === "markdown";
-  textarea.wrap = "soft";
-  textarea.value = block.text;
-  textarea.placeholder =
-    block.kind === "tens" ? "TensorForge code" : "Write Markdown here";
-
-  textarea.addEventListener("focus", () => {
-    activeBlockId = block.id;
-    activeTextarea = textarea;
-    updateInsertTableState();
-  });
-  textarea.addEventListener("input", (e) => {
-    if (block.kind === "tens" && splitTensBlockOnBlankGap(block, textarea)) return;
-    block.text = textarea.value;
-    markDirty();
-    if (
-      block.kind === "markdown" &&
-      e.inputType?.startsWith("delete") &&
-      collapseEmptyMarkdownBetweenTens(block)
-    ) {
-      return;
+const sourceDecorations = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = this.build(view);
     }
-    autoResize(textarea);
-    syncSourceFromBlocks();
-    refreshBlockLineAttributes();
-    scheduleLiveRun();
-  });
-  textarea.addEventListener("keydown", (e) => {
-    if (moveAcrossBlocksWithArrow(e, block, textarea)) return;
-    if (
-      block.kind === "tens" &&
-      textarea.value.trim() === "" &&
-      textarea.selectionStart === textarea.selectionEnd &&
-      (e.key === "Backspace" || e.key === "Delete")
-    ) {
-      if (removeEmptyTensBlock(block, e.key === "Backspace" ? -1 : 1)) e.preventDefault();
-      return;
+    update(update) {
+      if (update.docChanged || update.viewportChanged) this.decorations = this.build(update.view);
     }
-    if (
-      block.kind === "markdown" &&
-      textarea.value.trim() === "" &&
-      textarea.selectionStart === textarea.selectionEnd &&
-      (e.key === "Backspace" || e.key === "Delete")
-    ) {
-      if (collapseEmptyMarkdownBetweenTens(block)) e.preventDefault();
+    build(view) {
+      const builder = new RangeSetBuilder();
+      let inTens = false;
+      for (let n = 1; n <= view.state.doc.lines; n++) {
+        const line = view.state.doc.line(n);
+        if (isTensOpen(line.text)) {
+          builder.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
+          inTens = true;
+          continue;
+        }
+        if (isTensClose(line.text)) {
+          builder.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
+          inTens = false;
+          continue;
+        }
+        builder.add(
+          line.from,
+          line.from,
+          Decoration.line({ class: inTens ? "tf-tens-line" : "tf-markdown-line" }),
+        );
+        if (inTens) decorateTensTokens(builder, line);
+      }
+      return builder.finish();
     }
-  });
-  textarea.addEventListener("paste", (e) => {
-    if (block.kind === "markdown") handleMarkdownPaste(e, textarea, block);
-  });
-  textarea.addEventListener("click", updateInsertTableState);
-  textarea.addEventListener("keyup", updateInsertTableState);
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
 
-  layer.append(highlight, textarea);
-  section.appendChild(layer);
-  if (block.kind === "tens") setupCompletion(textarea);
-  return section;
+function completionSource(context) {
+  const kind = regionKindAtPos(context.pos);
+  if (kind === "tens") return tensorForgeCompletionSource(context);
+  if (kind === "markdown") return markdownSlashCompletionSource(context);
+  return null;
 }
 
-function moveAcrossBlocksWithArrow(e, block, textarea) {
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return false;
-  if (textarea.selectionStart !== textarea.selectionEnd) return false;
+const editorTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    width: "100%",
+    background: "var(--panel)",
+    color: "var(--text)",
+    font: '13px/1.65 "SF Mono", Menlo, Consolas, monospace',
+  },
+  ".cm-scroller": {
+    overflow: "auto",
+    fontFamily: '"SF Mono", Menlo, Consolas, monospace',
+  },
+  ".cm-content": {
+    minHeight: "100%",
+    padding: "18px 20px 42px 0",
+    caretColor: "var(--text)",
+  },
+  ".cm-line": {
+    padding: "0 0 0 13px",
+  },
+  ".cm-gutters": {
+    background: "var(--panel)",
+    color: "var(--muted)",
+    borderRight: "1px solid var(--border)",
+    paddingTop: "18px",
+    paddingBottom: "42px",
+    userSelect: "none",
+  },
+  ".cm-lineNumbers .cm-gutterElement": {
+    padding: "0 8px 0 6px",
+  },
+  ".cm-activeLine, .cm-activeLineGutter": {
+    background: "color-mix(in srgb, var(--accent) 9%, transparent)",
+  },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+    background: "color-mix(in srgb, var(--accent) 34%, transparent)",
+  },
+  ".cm-tooltip": {
+    background: "var(--panel-2)",
+    color: "var(--text)",
+    border: "1px solid var(--border)",
+    borderRadius: "8px",
+    boxShadow: "var(--shadow)",
+  },
+  ".cm-tooltip-autocomplete ul": {
+    fontFamily: '"SF Mono", Menlo, Consolas, monospace',
+  },
+  ".tf-markdown-line": {
+    borderLeft: "3px solid color-mix(in srgb, var(--note-accent) 50%, transparent)",
+  },
+  ".tf-tens-line": {
+    background: "color-mix(in srgb, var(--tens-frame) 8%, transparent)",
+    borderLeft: "3px solid var(--tens-frame)",
+  },
+  ".tf-sentinel-line": {
+    display: "none",
+    height: "0",
+    minHeight: "0",
+    lineHeight: "0",
+    paddingTop: "0",
+    paddingBottom: "0",
+    overflow: "hidden",
+    borderLeft: "0",
+  },
+  ".tf-token-comment": { color: "var(--syntax-comment)", fontStyle: "italic" },
+  ".tf-token-string": { color: "var(--syntax-string)" },
+  ".tf-token-number": { color: "var(--syntax-number)" },
+  ".tf-token-builtin": { color: "var(--syntax-function)", fontWeight: "600" },
+  ".tf-token-keyword": { color: "var(--syntax-keyword)" },
+  ".tf-token-op": { color: "var(--muted)" },
+});
 
-  const line = lineForOffset(textarea.value, textarea.selectionStart);
-  const lines = lineCount(textarea.value);
-  const direction = e.key === "ArrowDown" ? 1 : -1;
-  if ((direction > 0 && line < lines) || (direction < 0 && line > 1)) return false;
+const markdownHighlight = HighlightStyle.define([
+  { tag: tags.heading, color: "var(--accent)", fontWeight: "650" },
+  { tag: tags.strong, color: "var(--syntax-strong)", fontWeight: "650" },
+  { tag: tags.emphasis, color: "var(--syntax-keyword)", fontStyle: "italic" },
+  { tag: tags.monospace, color: "var(--syntax-string)" },
+  { tag: tags.link, color: "var(--accent)" },
+  { tag: tags.meta, color: "var(--muted)" },
+  { tag: tags.processingInstruction, color: "var(--muted)" },
+]);
 
-  const idx = docBlocks.findIndex((b) => b.id === block.id);
-  const target = docBlocks[idx + direction];
-  if (!target) return false;
-
-  e.preventDefault();
-  focusBlockAtColumn(target, caretColumn(textarea.value, textarea.selectionStart), direction);
-  return true;
-}
-
-function focusBlockAtColumn(block, column, direction) {
-  const textarea = sourceEditor.querySelector(`[data-block-id="${block.id}"] textarea`);
-  if (!textarea) return;
-
-  const targetLine = direction > 0 ? 1 : lineCount(textarea.value);
-  const lineStart = offsetForLine(textarea.value, targetLine);
-  const lineEnd = offsetForLine(textarea.value, targetLine + 1);
-  const end = lineEnd > lineStart && textarea.value[lineEnd - 1] === "\n" ? lineEnd - 1 : lineEnd;
-  const offset = Math.min(lineStart + column, end);
-  textarea.focus();
-  textarea.setSelectionRange(offset, offset);
-}
-
-function lineForOffset(source, offset) {
-  return lineCount(source.slice(0, offset));
-}
-
-function caretColumn(source, offset) {
-  const lineStart = source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
-  return offset - lineStart;
-}
-
-function refreshBlockLineAttributes() {
-  for (const block of docBlocks) {
-    const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
-    if (section) section.dataset.sourceLine = String(block.sourceLine);
+function handleEditorUpdate(update) {
+  if (update.docChanged) {
+    refreshDocumentModel();
+    if (!replacingDocument) {
+      markDirty();
+      scheduleLiveRun();
+    }
   }
-  renderSourceGutter();
+  if (update.docChanged || update.selectionSet) {
+    updateInsertTableState();
+    if (!replacingDocument) scheduleCompletionAnalysis();
+  }
 }
 
-function autoResize(textarea) {
-  updateHighlight(textarea);
-  textarea.style.height = "auto";
-  textarea.style.height = `${Math.max(textarea.scrollHeight, 22)}px`;
+function insertAtSelection(text, { block = false } = {}) {
+  if (!editorView) return;
+  const sel = editorView.state.selection.main;
+  let insert = text;
+  if (block) {
+    const before = editorView.state.doc.sliceString(Math.max(0, sel.from - 1), sel.from);
+    const after = editorView.state.doc.sliceString(sel.to, Math.min(editorView.state.doc.length, sel.to + 1));
+    if (sel.from > 0 && before !== "\n") insert = `\n${insert}`;
+    if (!insert.endsWith("\n")) insert += "\n";
+    if (sel.to < editorView.state.doc.length && after !== "\n") insert += "\n";
+  }
+  const marker = insert.indexOf(MARKDOWN_CURSOR);
+  if (marker !== -1) insert = insert.replace(MARKDOWN_CURSOR, "");
+  const head = sel.from + (marker === -1 ? insert.length : marker);
+  editorView.dispatch({
+    changes: { from: sel.from, to: sel.to, insert },
+    selection: { anchor: head },
+    annotations: internalEdit.of(true),
+  });
+  editorView.focus();
 }
+
+function replaceEditorSource(source) {
+  if (!editorView) return;
+  const nextDoc = EditorState.create({ doc: source }).doc;
+  editorView.dispatch({
+    changes: { from: 0, to: editorView.state.doc.length, insert: source },
+    selection: { anchor: firstEditableDocPos(nextDoc) },
+    annotations: internalEdit.of(true),
+  });
+}
+
+function initEditor() {
+  editorView = new EditorView({
+    parent: editorWrap,
+    state: EditorState.create({
+      doc: "",
+      extensions: [
+        lineNumbers({
+          formatNumber: (lineNo, state) => (isSentinelDocLine(state.doc, lineNo) ? "" : String(lineNo)),
+        }),
+        history(),
+        drawSelection(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
+        markdown(),
+        syntaxHighlighting(markdownHighlight),
+        EditorView.lineWrapping,
+        editorTheme,
+        sourceDecorations,
+        protectSentinels(),
+        autocompletion({
+          override: [completionSource],
+          activateOnTyping: true,
+        }),
+        EditorView.updateListener.of(handleEditorUpdate),
+        EditorView.domEventHandlers({
+          paste(event, view) {
+            if (!isMarkdownAtPos(view.state.selection.main.head)) return false;
+            const item = [...(event.clipboardData?.items ?? [])].find((it) =>
+              it.type.startsWith("image/"),
+            );
+            if (!item) return false;
+            event.preventDefault();
+            const file = item.getAsFile();
+            if (!file) return true;
+            const reader = new FileReader();
+            reader.onload = () => insertAtSelection(`![pasted image](${reader.result})`);
+            reader.readAsDataURL(file);
+            return true;
+          },
+        }),
+        keymap.of([
+          indentWithTab,
+          ...completionKeymap,
+          ...searchKeymap,
+          ...historyKeymap,
+          ...defaultKeymap,
+        ]),
+      ],
+    }),
+  });
+  editorView.scrollDOM.addEventListener("scroll", syncOutputToEditor);
+}
+
+function syncSourceFromBlocks() {
+  refreshDocumentModel();
+}
+
+function renderSourceEditor() {}
 
 function resizeAllTextareas() {
-  sourceEditor.querySelectorAll("textarea").forEach(autoResize);
-}
-
-function activeBlock() {
-  return docBlocks.find((b) => b.id === activeBlockId) ?? docBlocks[docBlocks.length - 1];
+  editorView?.requestMeasure();
 }
 
 function activeSourceLine() {
-  const block = activeBlock();
-  const textarea = activeTextarea;
-  if (!block || !textarea) return null;
-  const inner = lineForOffset(textarea.value, textarea.selectionStart);
-  return block.kind === "tens" ? block.sourceLine + inner : block.sourceLine + inner - 1;
+  if (!editorView) return null;
+  return editorView.state.doc.lineAt(editorView.state.selection.main.head).number;
 }
 
 function insertTensBlock() {
-  const current = activeBlock();
-  const idx = Math.max(0, docBlocks.findIndex((b) => b.id === current?.id));
-  const block = makeBlock("tens", "");
-  docBlocks.splice(idx + 1, 0, block);
-  activeBlockId = block.id;
-  markDirty();
-  syncSourceFromBlocks();
-  renderSourceEditor();
-  const textarea = sourceEditor.querySelector(`[data-block-id="${block.id}"] textarea`);
-  textarea?.focus();
-}
-
-function splitTensBlockOnBlankGap(block, textarea) {
-  const match = textarea.value.match(/\n[ \t]*\n[ \t]*\n/);
-  if (!match) return false;
-
-  const idx = docBlocks.findIndex((b) => b.id === block.id);
-  if (idx === -1) return false;
-
-  const before = textarea.value.slice(0, match.index).replace(/\s+$/, "");
-  const after = textarea.value.slice(match.index + match[0].length).replace(/^\s+/, "");
-  if (!before && !after) return false;
-
-  const markdown = makeBlock("markdown", "");
-  const replacement = [];
-  if (before) replacement.push(makeBlock("tens", before));
-  replacement.push(markdown);
-  if (after) replacement.push(makeBlock("tens", after));
-
-  docBlocks.splice(idx, 1, ...replacement);
-  activeBlockId = markdown.id;
-  markDirty();
-  syncSourceFromBlocks();
-  renderSourceEditor();
-  sourceEditor.querySelector(`[data-block-id="${markdown.id}"] textarea`)?.focus();
-  scheduleLiveRun();
-  return true;
-}
-
-function removeEmptyTensBlock(block, direction = -1) {
-  if (block.kind !== "tens" || block.text.trim() !== "") return false;
-  const idx = docBlocks.findIndex((b) => b.id === block.id);
-  if (idx === -1) return false;
-
-  const focusTarget = docBlocks[idx + direction] ?? docBlocks[idx - direction];
-  docBlocks.splice(idx, 1);
-  if (docBlocks.length === 0) {
-    docBlocks.push(makeBlock("markdown", ""));
-  }
-
-  const target = focusTarget && docBlocks.includes(focusTarget) ? focusTarget : docBlocks[Math.min(idx, docBlocks.length - 1)];
-  activeBlockId = target.id;
-  markDirty();
-  syncSourceFromBlocks();
-  renderSourceEditor();
-
-  const textarea = sourceEditor.querySelector(`[data-block-id="${target.id}"] textarea`);
-  if (textarea) {
-    const offset = direction < 0 ? textarea.value.length : 0;
-    textarea.focus();
-    textarea.setSelectionRange(offset, offset);
-  }
-  scheduleLiveRun();
-  return true;
-}
-
-function collapseEmptyMarkdownBetweenTens(block) {
-  if (block.kind !== "markdown" || block.text.trim() !== "") return false;
-  const idx = docBlocks.findIndex((b) => b.id === block.id);
-  if (idx <= 0 || idx >= docBlocks.length - 1) return false;
-
-  const prev = docBlocks[idx - 1];
-  const next = docBlocks[idx + 1];
-  if (prev.kind !== "tens" || next.kind !== "tens") return false;
-
-  const before = prev.text.replace(/\s+$/, "");
-  const after = next.text.replace(/^\s+/, "");
-  const cursor = before.length + 2;
-  prev.text = [before, after].filter(Boolean).join("\n\n");
-  docBlocks.splice(idx, 2);
-  activeBlockId = prev.id;
-
-  markDirty();
-  syncSourceFromBlocks();
-  renderSourceEditor();
-  const textarea = sourceEditor.querySelector(`[data-block-id="${prev.id}"] textarea`);
-  if (textarea) {
-    textarea.focus();
-    textarea.setSelectionRange(Math.min(cursor, textarea.value.length), Math.min(cursor, textarea.value.length));
-  }
-  scheduleLiveRun();
-  return true;
+  insertAtSelection(`${TENS_OPEN}\n${MARKDOWN_CURSOR}\n${TENS_CLOSE}`, { block: true });
 }
 
 function sourceLineLocation(line) {
-  const block = blockForSourceLine(line);
-  const section = sourceEditor.querySelector(`[data-block-id="${block.id}"]`);
-  const textarea = section?.querySelector("textarea");
-  if (!section || !textarea) return null;
-  const innerLine =
-    block.kind === "tens"
-      ? Math.max(1, line - block.sourceLine)
-      : Math.max(1, line - block.sourceLine + 1);
-  const offset = offsetForLine(textarea.value, innerLine);
-  return { block, section, textarea, innerLine, offset };
+  if (!editorView || !Number.isFinite(line)) return null;
+  const n = Math.max(1, Math.min(editorView.state.doc.lines, line));
+  const docLine = editorView.state.doc.line(n);
+  return { line: docLine, offset: docLine.from };
 }
 
 function focusSourceLine(line) {
   const loc = sourceLineLocation(line);
   if (!loc) return;
-  const { textarea, offset } = loc;
-  textarea.focus();
-  textarea.setSelectionRange(offset, offset);
-}
-
-function offsetForLine(source, line) {
-  let offset = 0;
-  for (let l = 1; l < line; l++) {
-    const nl = source.indexOf("\n", offset);
-    if (nl === -1) return source.length;
-    offset = nl + 1;
-  }
-  return offset;
+  editorView.dispatch({
+    selection: { anchor: loc.offset },
+    effects: EditorView.scrollIntoView(loc.offset, { y: "center" }),
+    annotations: internalEdit.of(true),
+  });
+  editorView.focus();
 }
 
 function scrollEditorToLine(line, options = {}) {
   const loc = sourceLineLocation(line);
   if (!loc) return;
-  const { section, textarea, offset } = loc;
-  const align = options.align ?? 0.18;
-  const behavior = options.behavior ?? "smooth";
-  const caretTop = measureTextareaOffsetTop(textarea, offset);
-  const target = Math.max(
-    0,
-    section.offsetTop + textarea.offsetTop + caretTop - sourceEditor.clientHeight * align,
-  );
-  sourceEditor.scrollTo({ top: target, behavior });
-}
-
-function measureTextareaOffsetTop(textarea, offset) {
-  const style = window.getComputedStyle(textarea);
-  const mirror = document.createElement("div");
-  const props = [
-    "boxSizing",
-    "width",
-    "fontFamily",
-    "fontSize",
-    "fontWeight",
-    "fontStyle",
-    "letterSpacing",
-    "lineHeight",
-    "paddingTop",
-    "paddingRight",
-    "paddingBottom",
-    "paddingLeft",
-    "borderTopWidth",
-    "borderRightWidth",
-    "borderBottomWidth",
-    "borderLeftWidth",
-    "whiteSpace",
-    "wordWrap",
-    "overflowWrap",
-    "tabSize",
-  ];
-  for (const prop of props) mirror.style[prop] = style[prop];
-  mirror.style.position = "absolute";
-  mirror.style.visibility = "hidden";
-  mirror.style.pointerEvents = "none";
-  mirror.style.left = "-10000px";
-  mirror.style.top = "0";
-  mirror.style.height = "auto";
-  mirror.style.minHeight = "0";
-  mirror.style.overflow = "hidden";
-  mirror.style.width = `${textarea.clientWidth}px`;
-
-  const before = textarea.value.slice(0, offset);
-  mirror.textContent = before || "";
-  const marker = document.createElement("span");
-  marker.textContent = "\u200b";
-  mirror.appendChild(marker);
-  document.body.appendChild(mirror);
-  const top = marker.offsetTop;
-  mirror.remove();
-  return top;
+  editorView.dispatch({
+    effects: EditorView.scrollIntoView(loc.offset, { y: options.align ?? "center" }),
+    annotations: internalEdit.of(true),
+  });
 }
 
 function jumpToSourceLine(line, options = {}) {
   if (options.sync === false) suppressScrollSync();
-  scrollEditorToLine(line, { behavior: options.behavior ?? "smooth" });
   if (options.focus) focusSourceLine(line);
+  else scrollEditorToLine(line, { align: "start" });
 }
 
 // ---- files -----------------------------------------------------------------
@@ -926,13 +774,11 @@ function newFile() {
   setDocumentSource("", { run: false, dirty: false });
   lastRenderedOutputs = [];
   lastGoodShown = false;
-  output.innerHTML = '<div class="placeholder">No output yet. Add display(...) or export(...).</div>';
+  output.innerHTML = '<div class="placeholder">No output yet. Add expr.show(...).</div>';
   railFiles.querySelectorAll(".file.active").forEach((el) => el.classList.remove("active"));
-  sourceEditor.scrollTop = 0;
-  sourceGutter.scrollTop = 0;
+  editorView?.scrollDOM.scrollTo({ top: 0 });
   output.scrollTop = 0;
-  const first = sourceEditor.querySelector("textarea");
-  first?.focus();
+  editorView?.focus();
 }
 
 function loadOpenedFile(opened) {
@@ -988,7 +834,7 @@ async function saveFile() {
   if (!invoke) return;
   syncSourceFromBlocks();
   const path = await invoke("save_tens", {
-    source: editor.value,
+    source: documentSource(),
     path: currentSavePath,
     defaultFilename: defaultSaveName(),
   }).catch(showError);
@@ -1276,11 +1122,31 @@ function renderInlinePlain(text) {
   const img = /!\[([^\]]*)\]\((data:image\/[a-zA-Z+.-]+;base64,[A-Za-z0-9+/=]+)\)/;
   for (let m = rest.match(img); m; m = rest.match(img)) {
     parts.push(inlineStyles(rest.slice(0, m.index)));
-    parts.push(`<img class="md-img" alt="${escapeHtml(m[1])}" src="${m[2]}">`);
+    parts.push(`<img class="md-img" alt="${escapeAttr(m[1])}" src="${m[2]}">`);
+    rest = rest.slice(m.index + m[0].length);
+  }
+  const link = /\[([^\]]+)\]\(([^)\s]+)\)/;
+  for (let m = rest.match(link); m; m = rest.match(link)) {
+    parts.push(inlineStyles(rest.slice(0, m.index)));
+    const href = safeMarkdownHref(m[2]);
+    if (href) {
+      parts.push(`<a href="${escapeAttr(href)}">${inlineStyles(m[1])}</a>`);
+    } else {
+      parts.push(inlineStyles(m[0]));
+    }
     rest = rest.slice(m.index + m[0].length);
   }
   parts.push(inlineStyles(rest));
   return parts.join("");
+}
+
+function safeMarkdownHref(raw) {
+  try {
+    const url = new URL(raw);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function inlineStyles(text) {
@@ -1303,6 +1169,10 @@ function renderMath(tex, displayMode) {
 
 function escapeHtml(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeAttr(text) {
+  return escapeHtml(text).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 // ---- output/export ---------------------------------------------------------
@@ -1394,7 +1264,7 @@ function countOutputCalls(source) {
     .split(/\r?\n/)
     .reduce(
       (count, line) =>
-        count + (line.replace(/#.*/, "").match(/\b(?:display|export)\s*\(/g)?.length ?? 0),
+        count + (line.replace(/#.*/, "").match(/\.show\s*\(/g)?.length ?? 0),
       0,
     );
 }
@@ -1488,13 +1358,21 @@ function groupOutputRows(blocks) {
   return grouped;
 }
 
-function renderOutputs(outputs) {
+function renderOutputs(outputs, options = {}) {
+  const preserveScroll = options.preserveScroll === true;
+  const editorTop = editorView?.scrollDOM.scrollTop ?? 0;
+  const outputTop = output.scrollTop;
+  if (preserveScroll) suppressScrollSync();
   output.innerHTML = "";
   lastRenderedOutputs = outputs;
   const blocks = groupOutputRows(orderedPreviewBlocks(outputs));
 
   if (blocks.length === 0) {
-    output.innerHTML = '<div class="placeholder">No output yet. Add display(...) or export(...).</div>';
+    output.innerHTML = '<div class="placeholder">No output yet. Add expr.show(...).</div>';
+    if (preserveScroll) {
+      output.scrollTop = outputTop;
+      editorView?.scrollDOM.scrollTo({ top: editorTop });
+    }
     return;
   }
   for (const block of blocks) {
@@ -1502,7 +1380,12 @@ function renderOutputs(outputs) {
     else if (block.kind === "output-row") output.appendChild(renderOutputRowBlock(block.items));
     else output.appendChild(renderOutputBlock(block));
   }
-  syncOutputToEditor();
+  if (preserveScroll) {
+    output.scrollTop = clampScrollTop(output, outputTop);
+    editorView?.scrollDOM.scrollTo({ top: editorTop });
+  } else {
+    syncOutputToEditor();
+  }
 }
 
 function showError(message) {
@@ -1537,12 +1420,12 @@ async function run() {
 async function liveRun() {
   syncSourceFromBlocks();
   if (!invoke) {
-    renderOutputs([]);
+    renderOutputs([], { preserveScroll: true });
     return;
   }
   const source = executableSource();
   if (!source) {
-    renderOutputs([]);
+    renderOutputs([], { preserveScroll: true });
     lastGoodShown = true;
     return;
   }
@@ -1560,7 +1443,7 @@ async function liveRun() {
     }
     return;
   }
-  renderOutputs(result.outputs);
+  renderOutputs(result.outputs, { preserveScroll: true });
   lastGoodShown = true;
 }
 
@@ -1643,7 +1526,7 @@ async function exportMarkdown() {
   closeExportMenu();
   const markdown = buildExportMarkdown();
   if (!markdown.trim()) {
-    showError("Nothing to export yet. Add Markdown or display(...) output first.");
+    showError("Nothing to export yet. Add Markdown or .show(...) output first.");
     return;
   }
   if (invoke) {
@@ -1662,7 +1545,7 @@ function exportPdf() {
   closeExportMenu();
   const body = buildPrintableBody();
   if (!body) {
-    showError("Nothing to export yet. Add Markdown or display(...) output first.");
+    showError("Nothing to export yet. Add Markdown or .show(...) output first.");
     return;
   }
   printDocument(body);
@@ -1707,10 +1590,10 @@ function printDocument(bodyHtml) {
   document.addEventListener("keydown", cleanup, { once: true });
 }
 
-// ---- table and paste -------------------------------------------------------
+// ---- markdown templates and paste ------------------------------------------
 
 function currentIsMarkdown() {
-  return activeBlock()?.kind === "markdown";
+  return editorView ? isMarkdownAtPos(editorView.state.selection.main.head) : false;
 }
 
 function updateInsertTableState() {
@@ -1734,41 +1617,227 @@ function markdownTable(rows, cols, align) {
   return lines.join("\n");
 }
 
+const MARKDOWN_CURSOR = "__TF_CURSOR__";
+
+function insertMarkdownText(text, { block = true } = {}) {
+  if (!currentIsMarkdown()) return;
+  insertAtSelection(text, { block });
+  closeTableMenu();
+}
+
+function markdownTemplate(kind, selected) {
+  const text = selected || MARKDOWN_CURSOR;
+  switch (kind) {
+    case "h2":
+      return { text: `## ${text}`, block: true };
+    case "math":
+      return { text: `$$\n${text}\n$$`, block: true };
+    case "code":
+      return { text: `\`\`\`\n${text}\n\`\`\``, block: true };
+    case "quote":
+      return { text: `> ${text}`, block: true };
+    case "list":
+      return { text: `- ${text}`, block: true };
+    case "todo":
+      return { text: `- [ ] ${text}`, block: true };
+    case "bold":
+      return { text: selected ? `**${selected}**` : `**${MARKDOWN_CURSOR}**`, block: false };
+    case "link":
+      return { text: `[${selected || "text"}](${MARKDOWN_CURSOR})`, block: false };
+    case "hr":
+      return { text: "---", block: true };
+    case "image":
+      return { text: `![${selected || "alt"}](${MARKDOWN_CURSOR})`, block: false };
+    case "logic-tree":
+      return { text: logicTreeTemplate(selected || `${MARKDOWN_CURSOR}Main idea`), block: true };
+    case "three-cases":
+      return { text: threeCasesTemplate(selected || `${MARKDOWN_CURSOR}3 cases`), block: true };
+    case "lecture-ode":
+      return { text: odeLectureTemplate(selected || `${MARKDOWN_CURSOR}Lecture 3`), block: true };
+    case "ode-classification":
+      return { text: odeClassificationTemplate(selected || `${MARKDOWN_CURSOR}First-order ODE`), block: true };
+    case "integrating-factor":
+      return { text: integratingFactorTemplate(selected || `${MARKDOWN_CURSOR}Linear first-order ODE`), block: true };
+    case "exact-ode":
+      return { text: exactOdeTemplate(selected || `${MARKDOWN_CURSOR}Exact first-order ODE`), block: true };
+    default:
+      return null;
+  }
+}
+
+function insertMarkdownTemplate(kind) {
+  if (!currentIsMarkdown() || !editorView) return;
+  const sel = editorView.state.selection.main;
+  const selected = editorView.state.doc.sliceString(sel.from, sel.to);
+  const template = markdownTemplate(kind, selected);
+  if (!template) return;
+  insertMarkdownText(template.text, { block: template.block });
+}
+
+function logicTreeTemplate(title) {
+  return String.raw`$$
+\begin{array}{ccccc}
+&&{\color{green}\text{${title}}}&&\\[6pt]
+&\swarrow&&\searrow&\\[6pt]
+{\color{green}\text{Left branch}}&&&&{\color{green}\text{Right branch}}\\[6pt]
+\downarrow&&&&\downarrow\\[6pt]
+{\color{green}\text{Left result}}&&&&{\color{green}\text{Right result}}
+\end{array}
+$$`;
+}
+
+function threeCasesTemplate(title) {
+  return String.raw`$$
+\begin{array}{ccc}
+&{\color{blue}\text{${title}}}&\\[6pt]
+{\color{blue}\begin{array}{c}\text{case 1}\\\text{assumptions}\end{array}}
+&
+{\color{blue}\begin{array}{c}\text{case 2}\\\text{assumptions}\end{array}}
+&
+{\color{blue}\begin{array}{c}\text{case 3}\\\text{assumptions}\end{array}}
+\\[24pt]
+{\color{green}\begin{array}{c}\text{method 1}\\\text{result}\end{array}}
+&
+{\color{green}\begin{array}{c}\text{method 2}\\\text{result}\end{array}}
+&
+{\color{green}\begin{array}{c}\text{method 3}\\\text{result}\end{array}}
+\end{array}
+$$`;
+}
+
+function odeLectureTemplate(title) {
+  return String.raw`# ${title}
+---
+
+## Second-Order ODEs
+
+$$
+\begin{array}{ccccc}
+&&{\color{green}\text{2nd-order ODE}}&&\\[6pt]
+&\swarrow&&\searrow&\\[6pt]
+{\color{green}\text{Linear}}&&&&{\color{green}\text{Nonlinear}}\\[6pt]
+\downarrow&&&&\downarrow\\[6pt]
+{\color{green}\text{All can be solved analytically}}&&&&{\color{green}\text{Very few}}
+\end{array}
+$$
+
+---
+
+$$
+{\color{purple}\text{Linear 2nd-order ODE}}
+$$
+
+$$
+{\color{purple}u''+p(x)u'+q(x)u=g(x)}
+$$
+
+$$
+\begin{array}{ccc}
+&{\color{blue}\text{3 cases}}&\\[6pt]
+{\color{blue}\begin{array}{c}p(x)=\text{const.}\\q(x)=\text{const.}\\g(x)=0\end{array}}
+&
+{\color{blue}\begin{array}{c}p(x)=\text{const.}\\q(x)=\text{const.}\\g(x)=\text{anything}\end{array}}
+&
+{\color{blue}\begin{array}{c}p(x)=\text{anything}\\q(x)=\text{anything}\\g(x)=\text{anything}\end{array}}
+\\[28pt]
+{\color{green}\begin{array}{c}u(x)=C_1u_1(x)+C_2u_2(x)\\\text{linearly independent sol'ns}\\\text{``EASY''}\end{array}}
+&
+{\color{green}\begin{array}{c}g(x)=\text{``simple''}\\[4pt]u(x)=C_1u_1(x)+C_2u_2(x)+u_p(x)\\{\color{purple}\uparrow}\\{\color{purple}\text{particular sol'n}}\end{array}}
+&
+{\color{green}\begin{array}{c}\text{Power series}\\[4pt]u(x)=\sum_{n=0}^{\infty}C_nx^n\\[10pt]g(x)=\text{``ugly''}\\\text{Laplace Transform}\end{array}}
+\end{array}
+$$
+
+---`;
+}
+
+function odeClassificationTemplate(title) {
+  return String.raw`## ${title}
+
+$$
+\begin{array}{ccccc}
+&&{\color{purple}\text{First-order equation}}&&\\[6pt]
+&\swarrow&&\searrow&\\[6pt]
+{\color{blue}\text{linear}}&&&&{\color{blue}\text{nonlinear}}\\[8pt]
+\downarrow&&&&\begin{array}{ccc}
+\swarrow&&\searrow\\[-2pt]
+{\color{blue}\text{separable}}&&{\color{blue}\text{exact}}
+\end{array}\\[14pt]
+{\color{green}y' + p(x)y = q(x)}
+&&&&
+{\color{green}\begin{array}{c}
+g(y)y' = f(x)\\[4pt]
+M(x,y)+N(x,y)y'=0
+\end{array}}
+\end{array}
+$$`
+    + "\n\n"
+    + tensCodeBlock([
+      'x = Var("x")',
+      'y = Function("y", x)',
+      'p = Scalar("p")',
+      'q = Scalar("q")',
+      "eq = Equation(Derivative(y, x) + p*y, q)",
+      "kind = ClassifyODE(eq, y, x)",
+      "kind.show(details)",
+    ]);
+}
+
+function integratingFactorTemplate(title) {
+  return String.raw`## ${title}
+
+$$
+\begin{array}{rcl}
+y' + p(x)y &=& q(x)\\[6pt]
+\mu(x) &=& \exp\left(\int p(x)\,dx\right)\\[6pt]
+\left(\mu y\right)' &=& \mu q(x)\\[6pt]
+y &=& \dfrac{\int \mu q(x)\,dx + C_1}{\mu}
+\end{array}
+$$`
+    + "\n\n"
+    + tensCodeBlock([
+      'x = Var("x")',
+      'y = Function("y", x)',
+      'p = Scalar("p")',
+      'q = Scalar("q")',
+      "eq = Equation(Derivative(y, x) + p*y, q)",
+      "sol = SolveODE(eq, y, x)",
+      "sol.show(steps)",
+      "sol.show(solution)",
+    ]);
+}
+
+function exactOdeTemplate(title) {
+  return String.raw`## ${title}
+
+$$
+\begin{array}{rcl}
+M(x,y)+N(x,y)y' &=& 0\\[6pt]
+M_y &=& N_x\\[6pt]
+\Phi_x &=& M,\qquad \Phi_y = N\\[6pt]
+\Phi(x,y) &=& C_1
+\end{array}
+$$`
+    + "\n\n"
+    + tensCodeBlock([
+      'x = Var("x")',
+      'y = Function("y", x)',
+      "eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)",
+      "sol = SolveODE(eq, y, x, ic=IC(y(1), 2))",
+      "sol.show(steps)",
+      "sol.show(solution)",
+    ]);
+}
+
+function tensCodeBlock(lines) {
+  return ["```tens", ...lines, "```"].join("\n");
+}
+
 function insertTableIntoMarkdown() {
-  const block = activeBlock();
-  const textarea = activeTextarea;
-  if (!block || block.kind !== "markdown" || !textarea) return;
   const rows = Math.max(1, Number(document.getElementById("table-rows").value) || 2);
   const cols = Math.max(1, Number(document.getElementById("table-cols").value) || 3);
   const align = document.getElementById("table-align").value;
-  const s = Math.min(textarea.selectionStart, textarea.value.length);
-  const e = Math.min(textarea.selectionEnd, textarea.value.length);
-  const atLineStart = s === 0 || textarea.value[s - 1] === "\n";
-  textarea.setRangeText(`${atLineStart ? "" : "\n"}${markdownTable(rows, cols, align)}\n`, s, e, "end");
-  block.text = textarea.value;
-  markDirty();
-  autoResize(textarea);
-  syncSourceFromBlocks();
-  closeTableMenu();
-  scheduleLiveRun();
-}
-
-function handleMarkdownPaste(e, textarea, block) {
-  const item = [...(e.clipboardData?.items ?? [])].find((it) => it.type.startsWith("image/"));
-  if (!item) return;
-  e.preventDefault();
-  const file = item.getAsFile();
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    textarea.setRangeText(`![pasted image](${reader.result})`, textarea.selectionStart, textarea.selectionEnd, "end");
-    block.text = textarea.value;
-    markDirty();
-    autoResize(textarea);
-    syncSourceFromBlocks();
-    scheduleLiveRun();
-  };
-  reader.readAsDataURL(file);
+  insertMarkdownText(markdownTable(rows, cols, align));
 }
 
 // ---- scroll linking --------------------------------------------------------
@@ -1804,15 +1873,16 @@ function anchorY(el) {
 }
 
 function sourceAnchor() {
-  const sections = [...sourceEditor.querySelectorAll(".source-block")];
-  if (sections.length === 0) return null;
-  const y = anchorY(sourceEditor);
-  let section = sections.find((el) => el.offsetTop + el.offsetHeight >= y);
-  section ??= sections[sections.length - 1];
-  const height = Math.max(1, section.offsetHeight);
+  if (!editorView || docBlocks.length === 0) return null;
+  const scroller = editorView.scrollDOM;
+  const blockAtHeight = editorView.lineBlockAtHeight(anchorY(scroller));
+  const lineNo = editorView.state.doc.lineAt(blockAtHeight.from).number;
+  const block = blockForSourceLine(lineNo);
+  if (!block) return null;
+  const lineSpan = Math.max(1, block.sourceEndLine - block.sourceLine + 1);
   return {
-    blockId: section.dataset.blockId,
-    progress: clampUnit((y - section.offsetTop) / height),
+    blockId: block.id,
+    progress: clampUnit((lineNo - block.sourceLine) / lineSpan),
   };
 }
 
@@ -1890,12 +1960,23 @@ function syncEditorToOutput() {
   scrollSyncFrame = requestAnimationFrame(() => {
     const anchor = previewAnchor();
     if (!anchor) return;
-    const section = sourceEditor.querySelector(`[data-block-id="${anchor.blockId}"]`);
-    if (!section) return;
-    const target = section.offsetTop + anchor.progress * section.offsetHeight - sourceEditor.clientHeight * SCROLL_SYNC_ANCHOR;
+    const block = blockForId(anchor.blockId);
+    if (!block || !editorView) return;
+    const lineSpan = Math.max(1, block.sourceEndLine - block.sourceLine + 1);
+    const lineNo = Math.max(
+      1,
+      Math.min(
+        editorView.state.doc.lines,
+        Math.round(block.sourceLine + anchor.progress * lineSpan),
+      ),
+    );
+    const pos = editorView.state.doc.line(lineNo).from;
+    const lineBlock = editorView.lineBlockAt(pos);
+    const scroller = editorView.scrollDOM;
+    const target = lineBlock.top - scroller.clientHeight * SCROLL_SYNC_ANCHOR;
     withScrollSyncSource("output", () => {
-      sourceEditor.scrollTo({
-        top: clampScrollTop(sourceEditor, target),
+      scroller.scrollTo({
+        top: clampScrollTop(scroller, target),
         behavior: "auto",
       });
     });
@@ -1945,13 +2026,14 @@ insertTableBtn.addEventListener("pointerdown", (e) => {
   else openTableMenu();
 });
 insertTableBtn.addEventListener("click", (e) => e.stopPropagation());
-tableMenu.addEventListener("click", (e) => e.stopPropagation());
+tableMenu.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const button = e.target.closest("button[data-md-template]");
+  if (!button) return;
+  insertMarkdownTemplate(button.dataset.mdTemplate);
+});
 document.getElementById("table-insert").addEventListener("click", insertTableIntoMarkdown);
 
-sourceEditor.addEventListener("scroll", () => {
-  sourceGutter.scrollTop = sourceEditor.scrollTop;
-  syncOutputToEditor();
-});
 output.addEventListener("scroll", syncEditorToOutput);
 window.addEventListener("resize", resizeAllTextareas);
 window.addEventListener("beforeunload", (e) => {
@@ -1995,6 +2077,7 @@ async function loadBundledDefaultSource() {
 }
 
 async function boot() {
+  initEditor();
   localStorage.removeItem("tensorforge.source.v3");
   const bundledDefault = await loadBundledDefaultSource();
   const storedPath = localStorage.getItem("tensorforge.path.v1");
