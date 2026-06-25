@@ -66,6 +66,19 @@ struct FirstOrderForm {
     n: Rc<ScalarExpr>,
 }
 
+type ExactPotential = (Rc<ScalarExpr>, Vec<SolutionStep>);
+
+struct ImplicitSolveParams<'a> {
+    eq: &'a Equation,
+    method: &'a str,
+    independent: &'a Rc<ScalarExpr>,
+    target: &'a Target,
+    left: Rc<ScalarExpr>,
+    right_without_c: Rc<ScalarExpr>,
+    ic: Option<InitialCondition>,
+    steps: Vec<SolutionStep>,
+}
+
 pub fn equation(lhs: Rc<ScalarExpr>, rhs: Rc<ScalarExpr>) -> Equation {
     let residual = simplify_scalar(
         &Rc::new(ScalarExpr::Sub(lhs.clone(), rhs.clone())),
@@ -161,28 +174,28 @@ pub fn solve(
         return solve_linear_first_order(eq, &target, independent, p, q, form, ic);
     }
     if let Some((left, right)) = separable_form(&eq.residual, &target, independent) {
-        return solve_implicit_pair(
+        return solve_implicit_pair(ImplicitSolveParams {
             eq,
-            "separable",
+            method: "separable",
             independent,
-            &target,
+            target: &target,
             left,
-            right,
+            right_without_c: right,
             ic,
-            vec![],
-        );
+            steps: vec![],
+        });
     }
     if let Some((phi, steps)) = exact_form(&eq.residual, &target, independent)? {
-        return solve_implicit_pair(
+        return solve_implicit_pair(ImplicitSolveParams {
             eq,
-            "exact",
+            method: "exact",
             independent,
-            &target,
-            phi,
-            Rc::new(ScalarExpr::Num(0.0)),
+            target: &target,
+            left: phi,
+            right_without_c: Rc::new(ScalarExpr::Num(0.0)),
             ic,
             steps,
-        );
+        });
     }
 
     Ok(OdeSolution {
@@ -271,16 +284,17 @@ fn solve_linear_first_order(
     })
 }
 
-fn solve_implicit_pair(
-    eq: &Equation,
-    method: &str,
-    independent: &Rc<ScalarExpr>,
-    target: &Target,
-    left: Rc<ScalarExpr>,
-    right_without_c: Rc<ScalarExpr>,
-    ic: Option<InitialCondition>,
-    mut steps: Vec<SolutionStep>,
-) -> Result<OdeSolution, Error> {
+fn solve_implicit_pair(params: ImplicitSolveParams<'_>) -> Result<OdeSolution, Error> {
+    let ImplicitSolveParams {
+        eq,
+        method,
+        independent,
+        target,
+        left,
+        right_without_c,
+        ic,
+        mut steps,
+    } = params;
     let c = constant();
     let mut rhs = simplify_scalar(
         &Rc::new(ScalarExpr::Add(right_without_c.clone(), c.clone())),
@@ -411,7 +425,7 @@ fn exact_form(
     residual: &Rc<ScalarExpr>,
     target: &Target,
     independent: &Rc<ScalarExpr>,
-) -> Result<Option<(Rc<ScalarExpr>, Vec<SolutionStep>)>, Error> {
+) -> Result<Option<ExactPotential>, Error> {
     let Some(form) = first_order_form(residual, target) else {
         return Ok(None);
     };
@@ -1162,12 +1176,12 @@ fn scalar_equiv_commutative(a: &Rc<ScalarExpr>, b: &Rc<ScalarExpr>) -> bool {
 fn canonical_scalar_key(expr: &Rc<ScalarExpr>) -> String {
     match &**expr {
         ScalarExpr::Add(a, b) => {
-            let mut terms = vec![canonical_scalar_key(a), canonical_scalar_key(b)];
+            let mut terms = [canonical_scalar_key(a), canonical_scalar_key(b)];
             terms.sort();
             format!("add({})", terms.join(","))
         }
         ScalarExpr::Sub(a, b) => {
-            let mut terms = vec![
+            let mut terms = [
                 canonical_scalar_key(a),
                 format!("neg({})", canonical_scalar_key(b)),
             ];
