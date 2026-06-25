@@ -7,6 +7,7 @@ export {
   StateField,
 } from "@codemirror/state";
 export {
+  BlockWrapper,
   Decoration,
   EditorView,
   ViewPlugin,

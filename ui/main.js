@@ -4,6 +4,7 @@
 
 import {
   Annotation,
+  BlockWrapper,
   Decoration,
   EditorState,
   EditorView,
@@ -409,6 +410,24 @@ function isSentinelDocLine(doc, lineNumber) {
   return isTensOpen(line.text) || isTensClose(line.text);
 }
 
+function visibleLineNumber(doc, physicalLine) {
+  if (!doc || physicalLine < 1) return "";
+  const last = Math.min(physicalLine, doc.lines);
+  let visible = 0;
+  let targetIsSentinel = false;
+  for (let n = 1; n <= last; n++) {
+    const sentinel = isSentinelDocLine(doc, n);
+    if (!sentinel) visible++;
+    if (n === physicalLine) targetIsSentinel = sentinel;
+  }
+  return targetIsSentinel ? "" : String(visible);
+}
+
+function displaySourceLine(line) {
+  if (!Number.isFinite(line)) return "";
+  return editorView ? visibleLineNumber(editorView.state.doc, line) || String(line) : String(line);
+}
+
 function firstEditableDocPos(doc) {
   if (!doc) return 0;
   for (let n = 1; n <= doc.lines; n++) {
@@ -420,11 +439,13 @@ function firstEditableDocPos(doc) {
 function protectSentinels() {
   return EditorState.transactionFilter.of((tr) => {
     if (!tr.docChanged || tr.annotation(internalEdit)) return tr;
-    const ranges = sentinelRanges(tr.startState.doc);
+    const doc = tr.startState.doc;
+    const ranges = sentinelRanges(doc);
     let allowed = true;
-    tr.changes.iterChanges((fromA, toA) => {
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
       if (!allowed) return;
-      allowed = !ranges.some((range) => fromA < range.to && toA > range.from);
+      const touchesSentinel = ranges.some((range) => fromA < range.to && toA > range.from);
+      allowed = !touchesSentinel || (inserted.length === 0 && isWholeTensBlockDelete(doc, fromA, toA));
     });
     return allowed ? tr : [];
   });
@@ -485,38 +506,76 @@ function decorateTensTokens(builder, line) {
 const sourceDecorations = ViewPlugin.fromClass(
   class {
     constructor(view) {
-      this.decorations = this.build(view);
+      this.updateSets(view);
     }
     update(update) {
-      if (update.docChanged || update.viewportChanged) this.decorations = this.build(update.view);
+      if (update.docChanged || update.viewportChanged) this.updateSets(update.view);
+    }
+    updateSets(view) {
+      const sets = this.build(view);
+      this.decorations = sets.decorations;
+      this.atomicRanges = sets.atomicRanges;
     }
     build(view) {
-      const builder = new RangeSetBuilder();
+      const decorations = new RangeSetBuilder();
+      const atomicRanges = new RangeSetBuilder();
       let inTens = false;
       for (let n = 1; n <= view.state.doc.lines; n++) {
         const line = view.state.doc.line(n);
         if (isTensOpen(line.text)) {
-          builder.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
+          const range = sentinelHiddenRange(view.state.doc, line);
+          const hidden = Decoration.replace({ block: true });
+          decorations.add(range.from, range.to, hidden);
+          atomicRanges.add(range.from, range.to, hidden);
           inTens = true;
           continue;
         }
         if (isTensClose(line.text)) {
-          builder.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
+          const range = sentinelHiddenRange(view.state.doc, line);
+          const hidden = Decoration.replace({ block: true });
+          decorations.add(range.from, range.to, hidden);
+          atomicRanges.add(range.from, range.to, hidden);
           inTens = false;
           continue;
         }
-        builder.add(
-          line.from,
-          line.from,
-          Decoration.line({ class: inTens ? "tf-tens-line" : "tf-markdown-line" }),
-        );
-        if (inTens) decorateTensTokens(builder, line);
+        if (inTens) decorateTensTokens(decorations, line);
       }
-      return builder.finish();
+      return {
+        decorations: decorations.finish(),
+        atomicRanges: atomicRanges.finish(),
+      };
     }
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+function sentinelHiddenRange(doc, line) {
+  const to = line.number < doc.lines ? doc.line(line.number + 1).from : line.to;
+  return { from: line.from, to };
+}
+
+function buildTensBlockWrappers(doc) {
+  const ranges = [];
+  let openLine = null;
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (isTensOpen(line.text)) {
+      openLine = n;
+      continue;
+    }
+    if (!isTensClose(line.text) || openLine == null) continue;
+    if (n > openLine + 1) {
+      ranges.push(
+        BlockWrapper.create({
+          tagName: "div",
+          attributes: { class: "tf-tens-block" },
+        }).range(doc.line(openLine + 1).from, line.from),
+      );
+    }
+    openLine = null;
+  }
+  return BlockWrapper.set(ranges, true);
+}
 
 function completionSource(context) {
   const kind = regionKindAtPos(context.pos);
@@ -547,17 +606,24 @@ const editorTheme = EditorView.theme({
   },
   ".cm-gutters": {
     background: "var(--panel)",
-    color: "var(--muted)",
-    borderRight: "1px solid var(--border)",
-    paddingTop: "18px",
-    paddingBottom: "42px",
+    color: "color-mix(in srgb, var(--muted) 68%, transparent)",
+    borderRight: "1px solid color-mix(in srgb, var(--border) 62%, transparent)",
     userSelect: "none",
   },
   ".cm-lineNumbers .cm-gutterElement": {
-    padding: "0 8px 0 6px",
+    minWidth: "34px",
+    padding: "0 9px 0 4px",
+    fontSize: "12px",
+    fontWeight: "400",
+    fontVariantNumeric: "tabular-nums",
+    textAlign: "right",
   },
-  ".cm-activeLine, .cm-activeLineGutter": {
-    background: "color-mix(in srgb, var(--accent) 9%, transparent)",
+  ".cm-activeLine": {
+    background: "color-mix(in srgb, var(--accent) 5%, transparent)",
+  },
+  ".cm-activeLineGutter": {
+    background: "transparent",
+    color: "color-mix(in srgb, var(--accent) 50%, var(--muted))",
   },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     background: "color-mix(in srgb, var(--accent) 34%, transparent)",
@@ -572,22 +638,13 @@ const editorTheme = EditorView.theme({
   ".cm-tooltip-autocomplete ul": {
     fontFamily: '"SF Mono", Menlo, Consolas, monospace',
   },
-  ".tf-markdown-line": {
-    borderLeft: "3px solid color-mix(in srgb, var(--note-accent) 50%, transparent)",
-  },
-  ".tf-tens-line": {
+  ".tf-tens-block": {
     background: "color-mix(in srgb, var(--tens-frame) 8%, transparent)",
-    borderLeft: "3px solid var(--tens-frame)",
-  },
-  ".tf-sentinel-line": {
-    display: "none",
-    height: "0",
-    minHeight: "0",
-    lineHeight: "0",
-    paddingTop: "0",
-    paddingBottom: "0",
+    border: "1px solid color-mix(in srgb, var(--tens-frame) 38%, transparent)",
+    borderLeft: "4px solid var(--tens-frame)",
+    borderRadius: "6px",
+    margin: "2px 0",
     overflow: "hidden",
-    borderLeft: "0",
   },
   ".tf-token-comment": { color: "var(--syntax-comment)", fontStyle: "italic" },
   ".tf-token-string": { color: "var(--syntax-string)" },
@@ -621,26 +678,31 @@ function handleEditorUpdate(update) {
   }
 }
 
-function insertAtSelection(text, { block = false } = {}) {
+function insertTextAtRange(from, to, text, { block = false } = {}) {
   if (!editorView) return;
-  const sel = editorView.state.selection.main;
   let insert = text;
   if (block) {
-    const before = editorView.state.doc.sliceString(Math.max(0, sel.from - 1), sel.from);
-    const after = editorView.state.doc.sliceString(sel.to, Math.min(editorView.state.doc.length, sel.to + 1));
-    if (sel.from > 0 && before !== "\n") insert = `\n${insert}`;
+    const before = editorView.state.doc.sliceString(Math.max(0, from - 1), from);
+    const after = editorView.state.doc.sliceString(to, Math.min(editorView.state.doc.length, to + 1));
+    if (from > 0 && before !== "\n") insert = `\n${insert}`;
     if (!insert.endsWith("\n")) insert += "\n";
-    if (sel.to < editorView.state.doc.length && after !== "\n") insert += "\n";
+    if (to < editorView.state.doc.length && after !== "\n") insert += "\n";
   }
   const marker = insert.indexOf(MARKDOWN_CURSOR);
   if (marker !== -1) insert = insert.replace(MARKDOWN_CURSOR, "");
-  const head = sel.from + (marker === -1 ? insert.length : marker);
+  const head = from + (marker === -1 ? insert.length : marker);
   editorView.dispatch({
-    changes: { from: sel.from, to: sel.to, insert },
+    changes: { from, to, insert },
     selection: { anchor: head },
     annotations: internalEdit.of(true),
   });
   editorView.focus();
+}
+
+function insertAtSelection(text, { block = false } = {}) {
+  if (!editorView) return;
+  const sel = editorView.state.selection.main;
+  insertTextAtRange(sel.from, sel.to, text, { block });
 }
 
 function replaceEditorSource(source) {
@@ -660,7 +722,7 @@ function initEditor() {
       doc: "",
       extensions: [
         lineNumbers({
-          formatNumber: (lineNo, state) => (isSentinelDocLine(state.doc, lineNo) ? "" : String(lineNo)),
+          formatNumber: (lineNo, state) => visibleLineNumber(state.doc, lineNo),
         }),
         history(),
         drawSelection(),
@@ -669,8 +731,12 @@ function initEditor() {
         markdown(),
         syntaxHighlighting(markdownHighlight),
         EditorView.lineWrapping,
+        EditorView.blockWrappers.of((view) => buildTensBlockWrappers(view.state.doc)),
         editorTheme,
         sourceDecorations,
+        EditorView.atomicRanges.of(
+          (view) => view.plugin(sourceDecorations)?.atomicRanges ?? Decoration.none,
+        ),
         protectSentinels(),
         autocompletion({
           override: [completionSource],
@@ -695,6 +761,8 @@ function initEditor() {
         }),
         keymap.of([
           indentWithTab,
+          { key: "Backspace", run: deleteTensBlock },
+          { key: "Delete", run: deleteTensBlock },
           ...completionKeymap,
           ...searchKeymap,
           ...historyKeymap,
@@ -721,8 +789,126 @@ function activeSourceLine() {
   return editorView.state.doc.lineAt(editorView.state.selection.main.head).number;
 }
 
+function tensBlockAroundLine(doc, lineNumber) {
+  let openLine = null;
+  for (let n = lineNumber; n >= 1; n--) {
+    const text = doc.line(n).text;
+    if (isTensClose(text) && n !== lineNumber) break;
+    if (isTensOpen(text)) {
+      openLine = n;
+      break;
+    }
+  }
+  if (openLine == null) return null;
+
+  let closeLine = null;
+  for (let n = Math.max(lineNumber, openLine + 1); n <= doc.lines; n++) {
+    const text = doc.line(n).text;
+    if (isTensOpen(text) && n !== openLine) break;
+    if (isTensClose(text)) {
+      closeLine = n;
+      break;
+    }
+  }
+  if (closeLine == null || lineNumber < openLine || lineNumber > closeLine) return null;
+  return { openLine, closeLine };
+}
+
+function isEmptyTensBlock(doc, block) {
+  for (let n = block.openLine + 1; n < block.closeLine; n++) {
+    if (doc.line(n).text.trim()) return false;
+  }
+  return true;
+}
+
+function tensBlockVisibleRange(doc, block) {
+  if (!block || block.closeLine <= block.openLine + 1) {
+    const pos = block ? doc.line(block.openLine).to : 0;
+    return { from: pos, to: pos };
+  }
+  return {
+    from: doc.line(block.openLine + 1).from,
+    to: doc.line(block.closeLine - 1).to,
+  };
+}
+
+function tensBlockDeleteRange(doc, block) {
+  let from = doc.line(block.openLine).from;
+  let to = doc.line(block.closeLine).to;
+  if (block.closeLine < doc.lines) {
+    to = doc.line(block.closeLine + 1).from;
+  } else if (block.openLine > 1) {
+    from = doc.line(block.openLine - 1).to;
+  }
+  return { from, to };
+}
+
+function isWholeTensBlockDelete(doc, from, to) {
+  for (let n = 1; n <= doc.lines; n++) {
+    if (!isTensOpen(doc.line(n).text)) continue;
+    const block = tensBlockAroundLine(doc, n);
+    if (!block) continue;
+    const range = tensBlockDeleteRange(doc, block);
+    if (from === range.from && to === range.to) return true;
+    n = block.closeLine;
+  }
+  return false;
+}
+
+function selectedWholeTensBlock(doc, sel) {
+  if (sel.empty) return null;
+  const startBlock = tensBlockAroundLine(doc, doc.lineAt(sel.from).number);
+  const endBlock = tensBlockAroundLine(doc, doc.lineAt(Math.max(sel.from, sel.to - 1)).number);
+  if (!startBlock || !endBlock) return null;
+  if (startBlock.openLine !== endBlock.openLine || startBlock.closeLine !== endBlock.closeLine) {
+    return null;
+  }
+  const visible = tensBlockVisibleRange(doc, startBlock);
+  return sel.from <= visible.from && sel.to >= visible.to ? startBlock : null;
+}
+
+function deleteTensBlock(view) {
+  const sel = view.state.selection.main;
+  const doc = view.state.doc;
+  let block = selectedWholeTensBlock(doc, sel);
+  if (!block && sel.empty) {
+    const lineNumber = doc.lineAt(sel.head).number;
+    const candidate = tensBlockAroundLine(doc, lineNumber);
+    if (candidate && isEmptyTensBlock(doc, candidate)) block = candidate;
+  }
+  if (!block) return false;
+
+  const { from, to } = tensBlockDeleteRange(doc, block);
+  view.dispatch({
+    changes: { from, to, insert: "" },
+    selection: { anchor: from },
+    annotations: internalEdit.of(true),
+  });
+  return true;
+}
+
+function endOfTensBlockAfter(lineNumber) {
+  if (!editorView) return null;
+  const doc = editorView.state.doc;
+  for (let n = lineNumber; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (isTensClose(line.text)) return line.to;
+  }
+  return null;
+}
+
 function insertTensBlock() {
-  insertAtSelection(`${TENS_OPEN}\n${MARKDOWN_CURSOR}\n${TENS_CLOSE}`, { block: true });
+  if (!editorView) return;
+  const template = `${TENS_OPEN}\n${MARKDOWN_CURSOR}\n${TENS_CLOSE}`;
+  const sel = editorView.state.selection.main;
+  const line = editorView.state.doc.lineAt(sel.head);
+  const kind = regionKindAtLine(line.number);
+  if (kind === "markdown") {
+    insertAtSelection(template, { block: true });
+    return;
+  }
+  const pos = endOfTensBlockAfter(line.number) ?? line.to;
+  insertTextAtRange(pos, pos, template, { block: true });
 }
 
 function sourceLineLocation(line) {
@@ -1215,7 +1401,7 @@ function renderOutputBlock(item) {
   head.className = "head";
 
   if (error) {
-    head.textContent = `[line ${line}]`;
+    head.textContent = `[line ${displaySourceLine(line)}]`;
     const err = document.createElement("div");
     err.className = "error";
     err.textContent = error;
