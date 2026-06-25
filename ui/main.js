@@ -391,41 +391,10 @@ function isMarkdownAtPos(pos) {
   return regionKindAtPos(pos) === "markdown";
 }
 
-function sentinelRanges(doc) {
-  const ranges = [];
-  for (let n = 1; n <= doc.lines; n++) {
-    const line = doc.line(n);
-    if (!isSentinelDocLine(doc, n)) continue;
-    ranges.push({
-      from: line.from,
-      to: n < doc.lines ? doc.line(n + 1).from : line.to,
-    });
-  }
-  return ranges;
-}
-
 function isSentinelDocLine(doc, lineNumber) {
   if (!doc || lineNumber < 1 || lineNumber > doc.lines) return false;
   const line = doc.line(lineNumber);
   return isTensOpen(line.text) || isTensClose(line.text);
-}
-
-function visibleLineNumber(doc, physicalLine) {
-  if (!doc || physicalLine < 1) return "";
-  const last = Math.min(physicalLine, doc.lines);
-  let visible = 0;
-  let targetIsSentinel = false;
-  for (let n = 1; n <= last; n++) {
-    const sentinel = isSentinelDocLine(doc, n);
-    if (!sentinel) visible++;
-    if (n === physicalLine) targetIsSentinel = sentinel;
-  }
-  return targetIsSentinel ? "" : String(visible);
-}
-
-function displaySourceLine(line) {
-  if (!Number.isFinite(line)) return "";
-  return editorView ? visibleLineNumber(editorView.state.doc, line) || String(line) : String(line);
 }
 
 function firstEditableDocPos(doc) {
@@ -434,21 +403,6 @@ function firstEditableDocPos(doc) {
     if (!isSentinelDocLine(doc, n)) return doc.line(n).from;
   }
   return 0;
-}
-
-function protectSentinels() {
-  return EditorState.transactionFilter.of((tr) => {
-    if (!tr.docChanged || tr.annotation(internalEdit)) return tr;
-    const doc = tr.startState.doc;
-    const ranges = sentinelRanges(doc);
-    let allowed = true;
-    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-      if (!allowed) return;
-      const touchesSentinel = ranges.some((range) => fromA < range.to && toA > range.from);
-      allowed = !touchesSentinel || (inserted.length === 0 && isWholeTensBlockDelete(doc, fromA, toA));
-    });
-    return allowed ? tr : [];
-  });
 }
 
 function addMark(builder, line, from, to, className) {
@@ -506,53 +460,33 @@ function decorateTensTokens(builder, line) {
 const sourceDecorations = ViewPlugin.fromClass(
   class {
     constructor(view) {
-      this.updateSets(view);
+      this.decorations = this.build(view);
     }
     update(update) {
-      if (update.docChanged || update.viewportChanged) this.updateSets(update.view);
-    }
-    updateSets(view) {
-      const sets = this.build(view);
-      this.decorations = sets.decorations;
-      this.atomicRanges = sets.atomicRanges;
+      if (update.docChanged || update.viewportChanged) this.decorations = this.build(update.view);
     }
     build(view) {
       const decorations = new RangeSetBuilder();
-      const atomicRanges = new RangeSetBuilder();
       let inTens = false;
       for (let n = 1; n <= view.state.doc.lines; n++) {
         const line = view.state.doc.line(n);
         if (isTensOpen(line.text)) {
-          const range = sentinelHiddenRange(view.state.doc, line);
-          const hidden = Decoration.replace({ block: true });
-          decorations.add(range.from, range.to, hidden);
-          atomicRanges.add(range.from, range.to, hidden);
+          decorations.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
           inTens = true;
           continue;
         }
         if (isTensClose(line.text)) {
-          const range = sentinelHiddenRange(view.state.doc, line);
-          const hidden = Decoration.replace({ block: true });
-          decorations.add(range.from, range.to, hidden);
-          atomicRanges.add(range.from, range.to, hidden);
+          decorations.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
           inTens = false;
           continue;
         }
         if (inTens) decorateTensTokens(decorations, line);
       }
-      return {
-        decorations: decorations.finish(),
-        atomicRanges: atomicRanges.finish(),
-      };
+      return decorations.finish();
     }
   },
   { decorations: (plugin) => plugin.decorations },
 );
-
-function sentinelHiddenRange(doc, line) {
-  const to = line.number < doc.lines ? doc.line(line.number + 1).from : line.to;
-  return { from: line.from, to };
-}
 
 function buildTensBlockWrappers(doc) {
   const ranges = [];
@@ -646,6 +580,11 @@ const editorTheme = EditorView.theme({
     margin: "2px 0",
     overflow: "hidden",
   },
+  ".tf-sentinel-line": {
+    color: "color-mix(in srgb, var(--muted) 52%, transparent)",
+    fontSize: "11px",
+    fontStyle: "italic",
+  },
   ".tf-token-comment": { color: "var(--syntax-comment)", fontStyle: "italic" },
   ".tf-token-string": { color: "var(--syntax-string)" },
   ".tf-token-number": { color: "var(--syntax-number)" },
@@ -721,9 +660,7 @@ function initEditor() {
     state: EditorState.create({
       doc: "",
       extensions: [
-        lineNumbers({
-          formatNumber: (lineNo, state) => visibleLineNumber(state.doc, lineNo),
-        }),
+        lineNumbers(),
         history(),
         drawSelection(),
         highlightActiveLine(),
@@ -734,10 +671,6 @@ function initEditor() {
         EditorView.blockWrappers.of((view) => buildTensBlockWrappers(view.state.doc)),
         editorTheme,
         sourceDecorations,
-        EditorView.atomicRanges.of(
-          (view) => view.plugin(sourceDecorations)?.atomicRanges ?? Decoration.none,
-        ),
-        protectSentinels(),
         autocompletion({
           override: [completionSource],
           activateOnTyping: true,
@@ -761,8 +694,6 @@ function initEditor() {
         }),
         keymap.of([
           indentWithTab,
-          { key: "Backspace", run: deleteTensBlock },
-          { key: "Delete", run: deleteTensBlock },
           ...completionKeymap,
           ...searchKeymap,
           ...historyKeymap,
@@ -787,104 +718,6 @@ function resizeAllTextareas() {
 function activeSourceLine() {
   if (!editorView) return null;
   return editorView.state.doc.lineAt(editorView.state.selection.main.head).number;
-}
-
-function tensBlockAroundLine(doc, lineNumber) {
-  let openLine = null;
-  for (let n = lineNumber; n >= 1; n--) {
-    const text = doc.line(n).text;
-    if (isTensClose(text) && n !== lineNumber) break;
-    if (isTensOpen(text)) {
-      openLine = n;
-      break;
-    }
-  }
-  if (openLine == null) return null;
-
-  let closeLine = null;
-  for (let n = Math.max(lineNumber, openLine + 1); n <= doc.lines; n++) {
-    const text = doc.line(n).text;
-    if (isTensOpen(text) && n !== openLine) break;
-    if (isTensClose(text)) {
-      closeLine = n;
-      break;
-    }
-  }
-  if (closeLine == null || lineNumber < openLine || lineNumber > closeLine) return null;
-  return { openLine, closeLine };
-}
-
-function isEmptyTensBlock(doc, block) {
-  for (let n = block.openLine + 1; n < block.closeLine; n++) {
-    if (doc.line(n).text.trim()) return false;
-  }
-  return true;
-}
-
-function tensBlockVisibleRange(doc, block) {
-  if (!block || block.closeLine <= block.openLine + 1) {
-    const pos = block ? doc.line(block.openLine).to : 0;
-    return { from: pos, to: pos };
-  }
-  return {
-    from: doc.line(block.openLine + 1).from,
-    to: doc.line(block.closeLine - 1).to,
-  };
-}
-
-function tensBlockDeleteRange(doc, block) {
-  let from = doc.line(block.openLine).from;
-  let to = doc.line(block.closeLine).to;
-  if (block.closeLine < doc.lines) {
-    to = doc.line(block.closeLine + 1).from;
-  } else if (block.openLine > 1) {
-    from = doc.line(block.openLine - 1).to;
-  }
-  return { from, to };
-}
-
-function isWholeTensBlockDelete(doc, from, to) {
-  for (let n = 1; n <= doc.lines; n++) {
-    if (!isTensOpen(doc.line(n).text)) continue;
-    const block = tensBlockAroundLine(doc, n);
-    if (!block) continue;
-    const range = tensBlockDeleteRange(doc, block);
-    if (from === range.from && to === range.to) return true;
-    n = block.closeLine;
-  }
-  return false;
-}
-
-function selectedWholeTensBlock(doc, sel) {
-  if (sel.empty) return null;
-  const startBlock = tensBlockAroundLine(doc, doc.lineAt(sel.from).number);
-  const endBlock = tensBlockAroundLine(doc, doc.lineAt(Math.max(sel.from, sel.to - 1)).number);
-  if (!startBlock || !endBlock) return null;
-  if (startBlock.openLine !== endBlock.openLine || startBlock.closeLine !== endBlock.closeLine) {
-    return null;
-  }
-  const visible = tensBlockVisibleRange(doc, startBlock);
-  return sel.from <= visible.from && sel.to >= visible.to ? startBlock : null;
-}
-
-function deleteTensBlock(view) {
-  const sel = view.state.selection.main;
-  const doc = view.state.doc;
-  let block = selectedWholeTensBlock(doc, sel);
-  if (!block && sel.empty) {
-    const lineNumber = doc.lineAt(sel.head).number;
-    const candidate = tensBlockAroundLine(doc, lineNumber);
-    if (candidate && isEmptyTensBlock(doc, candidate)) block = candidate;
-  }
-  if (!block) return false;
-
-  const { from, to } = tensBlockDeleteRange(doc, block);
-  view.dispatch({
-    changes: { from, to, insert: "" },
-    selection: { anchor: from },
-    annotations: internalEdit.of(true),
-  });
-  return true;
 }
 
 function endOfTensBlockAfter(lineNumber) {
@@ -1401,7 +1234,7 @@ function renderOutputBlock(item) {
   head.className = "head";
 
   if (error) {
-    head.textContent = `[line ${displaySourceLine(line)}]`;
+    head.textContent = `[line ${line}]`;
     const err = document.createElement("div");
     err.className = "error";
     err.textContent = error;
