@@ -4,7 +4,6 @@
 
 import {
   Annotation,
-  BlockWrapper,
   Decoration,
   EditorState,
   EditorView,
@@ -501,15 +500,18 @@ const sourceDecorations = ViewPlugin.fromClass(
             const innerLine = doc.line(m);
             if (isTensClose(innerLine.text)) {
               const isEmptyBlock = contentLines.every((contentLine) => contentLine.text.trim() === "");
-              if (isEmptyBlock && contentLines.length > 0) {
+              for (let i = 0; i < contentLines.length; i++) {
+                const contentLine = contentLines[i];
+                const classes = ["tf-tens-line"];
+                if (i === 0) classes.push("tf-tens-first");
+                if (isEmptyBlock && i === 0) classes.push("tf-tens-empty");
                 decorations.add(
-                  contentLines[0].from,
-                  contentLines[0].from,
-                  Decoration.line({ class: "tf-tens-empty" }),
+                  contentLine.from,
+                  contentLine.from,
+                  Decoration.line({ class: classes.join(" ") }),
                 );
-              } else {
-                for (const contentLine of contentLines) {
-                  if (contentLine.text.trim() !== "") decorateTensTokens(decorations, contentLine);
+                if (!isEmptyBlock && contentLine.text.trim() !== "") {
+                  decorateTensTokens(decorations, contentLine);
                 }
               }
               n = m;
@@ -525,46 +527,19 @@ const sourceDecorations = ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations },
 );
 
-function sentinelHiddenRange(doc, line) {
-  const to = line.number < doc.lines ? doc.line(line.number + 1).from : line.to;
-  return { from: line.from, to };
-}
-
 function buildSentinelHiding(doc) {
   const decorations = new RangeSetBuilder();
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
     if (!isTensOpen(line.text) && !isTensClose(line.text)) continue;
-    const range = sentinelHiddenRange(doc, line);
-    decorations.add(range.from, range.to, Decoration.replace({ block: true }));
+    decorations.add(
+      line.from,
+      line.from,
+      Decoration.line({ class: "tf-sentinel-hidden-line" }),
+    );
+    decorations.add(line.from, line.to, Decoration.replace({}));
   }
   return decorations.finish();
-}
-
-function buildTensBlockWrappers(doc) {
-  const ranges = [];
-  let openLine = null;
-  for (let n = 1; n <= doc.lines; n++) {
-    const line = doc.line(n);
-    if (isTensOpen(line.text)) {
-      openLine = n;
-      continue;
-    }
-    if (!isTensClose(line.text) || openLine == null) continue;
-    if (n > openLine + 1) {
-      const isEmptyBlock = Array.from({ length: n - openLine - 1 }, (_, i) =>
-        doc.line(openLine + 1 + i).text.trim(),
-      ).every((text) => text === "");
-      ranges.push(
-        BlockWrapper.create({
-          tagName: "div",
-          attributes: { class: isEmptyBlock ? "tf-tens-block tf-tens-empty-block" : "tf-tens-block" },
-        }).range(doc.line(openLine + 1).from, line.from),
-      );
-    }
-    openLine = null;
-  }
-  return BlockWrapper.set(ranges, true);
 }
 
 function completionSource(context) {
@@ -628,47 +603,42 @@ const editorTheme = EditorView.theme({
   ".cm-tooltip-autocomplete ul": {
     fontFamily: '"SF Mono", Menlo, Consolas, monospace',
   },
-  ".tf-tens-block": {
-    background: "color-mix(in srgb, var(--tens-frame) 8%, transparent)",
-    border: "1px solid var(--tens-frame)",
-    borderRadius: "8px",
-    boxSizing: "border-box",
-    display: "block",
-    margin: "0 20px 14px 13px",
-    minHeight: "54px",
-    maxWidth: "calc(100% - 33px)",
-    padding: "5px 11px",
-    position: "relative",
-    width: "calc(100% - 33px)",
-    overflow: "visible",
+  ".tf-sentinel-hidden-line": {
+    height: "0",
+    lineHeight: "0",
+    minHeight: "0",
+    overflow: "hidden",
+    paddingTop: "0",
+    paddingBottom: "0",
   },
-  ".tf-tens-block::after": {
+  ".tf-tens-line": {
+    background: "color-mix(in srgb, var(--tens-frame) 4%, transparent)",
+    borderLeft: "3px solid color-mix(in srgb, var(--tens-frame) 55%, var(--panel))",
+    boxSizing: "border-box",
+    minHeight: "21.45px",
+    paddingLeft: "11px",
+    paddingRight: "44px",
+    position: "relative",
+  },
+  ".tf-tens-line.cm-activeLine": {
+    background: "color-mix(in srgb, var(--tens-frame) 7%, transparent)",
+  },
+  ".tf-tens-first::after": {
     content: '"tens"',
     position: "absolute",
-    top: "5px",
-    right: "10px",
-    color: "color-mix(in srgb, var(--muted) 58%, transparent)",
-    fontSize: "10px",
-    fontWeight: "650",
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
+    top: "2px",
+    right: "9px",
+    color: "color-mix(in srgb, var(--muted) 70%, transparent)",
+    fontSize: "9.5px",
+    letterSpacing: "0.05em",
     pointerEvents: "none",
   },
-  ".tf-tens-block .cm-line": {
-    minHeight: "21.45px",
-    padding: "0 58px 0 0",
-  },
-  ".tf-tens-block .cm-activeLine": {
-    background: "transparent",
-  },
-  ".tf-tens-empty-block::before": {
-    content: '"Write TensorForge code"',
+  ".tf-tens-empty::before": {
+    content: '"C = F.T * F"',
     position: "absolute",
     left: "11px",
-    top: "5px",
     color: "var(--muted)",
-    font: '13px/1.65 "SF Mono", Menlo, Consolas, monospace',
-    opacity: "0.55",
+    opacity: "0.6",
     pointerEvents: "none",
     whiteSpace: "nowrap",
   },
@@ -761,7 +731,6 @@ function initEditor() {
         syntaxHighlighting(markdownHighlight),
         EditorView.lineWrapping,
         EditorView.decorations.compute(["doc"], (state) => buildSentinelHiding(state.doc)),
-        EditorView.blockWrappers.of((view) => buildTensBlockWrappers(view.state.doc)),
         editorTheme,
         sourceDecorations,
         autocompletion({
