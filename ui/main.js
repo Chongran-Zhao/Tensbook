@@ -762,6 +762,8 @@ function initEditor() {
           },
         }),
         keymap.of([
+          { key: "Backspace", run: deleteEmptyTensBlock },
+          { key: "Delete", run: deleteEmptyTensBlock },
           indentWithTab,
           ...completionKeymap,
           ...searchKeymap,
@@ -787,6 +789,62 @@ function resizeAllTextareas() {
 function activeSourceLine() {
   if (!editorView) return null;
   return editorView.state.doc.lineAt(editorView.state.selection.main.head).number;
+}
+
+function tensBlockAroundLine(doc, lineNumber) {
+  if (!doc || lineNumber < 1 || lineNumber > doc.lines) return null;
+  let openLine = null;
+  for (let n = lineNumber; n >= 1; n--) {
+    const line = doc.line(n);
+    if (isTensClose(line.text) && n !== lineNumber) return null;
+    if (isTensOpen(line.text)) {
+      openLine = n;
+      break;
+    }
+  }
+  if (openLine == null) return null;
+  for (let n = openLine + 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (isTensOpen(line.text)) return null;
+    if (isTensClose(line.text)) {
+      if (lineNumber >= openLine && lineNumber <= n) {
+        return { openLine, closeLine: n };
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+function isEmptyTensBlock(doc, block) {
+  if (!block || block.closeLine <= block.openLine + 1) return true;
+  for (let n = block.openLine + 1; n < block.closeLine; n++) {
+    if (doc.line(n).text.trim() !== "") return false;
+  }
+  return true;
+}
+
+function deleteEmptyTensBlock(view) {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const doc = view.state.doc;
+  const line = doc.lineAt(selection.head);
+  const block = tensBlockAroundLine(doc, line.number);
+  if (!block || line.number <= block.openLine || line.number >= block.closeLine) return false;
+  if (!isEmptyTensBlock(doc, block)) return false;
+
+  const fromLine = doc.line(block.openLine);
+  const closeLine = doc.line(block.closeLine);
+  const afterClose = block.closeLine < doc.lines ? doc.line(block.closeLine + 1).from : closeLine.to;
+  const from = fromLine.from;
+  const to = afterClose;
+  view.dispatch({
+    changes: { from, to, insert: "" },
+    selection: { anchor: from },
+    annotations: internalEdit.of(true),
+  });
+  view.focus();
+  return true;
 }
 
 function endOfTensBlockAfter(lineNumber) {
