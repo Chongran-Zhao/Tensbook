@@ -160,6 +160,49 @@ function symbolDetail(info) {
   return parts.join(" · ");
 }
 
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function symbolDefinition(name, sourceText) {
+  const match = sourceText.match(new RegExp(`^[ \\t]*${escapeRegExp(name)}[ \\t]*=[ \\t]*(.*)$`, "m"));
+  return match?.[1]?.trim() ?? "";
+}
+
+function appendText(parent, className, text) {
+  if (!text) return null;
+  const el = document.createElement("div");
+  el.className = className;
+  el.textContent = text;
+  parent.appendChild(el);
+  return el;
+}
+
+function symbolInfoNode(info, sourceText) {
+  const root = document.createElement("div");
+  root.className = "tf-completion-info";
+
+  appendText(root, "tf-completion-info-title", info.name);
+  appendText(root, "tf-completion-info-meta", symbolDetail(info));
+
+  const definition = symbolDefinition(info.name, sourceText);
+  if (definition) appendText(root, "tf-completion-info-definition", `= ${definition}`);
+
+  const availableModes = (info.display_modes ?? []).filter((mode) => mode.state === "available");
+  if (availableModes.length > 0) {
+    const chips = document.createElement("div");
+    chips.className = "tf-completion-info-chips";
+    for (const mode of availableModes) {
+      const chip = document.createElement("span");
+      chip.className = "tf-completion-info-chip";
+      chip.textContent = mode.mode;
+      chips.appendChild(chip);
+    }
+    root.appendChild(chips);
+  }
+
+  return root;
+}
 
 function wordBefore(context) {
   return context.matchBefore(/[A-Za-z_]\w*/);
@@ -252,6 +295,7 @@ export function tensorForgeCompletionSource(context) {
         cmOption(info.name, {
           type: symbolType(info),
           detail: symbolDetail(info),
+          info: () => symbolInfoNode(info, sourceText),
           section: "your symbols",
           boost: 2,
         }),

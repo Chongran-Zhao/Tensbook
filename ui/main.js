@@ -666,6 +666,45 @@ const editorTheme = EditorView.theme({
     color: "color-mix(in srgb, var(--muted) 72%, transparent)",
     fontStyle: "italic",
   },
+  ".cm-completionInfo": {
+    background: "var(--panel-2)",
+    border: "1px solid var(--border)",
+    borderRadius: "8px",
+    boxShadow: "var(--shadow)",
+    color: "var(--text)",
+    padding: "10px 12px",
+  },
+  ".tf-completion-info": {
+    display: "grid",
+    gap: "6px",
+    maxWidth: "280px",
+  },
+  ".tf-completion-info-title": {
+    color: "var(--text)",
+    fontWeight: "700",
+  },
+  ".tf-completion-info-meta": {
+    color: "var(--muted)",
+    fontSize: "12px",
+  },
+  ".tf-completion-info-definition": {
+    color: "var(--syntax-string)",
+    fontFamily: '"SF Mono", Menlo, Consolas, monospace',
+    fontSize: "12px",
+    overflowWrap: "anywhere",
+  },
+  ".tf-completion-info-chips": {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "5px",
+  },
+  ".tf-completion-info-chip": {
+    border: "1px solid color-mix(in srgb, var(--accent) 45%, var(--border))",
+    borderRadius: "999px",
+    color: "var(--accent)",
+    fontSize: "11px",
+    padding: "1px 7px",
+  },
   ".tf-sentinel-hidden-line": {
     height: "0",
     lineHeight: "0",
