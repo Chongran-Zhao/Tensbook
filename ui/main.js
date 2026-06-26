@@ -493,24 +493,31 @@ const sourceDecorations = ViewPlugin.fromClass(
     build(view) {
       const decorations = new RangeSetBuilder();
       const doc = view.state.doc;
-      let inTens = false;
       for (let n = 1; n <= doc.lines; n++) {
         const line = doc.line(n);
         if (isTensOpen(line.text)) {
           decorations.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
-          inTens = true;
-          continue;
-        }
-        if (isTensClose(line.text)) {
-          decorations.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
-          inTens = false;
-          continue;
-        }
-        if (inTens) {
-          if (line.text.trim() === "") {
-            decorations.add(line.from, line.from, Decoration.line({ class: "tf-tens-empty" }));
-          } else {
-            decorateTensTokens(decorations, line);
+          const contentLines = [];
+          for (let m = n + 1; m <= doc.lines; m++) {
+            const innerLine = doc.line(m);
+            if (isTensClose(innerLine.text)) {
+              const isEmptyBlock = contentLines.every((contentLine) => contentLine.text.trim() === "");
+              if (isEmptyBlock && contentLines.length > 0) {
+                decorations.add(
+                  contentLines[0].from,
+                  contentLines[0].from,
+                  Decoration.line({ class: "tf-tens-empty" }),
+                );
+              } else {
+                for (const contentLine of contentLines) {
+                  if (contentLine.text.trim() !== "") decorateTensTokens(decorations, contentLine);
+                }
+              }
+              decorations.add(innerLine.from, innerLine.from, Decoration.line({ class: "tf-sentinel-line" }));
+              n = m;
+              break;
+            }
+            contentLines.push(innerLine);
           }
         }
       }
