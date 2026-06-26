@@ -832,8 +832,9 @@ function tensBlockAroundLine(doc, lineNumber) {
   let openLine = null;
   for (let n = lineNumber; n >= 1; n--) {
     const line = doc.line(n);
-    if (isTensClose(line.text) && n !== lineNumber) return null;
-    if (isTensOpen(line.text)) {
+    const sentinel = tensSentinelKind(line.text);
+    if (sentinel === "close" && n !== lineNumber) return null;
+    if (sentinel === "open") {
       openLine = n;
       break;
     }
@@ -841,8 +842,9 @@ function tensBlockAroundLine(doc, lineNumber) {
   if (openLine == null) return null;
   for (let n = openLine + 1; n <= doc.lines; n++) {
     const line = doc.line(n);
-    if (isTensOpen(line.text)) return null;
-    if (isTensClose(line.text)) {
+    const sentinel = tensSentinelKind(line.text);
+    if (sentinel === "open") return null;
+    if (sentinel === "close") {
       if (lineNumber >= openLine && lineNumber <= n) {
         return { openLine, closeLine: n };
       }
@@ -883,6 +885,35 @@ function nearestEditableDocPos(doc, lineNumber, direction) {
   return 0;
 }
 
+function deleteBlankTensContentLine(view, line, block, direction) {
+  const doc = view.state.doc;
+  if (!block || line.number <= block.openLine || line.number >= block.closeLine) return false;
+  if (line.text.trim() !== "" || isEmptyTensBlock(doc, block)) return false;
+
+  let from = line.from;
+  let to = line.to;
+  if (direction < 0) {
+    if (line.number > block.openLine + 1) {
+      from = doc.line(line.number - 1).to;
+    } else if (line.number + 1 < block.closeLine) {
+      to = doc.line(line.number + 1).from;
+    }
+  } else if (line.number + 1 < block.closeLine) {
+    to = doc.line(line.number + 1).from;
+  } else if (line.number > block.openLine + 1) {
+    from = doc.line(line.number - 1).to;
+  }
+
+  if (from >= to) return false;
+  view.dispatch({
+    changes: { from, to, insert: "" },
+    selection: { anchor: from },
+    annotations: internalEdit.of(true),
+  });
+  view.focus();
+  return true;
+}
+
 function protectTensSentinelBoundary(view, direction) {
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
@@ -897,6 +928,9 @@ function protectTensSentinelBoundary(view, direction) {
     view.focus();
     return true;
   }
+
+  const block = tensBlockAroundLine(doc, line.number);
+  if (deleteBlankTensContentLine(view, line, block, direction)) return true;
 
   if (direction < 0 && selection.head === line.from && line.number > 1) {
     const previous = doc.line(line.number - 1);
