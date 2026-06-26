@@ -764,6 +764,7 @@ function initEditor() {
         keymap.of([
           { key: "Backspace", run: deleteEmptyTensBlock },
           { key: "Delete", run: deleteEmptyTensBlock },
+          { key: "Enter", run: exitTensBlockOnDoubleBlankEnter },
           indentWithTab,
           ...completionKeymap,
           ...searchKeymap,
@@ -841,6 +842,44 @@ function deleteEmptyTensBlock(view) {
   view.dispatch({
     changes: { from, to, insert: "" },
     selection: { anchor: from },
+    annotations: internalEdit.of(true),
+  });
+  view.focus();
+  return true;
+}
+
+function exitTensBlockOnDoubleBlankEnter(view) {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const doc = view.state.doc;
+  const line = doc.lineAt(selection.head);
+  const block = tensBlockAroundLine(doc, line.number);
+  if (!block || line.number <= block.openLine || line.number >= block.closeLine) return false;
+  if (line.text.trim() !== "") return false;
+
+  const beforeLines = [];
+  const afterLines = [];
+  for (let n = block.openLine + 1; n < line.number; n++) beforeLines.push(doc.line(n).text);
+  for (let n = line.number + 1; n < block.closeLine; n++) afterLines.push(doc.line(n).text);
+  const beforeHasCode = beforeLines.some((text) => text.trim() !== "");
+  const afterHasCode = afterLines.some((text) => text.trim() !== "");
+
+  const openLine = doc.line(block.openLine);
+  const closeLine = doc.line(block.closeLine);
+  const to = block.closeLine < doc.lines ? doc.line(block.closeLine + 1).from : closeLine.to;
+  const from = beforeHasCode ? line.from : openLine.from;
+  let insert = beforeHasCode ? `${TENS_CLOSE}\n\n` : "\n";
+  const anchor = beforeHasCode ? from + TENS_CLOSE.length + 1 : from;
+
+  if (afterHasCode) {
+    const afterText = afterLines.join("\n");
+    insert += `${TENS_OPEN}\n${afterText}\n${TENS_CLOSE}`;
+    if (block.closeLine < doc.lines) insert += "\n";
+  }
+
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor },
     annotations: internalEdit.of(true),
   });
   view.focus();
