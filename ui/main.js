@@ -202,6 +202,20 @@ function isTensClose(line) {
   return line.trim().toLowerCase() === TENS_CLOSE.toLowerCase();
 }
 
+function canonicalDamagedTensSentinel(line) {
+  const match = line.match(/^(\s*)<!--\s*(\/?)tensorforge:tens\s*--?\s*$/i);
+  if (!match) return null;
+  return `${match[1]}<!-- ${match[2] ? "/" : ""}tensorforge:tens -->`;
+}
+
+function tensSentinelKind(line) {
+  if (isTensOpen(line)) return "open";
+  if (isTensClose(line)) return "close";
+  const canonical = canonicalDamagedTensSentinel(line);
+  if (!canonical) return null;
+  return isTensOpen(canonical) ? "open" : "close";
+}
+
 function isNoteOpen(line) {
   return line.trim().toLowerCase() === NOTE_OPEN.toLowerCase();
 }
@@ -366,11 +380,10 @@ function tensRegions(source) {
   let line = 1;
   let inTens = false;
   for (const text of lines) {
-    const trimmed = text.trim().toLowerCase();
-    const sentinel = isTensOpen(text) || isTensClose(text);
-    if (isTensOpen(text)) inTens = true;
+    const sentinel = tensSentinelKind(text);
+    if (sentinel === "open") inTens = true;
     regions.push({ line, kind: sentinel ? "sentinel" : inTens ? "tens" : "markdown" });
-    if (isTensClose(text)) inTens = false;
+    if (sentinel === "close") inTens = false;
     line++;
   }
   return regions;
@@ -393,7 +406,7 @@ function isMarkdownAtPos(pos) {
 function isSentinelDocLine(doc, lineNumber) {
   if (!doc || lineNumber < 1 || lineNumber > doc.lines) return false;
   const line = doc.line(lineNumber);
-  return isTensOpen(line.text) || isTensClose(line.text);
+  return tensSentinelKind(line.text) != null;
 }
 
 function visibleMarkdownLineNumber(doc, lineNumber) {
@@ -402,12 +415,13 @@ function visibleMarkdownLineNumber(doc, lineNumber) {
   let visible = 0;
   for (let n = 1; n <= lineNumber; n++) {
     const text = doc.line(n).text;
-    if (isTensOpen(text)) {
+    const sentinel = tensSentinelKind(text);
+    if (sentinel === "open") {
       inTens = true;
       if (n === lineNumber) return null;
       continue;
     }
-    if (isTensClose(text)) {
+    if (sentinel === "close") {
       if (n === lineNumber) return null;
       inTens = false;
       continue;
@@ -532,7 +546,7 @@ function buildSentinelHiding(doc) {
   const decorations = new RangeSetBuilder();
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
-    if (!isTensOpen(line.text) && !isTensClose(line.text)) continue;
+    if (tensSentinelKind(line.text) == null) continue;
     decorations.add(
       line.from,
       line.from,
@@ -541,6 +555,24 @@ function buildSentinelHiding(doc) {
     decorations.add(line.from, line.to, Decoration.replace({}));
   }
   return decorations.finish();
+}
+
+function repairDamagedTensSentinels(view) {
+  const changes = [];
+  const doc = view.state.doc;
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    const canonical = canonicalDamagedTensSentinel(line.text);
+    if (canonical && canonical !== line.text) {
+      changes.push({ from: line.from, to: line.to, insert: canonical });
+    }
+  }
+  if (changes.length === 0) return false;
+  view.dispatch({
+    changes,
+    annotations: internalEdit.of(true),
+  });
+  return true;
 }
 
 function completionSource(context) {
@@ -668,6 +700,7 @@ const markdownHighlight = HighlightStyle.define([
 ]);
 
 function handleEditorUpdate(update) {
+  if (update.docChanged && repairDamagedTensSentinels(update.view)) return;
   if (update.docChanged) {
     refreshDocumentModel();
     if (!replacingDocument) {
@@ -763,7 +796,9 @@ function initEditor() {
         }),
         keymap.of([
           { key: "Backspace", run: deleteEmptyTensBlock },
+          { key: "Backspace", run: (view) => protectTensSentinelBoundary(view, -1) },
           { key: "Delete", run: deleteEmptyTensBlock },
+          { key: "Delete", run: (view) => protectTensSentinelBoundary(view, 1) },
           { key: "Enter", run: exitTensBlockOnDoubleBlankEnter },
           indentWithTab,
           ...completionKeymap,
@@ -823,6 +858,55 @@ function isEmptyTensBlock(doc, block) {
     if (doc.line(n).text.trim() !== "") return false;
   }
   return true;
+}
+
+function nearestEditableDocPos(doc, lineNumber, direction) {
+  const forwardStart = direction >= 0 ? lineNumber + 1 : lineNumber - 1;
+  for (
+    let n = forwardStart;
+    direction >= 0 ? n <= doc.lines : n >= 1;
+    n += direction >= 0 ? 1 : -1
+  ) {
+    if (isSentinelDocLine(doc, n)) continue;
+    const line = doc.line(n);
+    return direction >= 0 ? line.from : line.to;
+  }
+  for (
+    let n = direction >= 0 ? lineNumber - 1 : lineNumber + 1;
+    direction >= 0 ? n >= 1 : n <= doc.lines;
+    n += direction >= 0 ? -1 : 1
+  ) {
+    if (isSentinelDocLine(doc, n)) continue;
+    const line = doc.line(n);
+    return direction >= 0 ? line.to : line.from;
+  }
+  return 0;
+}
+
+function protectTensSentinelBoundary(view, direction) {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const doc = view.state.doc;
+  const line = doc.lineAt(selection.head);
+
+  if (isSentinelDocLine(doc, line.number)) {
+    view.dispatch({
+      selection: { anchor: nearestEditableDocPos(doc, line.number, direction) },
+      annotations: internalEdit.of(true),
+    });
+    view.focus();
+    return true;
+  }
+
+  if (direction < 0 && selection.head === line.from && line.number > 1) {
+    const previous = doc.line(line.number - 1);
+    if (tensSentinelKind(previous.text) != null) return true;
+  }
+  if (direction > 0 && selection.head === line.to && line.number < doc.lines) {
+    const next = doc.line(line.number + 1);
+    if (tensSentinelKind(next.text) != null) return true;
+  }
+  return false;
 }
 
 function deleteEmptyTensBlock(view) {
