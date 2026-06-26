@@ -397,6 +397,31 @@ function isSentinelDocLine(doc, lineNumber) {
   return isTensOpen(line.text) || isTensClose(line.text);
 }
 
+function visibleMarkdownLineNumber(doc, lineNumber) {
+  if (!doc || lineNumber < 1 || lineNumber > doc.lines) return null;
+  let inTens = false;
+  let visible = 0;
+  for (let n = 1; n <= lineNumber; n++) {
+    const text = doc.line(n).text;
+    if (isTensOpen(text)) {
+      inTens = true;
+      if (n === lineNumber) return null;
+      continue;
+    }
+    if (isTensClose(text)) {
+      if (n === lineNumber) return null;
+      inTens = false;
+      continue;
+    }
+    if (inTens) {
+      if (n === lineNumber) return null;
+      continue;
+    }
+    visible++;
+  }
+  return visible;
+}
+
 function firstEditableDocPos(doc) {
   if (!doc) return 0;
   for (let n = 1; n <= doc.lines; n++) {
@@ -467,9 +492,10 @@ const sourceDecorations = ViewPlugin.fromClass(
     }
     build(view) {
       const decorations = new RangeSetBuilder();
+      const doc = view.state.doc;
       let inTens = false;
-      for (let n = 1; n <= view.state.doc.lines; n++) {
-        const line = view.state.doc.line(n);
+      for (let n = 1; n <= doc.lines; n++) {
+        const line = doc.line(n);
         if (isTensOpen(line.text)) {
           decorations.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
           inTens = true;
@@ -480,7 +506,13 @@ const sourceDecorations = ViewPlugin.fromClass(
           inTens = false;
           continue;
         }
-        if (inTens) decorateTensTokens(decorations, line);
+        if (inTens) {
+          if (line.text.trim() === "") {
+            decorations.add(line.from, line.from, Decoration.line({ class: "tf-tens-empty" }));
+          } else {
+            decorateTensTokens(decorations, line);
+          }
+        }
       }
       return decorations.finish();
     }
@@ -574,11 +606,43 @@ const editorTheme = EditorView.theme({
   },
   ".tf-tens-block": {
     background: "color-mix(in srgb, var(--tens-frame) 8%, transparent)",
-    border: "1px solid color-mix(in srgb, var(--tens-frame) 38%, transparent)",
-    borderLeft: "4px solid var(--tens-frame)",
-    borderRadius: "6px",
-    margin: "2px 0",
-    overflow: "hidden",
+    border: "1px solid var(--tens-frame)",
+    borderRadius: "8px",
+    boxSizing: "border-box",
+    display: "block",
+    margin: "0 20px 14px 13px",
+    minHeight: "54px",
+    maxWidth: "calc(100% - 33px)",
+    padding: "5px 11px",
+    position: "relative",
+    width: "calc(100% - 33px)",
+    overflow: "visible",
+  },
+  ".tf-tens-block::after": {
+    content: '"tens"',
+    position: "absolute",
+    top: "5px",
+    right: "10px",
+    color: "color-mix(in srgb, var(--muted) 58%, transparent)",
+    fontSize: "10px",
+    fontWeight: "650",
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    pointerEvents: "none",
+  },
+  ".tf-tens-block .cm-line": {
+    minHeight: "21.45px",
+    padding: "0 58px 0 0",
+  },
+  ".tf-tens-block .cm-activeLine": {
+    background: "transparent",
+  },
+  ".tf-tens-empty::before": {
+    content: '"Write TensorForge code, e.g. C = F.T * F, then C.show()"',
+    color: "var(--muted)",
+    font: '13px/1.65 "SF Mono", Menlo, Consolas, monospace',
+    opacity: "0.55",
+    pointerEvents: "none",
   },
   ".tf-sentinel-line": {
     color: "color-mix(in srgb, var(--muted) 52%, transparent)",
@@ -660,7 +724,12 @@ function initEditor() {
     state: EditorState.create({
       doc: "",
       extensions: [
-        lineNumbers(),
+        lineNumbers({
+          formatNumber: (lineNo, state) => {
+            const visibleLine = visibleMarkdownLineNumber(state.doc, lineNo);
+            return visibleLine == null ? "" : String(visibleLine);
+          },
+        }),
         history(),
         drawSelection(),
         highlightActiveLine(),
