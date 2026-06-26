@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "identifier": "com.tensorforge.app",
   "build": {
-    "beforeDevCommand": "npm run bundle:cm",
+    "beforeDevCommand": {
+      "script": "npm run bundle:cm",
+      "wait": true
+    },
     "beforeBuildCommand": "npm run bundle:cm",
     "frontendDist": "../ui"
   },
