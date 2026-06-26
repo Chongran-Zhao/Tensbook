@@ -504,6 +504,7 @@ const sourceDecorations = ViewPlugin.fromClass(
                 const contentLine = contentLines[i];
                 const classes = ["tf-tens-line"];
                 if (i === 0) classes.push("tf-tens-first");
+                if (i === contentLines.length - 1) classes.push("tf-tens-last");
                 if (isEmptyBlock && i === 0) classes.push("tf-tens-empty");
                 decorations.add(
                   contentLine.from,
@@ -622,6 +623,12 @@ const editorTheme = EditorView.theme({
   },
   ".tf-tens-line.cm-activeLine": {
     background: "color-mix(in srgb, var(--tens-frame) 7%, transparent)",
+  },
+  ".tf-tens-first": {
+    marginTop: "4px",
+  },
+  ".tf-tens-last": {
+    marginBottom: "4px",
   },
   ".tf-tens-first::after": {
     content: '"tens"',
