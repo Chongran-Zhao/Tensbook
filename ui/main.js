@@ -516,10 +516,14 @@ const sourceDecorations = ViewPlugin.fromClass(
               const isEmptyBlock = contentLines.every((contentLine) => contentLine.text.trim() === "");
               for (let i = 0; i < contentLines.length; i++) {
                 const contentLine = contentLines[i];
+                const isLastContentLine = i === contentLines.length - 1;
                 const classes = ["tf-tens-line"];
                 if (i === 0) classes.push("tf-tens-first");
-                if (i === contentLines.length - 1) classes.push("tf-tens-last");
+                if (isLastContentLine) classes.push("tf-tens-last");
                 if (isEmptyBlock && i === 0) classes.push("tf-tens-empty");
+                if (!isEmptyBlock && isLastContentLine && contentLine.text.trim() === "") {
+                  classes.push("tf-tens-exit-hint");
+                }
                 decorations.add(
                   contentLine.from,
                   contentLine.from,
@@ -654,7 +658,8 @@ const editorTheme = EditorView.theme({
     position: "relative",
   },
   ".tf-tens-line.cm-activeLine": {
-    background: "color-mix(in srgb, var(--tens-frame) 7%, transparent)",
+    background: "color-mix(in srgb, var(--tens-frame) 12%, transparent)",
+    borderLeftColor: "color-mix(in srgb, var(--tens-frame) 82%, var(--panel))",
   },
   ".tf-tens-first": {
     marginTop: "4px",
@@ -672,12 +677,25 @@ const editorTheme = EditorView.theme({
     letterSpacing: "0.05em",
     pointerEvents: "none",
   },
+  ".tf-tens-first.cm-activeLine::after": {
+    color: "color-mix(in srgb, var(--tens-frame) 88%, var(--muted))",
+    opacity: "0.95",
+  },
   ".tf-tens-empty::before": {
     content: '"C = F.T * F"',
     position: "absolute",
     left: "11px",
     color: "var(--muted)",
     opacity: "0.6",
+    pointerEvents: "none",
+    whiteSpace: "nowrap",
+  },
+  ".tf-tens-exit-hint::before": {
+    content: '"Enter again for Markdown"',
+    position: "absolute",
+    left: "11px",
+    color: "var(--muted)",
+    opacity: "0.52",
     pointerEvents: "none",
     whiteSpace: "nowrap",
   },
@@ -1506,6 +1524,31 @@ function renderMarkdownBlock(block) {
   return el;
 }
 
+function sourceTextAtLine(line) {
+  if (!editorView || !Number.isFinite(line)) return "";
+  const doc = editorView.state.doc;
+  if (line < 1 || line > doc.lines) return "";
+  return doc.line(line).text;
+}
+
+function looksLikeAccidentalNotesInTens(lineText, error) {
+  const text = lineText.trim();
+  if (!text || !/^undefined variable\b/i.test(String(error))) return false;
+  if (/[\u3400-\u9fff]/.test(text)) return true;
+  if (/[=^*/+&|<>\\[\]{}]/.test(text)) return false;
+  return /^[\p{L}\p{N}_\s.,;:!?'"“”‘’()（）\-—]+$/u.test(text);
+}
+
+function tensBlockNoteHint(line, error) {
+  if (!Number.isFinite(line) || !editorView) return null;
+  const sourceBlock = blockForSourceLine(line);
+  if (!sourceBlock || sourceBlock.kind !== "tens") return null;
+  if (isSentinelDocLine(editorView.state.doc, line)) return null;
+  const lineText = sourceTextAtLine(line);
+  if (!looksLikeAccidentalNotesInTens(lineText, error)) return null;
+  return "This line is inside a TensorForge code block. Press Enter on an empty tens line to return to Markdown.";
+}
+
 function renderOutputBlock(item) {
   const { header, latex, line, error } = item;
   const block = document.createElement("div");
@@ -1522,6 +1565,15 @@ function renderOutputBlock(item) {
     const err = document.createElement("div");
     err.className = "error";
     err.textContent = error;
+    const noteHint = tensBlockNoteHint(line, error);
+    if (noteHint) {
+      const hint = document.createElement("div");
+      hint.textContent = noteHint;
+      hint.style.marginTop = "8px";
+      hint.style.color = "var(--muted)";
+      hint.style.font = '12px/1.4 -apple-system, "Segoe UI", sans-serif';
+      err.appendChild(hint);
+    }
     block.append(head, err);
     return block;
   }
