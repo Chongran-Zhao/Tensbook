@@ -662,10 +662,13 @@ const editorTheme = EditorView.theme({
     borderLeftColor: "color-mix(in srgb, var(--tens-frame) 82%, var(--panel))",
   },
   ".tf-tens-first": {
-    marginTop: "4px",
+    boxShadow: "inset 0 4px 0 var(--panel)",
   },
   ".tf-tens-last": {
-    marginBottom: "4px",
+    boxShadow: "inset 0 -4px 0 var(--panel)",
+  },
+  ".tf-tens-first.tf-tens-last": {
+    boxShadow: "inset 0 4px 0 var(--panel), inset 0 -4px 0 var(--panel)",
   },
   ".tf-tens-first::after": {
     content: '"tens"',
@@ -797,6 +800,17 @@ function initEditor() {
         }),
         EditorView.updateListener.of(handleEditorUpdate),
         EditorView.domEventHandlers({
+          beforeinput(event, view) {
+            if (event.inputType !== "deleteContentBackward" && event.inputType !== "deleteContentForward") {
+              return false;
+            }
+            const direction = event.inputType === "deleteContentBackward" ? -1 : 1;
+            if (deleteEmptyTensBlock(view) || protectTensSentinelBoundary(view, direction)) {
+              event.preventDefault();
+              return true;
+            }
+            return false;
+          },
           paste(event, view) {
             if (!isMarkdownAtPos(view.state.selection.main.head)) return false;
             const item = [...(event.clipboardData?.items ?? [])].find((it) =>
