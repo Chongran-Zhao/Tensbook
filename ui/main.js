@@ -496,7 +496,6 @@ const sourceDecorations = ViewPlugin.fromClass(
       for (let n = 1; n <= doc.lines; n++) {
         const line = doc.line(n);
         if (isTensOpen(line.text)) {
-          decorations.add(line.from, line.from, Decoration.line({ class: "tf-sentinel-line" }));
           const contentLines = [];
           for (let m = n + 1; m <= doc.lines; m++) {
             const innerLine = doc.line(m);
@@ -513,7 +512,6 @@ const sourceDecorations = ViewPlugin.fromClass(
                   if (contentLine.text.trim() !== "") decorateTensTokens(decorations, contentLine);
                 }
               }
-              decorations.add(innerLine.from, innerLine.from, Decoration.line({ class: "tf-sentinel-line" }));
               n = m;
               break;
             }
@@ -526,6 +524,22 @@ const sourceDecorations = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+function sentinelHiddenRange(doc, line) {
+  const to = line.number < doc.lines ? doc.line(line.number + 1).from : line.to;
+  return { from: line.from, to };
+}
+
+function buildSentinelHiding(doc) {
+  const decorations = new RangeSetBuilder();
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (!isTensOpen(line.text) && !isTensClose(line.text)) continue;
+    const range = sentinelHiddenRange(doc, line);
+    decorations.add(range.from, range.to, Decoration.replace({ block: true }));
+  }
+  return decorations.finish();
+}
 
 function buildTensBlockWrappers(doc) {
   const ranges = [];
@@ -651,11 +665,6 @@ const editorTheme = EditorView.theme({
     opacity: "0.55",
     pointerEvents: "none",
   },
-  ".tf-sentinel-line": {
-    color: "color-mix(in srgb, var(--muted) 52%, transparent)",
-    fontSize: "11px",
-    fontStyle: "italic",
-  },
   ".tf-token-comment": { color: "var(--syntax-comment)", fontStyle: "italic" },
   ".tf-token-string": { color: "var(--syntax-string)" },
   ".tf-token-number": { color: "var(--syntax-number)" },
@@ -744,6 +753,7 @@ function initEditor() {
         markdown(),
         syntaxHighlighting(markdownHighlight),
         EditorView.lineWrapping,
+        EditorView.decorations.compute(["doc"], (state) => buildSentinelHiding(state.doc)),
         EditorView.blockWrappers.of((view) => buildTensBlockWrappers(view.state.doc)),
         editorTheme,
         sourceDecorations,
