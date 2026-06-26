@@ -640,6 +640,32 @@ const editorTheme = EditorView.theme({
   ".cm-tooltip-autocomplete ul": {
     fontFamily: '"SF Mono", Menlo, Consolas, monospace',
   },
+  ".cm-completionSection": {
+    color: "var(--muted)",
+    fontSize: "10px",
+    fontWeight: "700",
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+  },
+  ".cm-completionIcon-function": {
+    color: "var(--syntax-function)",
+  },
+  ".cm-completionIcon-variable": {
+    color: "var(--syntax-number)",
+  },
+  ".cm-completionIcon-keyword": {
+    color: "var(--syntax-keyword)",
+  },
+  ".cm-completionIcon-property": {
+    color: "var(--accent)",
+  },
+  ".cm-completion-unavailable": {
+    color: "color-mix(in srgb, var(--muted) 72%, transparent)",
+  },
+  ".cm-completion-unavailable .cm-completionDetail": {
+    color: "color-mix(in srgb, var(--muted) 72%, transparent)",
+    fontStyle: "italic",
+  },
   ".tf-sentinel-hidden-line": {
     height: "0",
     lineHeight: "0",

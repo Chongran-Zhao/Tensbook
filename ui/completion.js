@@ -81,13 +81,85 @@ export function completionSymbolsSnapshot() {
   return completionSymbols;
 }
 
-function cmOption(label, detail = "", info = "", apply = null) {
-  const option = { label, type: "keyword" };
+function cmOption(label, options = {}) {
+  const {
+    type = "keyword",
+    detail = "",
+    info = "",
+    apply = null,
+    section = null,
+    boost = 0,
+    class: className = "",
+  } = options;
+  const option = { label, type };
   if (detail) option.detail = detail;
   if (info) option.info = info;
   if (apply) option.apply = apply;
+  if (section) option.section = section;
+  if (boost) option.boost = boost;
+  if (className) option.class = className;
   return option;
 }
+
+function kindType(info) {
+  return typeof info?.kind === "object" ? info.kind.type : info?.kind;
+}
+
+function boolFlag(info, name) {
+  return info?.characteristic?.[name] === true || info?.kind?.[name] === true;
+}
+
+function dimOf(info) {
+  return info?.kind?.dim ?? info?.characteristic?.dim;
+}
+
+function orderOf(info) {
+  return info?.kind?.order ?? info?.characteristic?.order;
+}
+
+function symbolType(_info) {
+  return "variable";
+}
+
+function symbolDetail(info) {
+  const type = kindType(info);
+  const dim = dimOf(info);
+  const order = orderOf(info);
+  const parts = [];
+
+  if (type === "tensor") {
+    if (order === 2 && dim) parts.push(`tensor · ${dim}×${dim}`);
+    else if (order && dim) parts.push(`order-${order} tensor · dim ${dim}`);
+    else if (order) parts.push(`order-${order} tensor`);
+    else parts.push("tensor");
+  } else if (type === "scalar") {
+    parts.push("scalar");
+  } else if (type === "scalar_function_like") {
+    parts.push("scalar fn");
+  } else if (type === "scalar_set") {
+    parts.push(dim ? `scalar set · dim ${dim}` : "scalar set");
+  } else if (type === "vector_set") {
+    parts.push(dim ? `vector set · dim ${dim}` : "vector set");
+  } else if (type === "equation") {
+    parts.push("equation");
+  } else if (type === "initial_condition") {
+    parts.push("initial condition");
+  } else if (type === "ode_classification") {
+    parts.push("ODE classification");
+  } else if (type === "ode_solution") {
+    parts.push("ODE solution");
+  } else if (type) {
+    parts.push(type.replaceAll("_", " "));
+  } else {
+    parts.push("symbol");
+  }
+
+  if (boolFlag(info, "symmetric")) parts.push("symmetric");
+  if (boolFlag(info, "identity")) parts.push("identity");
+  if (boolFlag(info, "antisymmetric")) parts.push("antisymmetric");
+  return parts.join(" · ");
+}
+
 
 function wordBefore(context) {
   return context.matchBefore(/[A-Za-z_]\w*/);
@@ -125,12 +197,23 @@ function showExpressionBefore(prefix) {
 
 function showModeCandidates(expr = "") {
   const component = expr.match(/^([A-Za-z_]\w*)(\[[^\]]+\])+$/);
-  if (component && completionSymbols.has(component[1])) return ["symbol"];
+  if (component && completionSymbols.has(component[1])) {
+    return [cmOption("symbol", { type: "property", detail: "✓ available", section: "display modes", boost: 2 })];
+  }
   const info = completionSymbols.get(expr);
-  const modes = info?.display_modes
-    ?.filter((mode) => mode.state === "available")
-    .map((mode) => mode.mode);
-  return modes?.length ? modes : SHOW_MODES;
+  if (info?.display_modes?.length) {
+    return info.display_modes.map((mode) => {
+      const available = mode.state === "available";
+      return cmOption(mode.mode, {
+        type: "property",
+        detail: available ? "✓ available" : (mode.message || mode.state),
+        section: `display modes for ${expr} · ${symbolDetail(info)}`,
+        boost: available ? 2 : -2,
+        class: available ? "" : "cm-completion-unavailable",
+      });
+    });
+  }
+  return SHOW_MODES.map((mode) => cmOption(mode, { type: "property", detail: "show mode", section: "display modes" }));
 }
 
 function assignedNames(source) {
@@ -148,24 +231,43 @@ export function tensorForgeCompletionSource(context) {
   const from = dotShow ? context.pos : (word?.from ?? context.pos);
   const kw = prefix.slice(0, from - context.state.doc.lineAt(context.pos).from).match(/([A-Za-z_]\w*)\s*=\s*$/);
   const call = enclosingCall(prefix);
+  const sourceText = context.state.doc.toString();
   const options = [];
 
   if (dotShow) {
-    options.push(cmOption("show", "method", "render output", "show()"));
+    options.push(cmOption("show", { type: "function", detail: "show()", info: "render output", apply: "show()" }));
   } else if (call === "show") {
     const expr = showExpressionBefore(prefix);
-    options.push(...showModeCandidates(expr).map((mode) => cmOption(mode, "show mode")));
+    options.push(...showModeCandidates(expr));
   } else if (kw && ENUM_VALUES[kw[1]]) {
-    options.push(...ENUM_VALUES[kw[1]].map((name) => cmOption(name, "value")));
+    options.push(...ENUM_VALUES[kw[1]].map((name) => cmOption(name, { type: "property", detail: "value", section: "values" })));
   } else if (kw) {
-    options.push(...KEYWORDS.map((name) => cmOption(name, "value")));
+    options.push(...KEYWORDS.map((name) => cmOption(name, { type: "keyword", detail: "value", section: "keywords" })));
   } else {
-    if (call === "Tensor") options.push(...TENSOR_KWARGS.map((name) => cmOption(name, "kwarg")));
+    if (call === "Tensor") {
+      options.push(...TENSOR_KWARGS.map((name) => cmOption(name, { type: "property", detail: "kwarg", section: "kwargs" })));
+    }
     options.push(
-      ...BUILTINS.map((b) => cmOption(b.name, b.sig, b.doc)),
-      ...KEYWORDS.map((name) => cmOption(name, "keyword")),
-      ...[...completionSymbols.keys()].map((name) => cmOption(name, "symbol")),
-      ...assignedNames(context.state.doc.toString()).map((name) => cmOption(name, "variable")),
+      ...[...completionSymbols.values()].map((info) =>
+        cmOption(info.name, {
+          type: symbolType(info),
+          detail: symbolDetail(info),
+          section: "your symbols",
+          boost: 2,
+        }),
+      ),
+      ...assignedNames(sourceText)
+        .filter((name) => !completionSymbols.has(name))
+        .map((name) =>
+          cmOption(name, {
+            type: "variable",
+            detail: "assigned name",
+            section: "your symbols",
+            boost: 1,
+          }),
+        ),
+      ...BUILTINS.map((b) => cmOption(b.name, { type: "function", detail: b.sig, info: b.doc, section: "builtins" })),
+      ...KEYWORDS.map((name) => cmOption(name, { type: "keyword", detail: "keyword", section: "keywords" })),
     );
   }
 
