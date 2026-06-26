@@ -552,10 +552,13 @@ function buildTensBlockWrappers(doc) {
     }
     if (!isTensClose(line.text) || openLine == null) continue;
     if (n > openLine + 1) {
+      const isEmptyBlock = Array.from({ length: n - openLine - 1 }, (_, i) =>
+        doc.line(openLine + 1 + i).text.trim(),
+      ).every((text) => text === "");
       ranges.push(
         BlockWrapper.create({
           tagName: "div",
-          attributes: { class: "tf-tens-block" },
+          attributes: { class: isEmptyBlock ? "tf-tens-block tf-tens-empty-block" : "tf-tens-block" },
         }).range(doc.line(openLine + 1).from, line.from),
       );
     }
@@ -658,12 +661,16 @@ const editorTheme = EditorView.theme({
   ".tf-tens-block .cm-activeLine": {
     background: "transparent",
   },
-  ".tf-tens-empty::before": {
-    content: '"Write TensorForge code, e.g. C = F.T * F, then C.show()"',
+  ".tf-tens-empty-block::before": {
+    content: '"Write TensorForge code"',
+    position: "absolute",
+    left: "11px",
+    top: "5px",
     color: "var(--muted)",
     font: '13px/1.65 "SF Mono", Menlo, Consolas, monospace',
     opacity: "0.55",
     pointerEvents: "none",
+    whiteSpace: "nowrap",
   },
   ".tf-token-comment": { color: "var(--syntax-comment)", fontStyle: "italic" },
   ".tf-token-string": { color: "var(--syntax-string)" },
