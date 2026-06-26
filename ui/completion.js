@@ -190,6 +190,7 @@ function symbolInfoNode(info, sourceText) {
 
   const availableModes = (info.display_modes ?? []).filter((mode) => mode.state === "available");
   if (availableModes.length > 0) {
+    appendText(root, "tf-completion-info-modes-label", "show modes");
     const chips = document.createElement("div");
     chips.className = "tf-completion-info-chips";
     for (const mode of availableModes) {

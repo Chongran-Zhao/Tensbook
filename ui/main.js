@@ -637,8 +637,23 @@ const editorTheme = EditorView.theme({
     borderRadius: "8px",
     boxShadow: "var(--shadow)",
   },
+  ".cm-tooltip.cm-tooltip-autocomplete": {
+    background: "var(--panel)",
+    border: "1px solid var(--border)",
+    borderRadius: "8px",
+    overflow: "hidden",
+  },
   ".cm-tooltip-autocomplete ul": {
     fontFamily: '"SF Mono", Menlo, Consolas, monospace',
+    padding: "3px 0",
+  },
+  ".cm-tooltip-autocomplete ul li": {
+    color: "var(--text)",
+    padding: "3px 10px",
+  },
+  ".cm-tooltip-autocomplete ul li[aria-selected]": {
+    background: "color-mix(in srgb, var(--accent) 15%, transparent)",
+    color: "var(--text)",
   },
   ".cm-completionSection": {
     color: "var(--muted)",
@@ -647,19 +662,45 @@ const editorTheme = EditorView.theme({
     letterSpacing: "0.08em",
     textTransform: "uppercase",
   },
+  ".cm-completionIcon": {
+    alignItems: "center",
+    borderRadius: "4px",
+    display: "inline-flex",
+    fontSize: "9px",
+    fontWeight: "700",
+    height: "15px",
+    justifyContent: "center",
+    marginRight: "8px",
+    width: "15px",
+  },
   ".cm-completionIcon-function": {
+    background: "color-mix(in srgb, var(--syntax-function) 14%, transparent)",
     color: "var(--syntax-function)",
   },
   ".cm-completionIcon-variable": {
+    background: "color-mix(in srgb, var(--syntax-number) 15%, transparent)",
     color: "var(--syntax-number)",
   },
   ".cm-completionIcon-keyword": {
+    background: "color-mix(in srgb, var(--syntax-keyword) 13%, transparent)",
     color: "var(--syntax-keyword)",
   },
   ".cm-completionIcon-property": {
+    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
     color: "var(--accent)",
   },
+  ".cm-completionLabel": {
+    color: "var(--text)",
+  },
+  ".cm-completionDetail": {
+    color: "var(--muted)",
+    fontSize: "11px",
+    marginLeft: "8px",
+  },
   ".cm-completion-unavailable": {
+    color: "color-mix(in srgb, var(--muted) 72%, transparent)",
+  },
+  ".cm-completion-unavailable .cm-completionLabel": {
     color: "color-mix(in srgb, var(--muted) 72%, transparent)",
   },
   ".cm-completion-unavailable .cm-completionDetail": {
@@ -692,6 +733,12 @@ const editorTheme = EditorView.theme({
     fontFamily: '"SF Mono", Menlo, Consolas, monospace',
     fontSize: "12px",
     overflowWrap: "anywhere",
+  },
+  ".tf-completion-info-modes-label": {
+    color: "var(--muted)",
+    fontSize: "10px",
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
   },
   ".tf-completion-info-chips": {
     display: "flex",
