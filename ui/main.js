@@ -10,6 +10,7 @@ import {
   HighlightStyle,
   RangeSetBuilder,
   ViewPlugin,
+  acceptCompletion,
   autocompletion,
   completionKeymap,
   defaultKeymap,
@@ -29,7 +30,7 @@ import {
 import {
   BUILTINS,
   markdownSlashCompletionSource,
-  setCompletionSymbols,
+  signatureHint,
   tensorForgeCompletionSource,
 } from "./completion.js";
 
@@ -102,8 +103,6 @@ let isDirty = false;
 let scrollSyncSource = null;
 let scrollSyncFrame = null;
 let scrollSyncSuppressedUntil = 0;
-let analyzeTimer = null;
-let analyzeSeq = 0;
 
 // ---- theme ----------------------------------------------------------------
 
@@ -579,6 +578,76 @@ function repairDamagedTensSentinels(view) {
   return true;
 }
 
+function stripOuterBlankLines(lines, side) {
+  const next = [...lines];
+  if (side === "left" || side === "both") {
+    while (next.length > 0 && next[next.length - 1].trim() === "") next.pop();
+  }
+  if (side === "right" || side === "both") {
+    while (next.length > 0 && next[0].trim() === "") next.shift();
+  }
+  return next;
+}
+
+function mergedTensContentLines(leftLines, rightLines) {
+  const left = stripOuterBlankLines(leftLines, "left");
+  const right = stripOuterBlankLines(rightLines, "right");
+  const leftHasCode = left.some((text) => text.trim() !== "");
+  const rightHasCode = right.some((text) => text.trim() !== "");
+  if (leftHasCode && rightHasCode) return [...left, "", ...right];
+  if (leftHasCode) return left;
+  if (rightHasCode) return right;
+  return [""];
+}
+
+function findTensCloseLineAfter(doc, openLineNumber) {
+  for (let n = openLineNumber + 1; n <= doc.lines; n++) {
+    const kind = tensSentinelKind(doc.line(n).text);
+    if (kind === "open") return null;
+    if (kind === "close") return n;
+  }
+  return null;
+}
+
+function normalizeAdjacentTensBlocks(view) {
+  const doc = view.state.doc;
+  for (let closeLineNo = 1; closeLineNo < doc.lines; closeLineNo++) {
+    if (tensSentinelKind(doc.line(closeLineNo).text) !== "close") continue;
+
+    let nextOpenLineNo = closeLineNo + 1;
+    while (nextOpenLineNo <= doc.lines && doc.line(nextOpenLineNo).text.trim() === "") {
+      nextOpenLineNo++;
+    }
+    if (nextOpenLineNo > doc.lines) continue;
+    if (tensSentinelKind(doc.line(nextOpenLineNo).text) !== "open") continue;
+
+    const leftBlock = tensBlockAroundLine(doc, closeLineNo);
+    const rightCloseLineNo = findTensCloseLineAfter(doc, nextOpenLineNo);
+    if (!leftBlock || rightCloseLineNo == null) continue;
+
+    const leftLines = [];
+    const rightLines = [];
+    for (let n = leftBlock.openLine + 1; n < closeLineNo; n++) leftLines.push(doc.line(n).text);
+    for (let n = nextOpenLineNo + 1; n < rightCloseLineNo; n++) rightLines.push(doc.line(n).text);
+
+    const mergedLines = mergedTensContentLines(leftLines, rightLines);
+    const insert = `${TENS_OPEN}\n${mergedLines.join("\n")}\n${TENS_CLOSE}`;
+    const from = doc.line(leftBlock.openLine).from;
+    const to = doc.line(rightCloseLineNo).to;
+    const selection = view.state.selection.main;
+    const transaction = {
+      changes: { from, to, insert },
+      annotations: internalEdit.of(true),
+    };
+    if (selection.empty && selection.head >= from && selection.head <= to) {
+      transaction.selection = { anchor: from + TENS_OPEN.length + 1 + mergedLines[0].length };
+    }
+    view.dispatch(transaction);
+    return true;
+  }
+  return false;
+}
+
 function completionSource(context) {
   const kind = regionKindAtPos(context.pos);
   if (kind === "tens") return tensorForgeCompletionSource(context);
@@ -697,61 +766,6 @@ const editorTheme = EditorView.theme({
     fontSize: "11px",
     marginLeft: "8px",
   },
-  ".cm-completion-unavailable": {
-    color: "color-mix(in srgb, var(--muted) 72%, transparent)",
-  },
-  ".cm-completion-unavailable .cm-completionLabel": {
-    color: "color-mix(in srgb, var(--muted) 72%, transparent)",
-  },
-  ".cm-completion-unavailable .cm-completionDetail": {
-    color: "color-mix(in srgb, var(--muted) 72%, transparent)",
-    fontStyle: "italic",
-  },
-  ".cm-completionInfo": {
-    background: "var(--panel-2)",
-    border: "1px solid var(--border)",
-    borderRadius: "8px",
-    boxShadow: "var(--shadow)",
-    color: "var(--text)",
-    padding: "10px 12px",
-  },
-  ".tf-completion-info": {
-    display: "grid",
-    gap: "6px",
-    maxWidth: "280px",
-  },
-  ".tf-completion-info-title": {
-    color: "var(--text)",
-    fontWeight: "700",
-  },
-  ".tf-completion-info-meta": {
-    color: "var(--muted)",
-    fontSize: "12px",
-  },
-  ".tf-completion-info-definition": {
-    color: "var(--syntax-string)",
-    fontFamily: '"SF Mono", Menlo, Consolas, monospace',
-    fontSize: "12px",
-    overflowWrap: "anywhere",
-  },
-  ".tf-completion-info-modes-label": {
-    color: "var(--muted)",
-    fontSize: "10px",
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-  },
-  ".tf-completion-info-chips": {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: "5px",
-  },
-  ".tf-completion-info-chip": {
-    border: "1px solid color-mix(in srgb, var(--accent) 45%, var(--border))",
-    borderRadius: "999px",
-    color: "var(--accent)",
-    fontSize: "11px",
-    padding: "1px 7px",
-  },
   ".tf-sentinel-hidden-line": {
     height: "0",
     lineHeight: "0",
@@ -766,38 +780,15 @@ const editorTheme = EditorView.theme({
     boxSizing: "border-box",
     minHeight: "21.45px",
     paddingLeft: "11px",
-    paddingRight: "44px",
+    paddingRight: "11px",
     position: "relative",
   },
   ".tf-tens-line.cm-activeLine": {
     background: "color-mix(in srgb, var(--tens-frame) 12%, transparent)",
     borderLeftColor: "color-mix(in srgb, var(--tens-frame) 82%, var(--panel))",
   },
-  ".tf-tens-first": {
-    boxShadow: "inset 0 4px 0 var(--panel)",
-  },
-  ".tf-tens-last": {
-    boxShadow: "inset 0 -4px 0 var(--panel)",
-  },
-  ".tf-tens-first.tf-tens-last": {
-    boxShadow: "inset 0 4px 0 var(--panel), inset 0 -4px 0 var(--panel)",
-  },
-  ".tf-tens-first::after": {
-    content: '"tens"',
-    position: "absolute",
-    top: "2px",
-    right: "9px",
-    color: "color-mix(in srgb, var(--muted) 70%, transparent)",
-    fontSize: "9.5px",
-    letterSpacing: "0.05em",
-    pointerEvents: "none",
-  },
-  ".tf-tens-first.cm-activeLine::after": {
-    color: "color-mix(in srgb, var(--tens-frame) 88%, var(--muted))",
-    opacity: "0.95",
-  },
   ".tf-tens-empty::before": {
-    content: '"C = F.T * F"',
+    content: '"TensorForge code"',
     position: "absolute",
     left: "11px",
     color: "var(--muted)",
@@ -834,6 +825,7 @@ const markdownHighlight = HighlightStyle.define([
 
 function handleEditorUpdate(update) {
   if (update.docChanged && repairDamagedTensSentinels(update.view)) return;
+  if (update.docChanged && normalizeAdjacentTensBlocks(update.view)) return;
   if (update.docChanged) {
     refreshDocumentModel();
     if (!replacingDocument) {
@@ -843,7 +835,11 @@ function handleEditorUpdate(update) {
   }
   if (update.docChanged || update.selectionSet) {
     updateInsertTableState();
-    if (!replacingDocument) scheduleCompletionAnalysis();
+  }
+  if (update.focusChanged && !update.view.hasFocus) {
+    hideSignatureHint();
+  } else if (update.docChanged || update.selectionSet || update.focusChanged) {
+    updateSignatureHint();
   }
 }
 
@@ -944,6 +940,7 @@ function initEditor() {
           { key: "Delete", run: deleteEmptyTensBlock },
           { key: "Delete", run: (view) => protectTensSentinelBoundary(view, 1) },
           { key: "Enter", run: exitTensBlockOnDoubleBlankEnter },
+          { key: "Tab", run: acceptCompletion },
           indentWithTab,
           ...completionKeymap,
           ...searchKeymap,
@@ -1195,11 +1192,40 @@ function endOfTensBlockAfter(lineNumber) {
   return null;
 }
 
+function focusEmptyTensBlock(block) {
+  if (!editorView || !block || !isEmptyTensBlock(editorView.state.doc, block)) return false;
+  const contentLine = editorView.state.doc.line(block.openLine + 1);
+  editorView.dispatch({
+    selection: { anchor: contentLine.from },
+    annotations: internalEdit.of(true),
+  });
+  editorView.focus();
+  return true;
+}
+
+function emptyTensBlockNearLine(doc, lineNumber) {
+  const current = tensBlockAroundLine(doc, lineNumber);
+  if (current && isEmptyTensBlock(doc, current)) return current;
+
+  if (lineNumber > 1 && tensSentinelKind(doc.line(lineNumber - 1).text) === "close") {
+    const previous = tensBlockAroundLine(doc, lineNumber - 1);
+    if (previous && isEmptyTensBlock(doc, previous)) return previous;
+  }
+
+  if (lineNumber < doc.lines && tensSentinelKind(doc.line(lineNumber + 1).text) === "open") {
+    const next = tensBlockAroundLine(doc, lineNumber + 1);
+    if (next && isEmptyTensBlock(doc, next)) return next;
+  }
+
+  return null;
+}
+
 function insertTensBlock() {
   if (!editorView) return;
   const template = `${TENS_OPEN}\n${MARKDOWN_CURSOR}\n${TENS_CLOSE}`;
   const sel = editorView.state.selection.main;
   const line = editorView.state.doc.lineAt(sel.head);
+  if (focusEmptyTensBlock(emptyTensBlockNearLine(editorView.state.doc, line.number))) return;
   const kind = regionKindAtLine(line.number);
   if (kind === "markdown") {
     insertAtSelection(template, { block: true });
@@ -1966,46 +1992,147 @@ async function liveRun() {
 }
 
 function scheduleLiveRun() {
-  scheduleCompletionAnalysis();
   clearTimeout(liveTimer);
   liveTimer = setTimeout(liveRun, 350);
 }
 
-async function analyzeForCompletion(seq, uptoLine) {
-  if (!invoke) {
-    setCompletionSymbols([]);
-    return;
-  }
-  const source = executableSource();
-  if (!source) {
-    if (seq === analyzeSeq) setCompletionSymbols([]);
-    return;
-  }
-  const result = await invoke("analyze_tens", {
-    source,
-    uptoLine,
-  }).catch(() => null);
-  if (seq !== analyzeSeq || !result?.ok) return;
-  setCompletionSymbols(result.symbols ?? []);
+// ---- signature hint -------------------------------------------------------
+// A small floating tooltip showing the parameter list of the builtin call the
+// caret sits inside (and the valid modes for X.show(...)). Driven purely from
+// the editor selection — no backend round-trip, no other completion clutter.
+
+let signatureHintEl = null;
+
+function ensureSignatureHintEl() {
+  if (signatureHintEl) return signatureHintEl;
+  const el = document.createElement("div");
+  el.className = "tf-sig-hint";
+  el.style.cssText = [
+    "position:fixed",
+    "z-index:40",
+    "display:none",
+    "max-width:min(560px, 80vw)",
+    "padding:4px 9px",
+    "border:1px solid var(--border)",
+    "border-radius:7px",
+    "background:var(--panel-2)",
+    "color:var(--muted)",
+    "font-family:ui-monospace, SFMono-Regular, Menlo, monospace",
+    "font-size:12px",
+    "line-height:1.5",
+    "white-space:nowrap",
+    "overflow:hidden",
+    "text-overflow:ellipsis",
+    "box-shadow:0 6px 18px rgba(0,0,0,0.18)",
+    "pointer-events:none",
+  ].join(";");
+  document.body.appendChild(el);
+  signatureHintEl = el;
+  return el;
 }
 
-function scheduleCompletionAnalysis() {
-  clearTimeout(analyzeTimer);
-  const seq = ++analyzeSeq;
-  const uptoLine = activeSourceLine();
-  analyzeTimer = setTimeout(() => analyzeForCompletion(seq, uptoLine), 250);
+function hideSignatureHint() {
+  if (signatureHintEl) signatureHintEl.style.display = "none";
+}
+
+function renderSignatureHint(el, hint) {
+  el.replaceChildren();
+  const signature = document.createElement("div");
+  const open = document.createElement("span");
+  open.textContent = `${hint.fn}(`;
+  open.style.color = "var(--text)";
+  signature.appendChild(open);
+  const sep = hint.choice ? " | " : ", ";
+  hint.params.forEach((param, i) => {
+    if (i > 0) signature.appendChild(document.createTextNode(sep));
+    const span = document.createElement("span");
+    span.textContent = param;
+    if ((!hint.choice && i === hint.argIndex) || (hint.choice && i === hint.argIndex)) {
+      span.style.color = "var(--accent)";
+      span.style.fontWeight = "600";
+    } else {
+      span.style.color = "var(--muted)";
+    }
+    signature.appendChild(span);
+  });
+  const close = document.createElement("span");
+  close.textContent = ")";
+  close.style.color = "var(--text)";
+  signature.appendChild(close);
+  el.appendChild(signature);
+
+  if (hint.detail) {
+    const detail = document.createElement("div");
+    detail.textContent = hint.detail;
+    detail.style.color = "var(--muted)";
+    detail.style.fontSize = "11px";
+    detail.style.marginTop = "1px";
+    el.appendChild(detail);
+  }
+}
+
+function updateSignatureHint() {
+  if (!editorView) return hideSignatureHint();
+  const sel = editorView.state.selection.main;
+  if (!sel.empty) return hideSignatureHint();
+  const pos = sel.head;
+  if (regionKindAtPos(pos) !== "tens") return hideSignatureHint();
+  const line = editorView.state.doc.lineAt(pos);
+  const prefix = editorView.state.doc.sliceString(line.from, pos);
+  const hint = signatureHint(prefix);
+  if (!hint) return hideSignatureHint();
+  const coords = editorView.coordsAtPos(pos);
+  if (!coords) return hideSignatureHint();
+
+  const el = ensureSignatureHintEl();
+  renderSignatureHint(el, hint);
+  el.style.display = "block";
+  const rect = el.getBoundingClientRect();
+  let top = coords.top - rect.height - 6;
+  if (top < 6) top = coords.bottom + 6;
+  let left = coords.left;
+  const maxLeft = window.innerWidth - rect.width - 8;
+  if (left > maxLeft) left = Math.max(8, maxLeft);
+  el.style.top = `${Math.round(top)}px`;
+  el.style.left = `${Math.round(left)}px`;
 }
 
 function stripDisplayMath(latex) {
   return latex.replace(/^\$\$\n?/, "").replace(/\n?\$\$$/, "");
 }
 
-function exportBlocks() {
-  return groupOutputRows(orderedPreviewBlocks(lastRenderedOutputs.filter((item) => !item.error)));
+async function buildExportDocument() {
+  syncSourceFromBlocks();
+  let outputs = [];
+  const source = executableSource();
+
+  if (source) {
+    if (invoke) {
+      const result = await invoke("run_tens", { source });
+      if (!result.ok) {
+        showError(`Export stopped: fix the TensorForge error first.\n\n${result.error}`);
+        return null;
+      }
+      outputs = result.outputs ?? [];
+      const firstError = outputs.find((item) => item.error);
+      if (firstError) {
+        const where = Number.isFinite(firstError.line) ? ` on line ${firstError.line}` : "";
+        showError(`Export stopped: fix the TensorForge error${where} first.\n\n${firstError.error}`);
+        return null;
+      }
+      renderOutputs(outputs, { preserveScroll: true });
+      lastGoodShown = true;
+    } else {
+      outputs = lastRenderedOutputs;
+    }
+  }
+
+  const blocks = groupOutputRows(orderedPreviewBlocks(outputs.filter((item) => !item.error)));
+  return { blocks };
 }
 
-function buildExportMarkdown() {
-  return exportBlocks()
+function buildExportMarkdown(doc) {
+  return doc.blocks
     .map((block) => {
       if (block.kind === "markdown") return block.text.trim();
       if (block.kind === "output-row") {
@@ -2019,8 +2146,25 @@ function buildExportMarkdown() {
     .join("\n\n");
 }
 
-function buildPrintableBody() {
-  const blocks = exportBlocks();
+function printableMathStyle(tex) {
+  const compact = tex.replace(/\s+/g, "");
+  let scale = 1;
+  if (compact.length > 380) scale = 0.62;
+  else if (compact.length > 280) scale = 0.72;
+  else if (compact.length > 190) scale = 0.82;
+  else if (/\\begin\{(?:array|aligned|matrix|pmatrix|bmatrix)\}/.test(tex) && compact.length > 130) {
+    scale = 0.88;
+  }
+  return scale < 1 ? ` style="--tf-print-math-scale:${scale}"` : "";
+}
+
+function printableMathBlock(latex) {
+  const tex = stripDisplayMath(latex);
+  return `<div class="math-block"${printableMathStyle(tex)}>${renderMath(tex, true)}</div>`;
+}
+
+function buildPrintableBody(doc) {
+  const blocks = doc.blocks;
   if (blocks.length === 0) return "";
   return blocks
     .map((block) => {
@@ -2031,18 +2175,23 @@ function buildPrintableBody() {
         return `<section class="doc-block output-row">${block.items
           .map(
             (item) =>
-              `<div><div class="head">${escapeHtml(item.header)}</div><div class="math-block">${renderMath(stripDisplayMath(item.latex), true)}</div></div>`,
+              `<div class="print-output-item"><div class="head">${escapeHtml(item.header)}</div>${printableMathBlock(item.latex)}</div>`,
           )
           .join("")}</section>`;
       }
-      return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div><div class="math-block">${renderMath(stripDisplayMath(block.latex), true)}</div></section>`;
+      return `<section class="doc-block"><div class="head">${escapeHtml(block.header)}</div>${printableMathBlock(block.latex)}</section>`;
     })
     .join("\n");
 }
 
 async function exportMarkdown() {
   closeExportMenu();
-  const markdown = buildExportMarkdown();
+  const doc = await buildExportDocument().catch((e) => {
+    showError(`Export failed: ${e}`);
+    return null;
+  });
+  if (!doc) return;
+  const markdown = buildExportMarkdown(doc);
   if (!markdown.trim()) {
     showError("Nothing to export yet. Add Markdown or .show(...) output first.");
     return;
@@ -2059,9 +2208,14 @@ async function exportMarkdown() {
   downloadText(markdown, defaultExportName("md"), "text/markdown");
 }
 
-function exportPdf() {
+async function exportPdf() {
   closeExportMenu();
-  const body = buildPrintableBody();
+  const doc = await buildExportDocument().catch((e) => {
+    showError(`Export failed: ${e}`);
+    return null;
+  });
+  if (!doc) return;
+  const body = buildPrintableBody(doc);
   if (!body) {
     showError("Nothing to export yet. Add Markdown or .show(...) output first.");
     return;
@@ -2090,12 +2244,22 @@ function downloadText(text, filename, type) {
 }
 
 function printDocument(bodyHtml) {
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const previousTitle = document.title;
   printRoot.innerHTML = bodyHtml;
+  document.title = defaultExportName("pdf").replace(/\.pdf$/i, "");
   document.body.classList.add("printing");
+  let cleaned = false;
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     document.body.classList.remove("printing");
     printRoot.innerHTML = "";
-    window.scrollTo(0, 0);
+    document.title = previousTitle;
+    window.scrollTo(scrollX, scrollY);
+    document.removeEventListener("pointerdown", cleanup);
+    document.removeEventListener("keydown", cleanup);
   };
   try {
     if (invoke) invoke("print_window").catch(showError);
@@ -2170,14 +2334,6 @@ function markdownTemplate(kind, selected) {
       return { text: logicTreeTemplate(selected || `${MARKDOWN_CURSOR}Main idea`), block: true };
     case "three-cases":
       return { text: threeCasesTemplate(selected || `${MARKDOWN_CURSOR}3 cases`), block: true };
-    case "lecture-ode":
-      return { text: odeLectureTemplate(selected || `${MARKDOWN_CURSOR}Lecture 3`), block: true };
-    case "ode-classification":
-      return { text: odeClassificationTemplate(selected || `${MARKDOWN_CURSOR}First-order ODE`), block: true };
-    case "integrating-factor":
-      return { text: integratingFactorTemplate(selected || `${MARKDOWN_CURSOR}Linear first-order ODE`), block: true };
-    case "exact-ode":
-      return { text: exactOdeTemplate(selected || `${MARKDOWN_CURSOR}Exact first-order ODE`), block: true };
     default:
       return null;
   }
@@ -2221,134 +2377,6 @@ function threeCasesTemplate(title) {
 {\color{green}\begin{array}{c}\text{method 3}\\\text{result}\end{array}}
 \end{array}
 $$`;
-}
-
-function odeLectureTemplate(title) {
-  return String.raw`# ${title}
----
-
-## Second-Order ODEs
-
-$$
-\begin{array}{ccccc}
-&&{\color{green}\text{2nd-order ODE}}&&\\[6pt]
-&\swarrow&&\searrow&\\[6pt]
-{\color{green}\text{Linear}}&&&&{\color{green}\text{Nonlinear}}\\[6pt]
-\downarrow&&&&\downarrow\\[6pt]
-{\color{green}\text{All can be solved analytically}}&&&&{\color{green}\text{Very few}}
-\end{array}
-$$
-
----
-
-$$
-{\color{purple}\text{Linear 2nd-order ODE}}
-$$
-
-$$
-{\color{purple}u''+p(x)u'+q(x)u=g(x)}
-$$
-
-$$
-\begin{array}{ccc}
-&{\color{blue}\text{3 cases}}&\\[6pt]
-{\color{blue}\begin{array}{c}p(x)=\text{const.}\\q(x)=\text{const.}\\g(x)=0\end{array}}
-&
-{\color{blue}\begin{array}{c}p(x)=\text{const.}\\q(x)=\text{const.}\\g(x)=\text{anything}\end{array}}
-&
-{\color{blue}\begin{array}{c}p(x)=\text{anything}\\q(x)=\text{anything}\\g(x)=\text{anything}\end{array}}
-\\[28pt]
-{\color{green}\begin{array}{c}u(x)=C_1u_1(x)+C_2u_2(x)\\\text{linearly independent sol'ns}\\\text{``EASY''}\end{array}}
-&
-{\color{green}\begin{array}{c}g(x)=\text{``simple''}\\[4pt]u(x)=C_1u_1(x)+C_2u_2(x)+u_p(x)\\{\color{purple}\uparrow}\\{\color{purple}\text{particular sol'n}}\end{array}}
-&
-{\color{green}\begin{array}{c}\text{Power series}\\[4pt]u(x)=\sum_{n=0}^{\infty}C_nx^n\\[10pt]g(x)=\text{``ugly''}\\\text{Laplace Transform}\end{array}}
-\end{array}
-$$
-
----`;
-}
-
-function odeClassificationTemplate(title) {
-  return String.raw`## ${title}
-
-$$
-\begin{array}{ccccc}
-&&{\color{purple}\text{First-order equation}}&&\\[6pt]
-&\swarrow&&\searrow&\\[6pt]
-{\color{blue}\text{linear}}&&&&{\color{blue}\text{nonlinear}}\\[8pt]
-\downarrow&&&&\begin{array}{ccc}
-\swarrow&&\searrow\\[-2pt]
-{\color{blue}\text{separable}}&&{\color{blue}\text{exact}}
-\end{array}\\[14pt]
-{\color{green}y' + p(x)y = q(x)}
-&&&&
-{\color{green}\begin{array}{c}
-g(y)y' = f(x)\\[4pt]
-M(x,y)+N(x,y)y'=0
-\end{array}}
-\end{array}
-$$`
-    + "\n\n"
-    + tensCodeBlock([
-      'x = Var("x")',
-      'y = Function("y", x)',
-      'p = Scalar("p")',
-      'q = Scalar("q")',
-      "eq = Equation(Derivative(y, x) + p*y, q)",
-      "kind = ClassifyODE(eq, y, x)",
-      "kind.show(details)",
-    ]);
-}
-
-function integratingFactorTemplate(title) {
-  return String.raw`## ${title}
-
-$$
-\begin{array}{rcl}
-y' + p(x)y &=& q(x)\\[6pt]
-\mu(x) &=& \exp\left(\int p(x)\,dx\right)\\[6pt]
-\left(\mu y\right)' &=& \mu q(x)\\[6pt]
-y &=& \dfrac{\int \mu q(x)\,dx + C_1}{\mu}
-\end{array}
-$$`
-    + "\n\n"
-    + tensCodeBlock([
-      'x = Var("x")',
-      'y = Function("y", x)',
-      'p = Scalar("p")',
-      'q = Scalar("q")',
-      "eq = Equation(Derivative(y, x) + p*y, q)",
-      "sol = SolveODE(eq, y, x)",
-      "sol.show(steps)",
-      "sol.show(solution)",
-    ]);
-}
-
-function exactOdeTemplate(title) {
-  return String.raw`## ${title}
-
-$$
-\begin{array}{rcl}
-M(x,y)+N(x,y)y' &=& 0\\[6pt]
-M_y &=& N_x\\[6pt]
-\Phi_x &=& M,\qquad \Phi_y = N\\[6pt]
-\Phi(x,y) &=& C_1
-\end{array}
-$$`
-    + "\n\n"
-    + tensCodeBlock([
-      'x = Var("x")',
-      'y = Function("y", x)',
-      "eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)",
-      "sol = SolveODE(eq, y, x, ic=IC(y(1), 2))",
-      "sol.show(steps)",
-      "sol.show(solution)",
-    ]);
-}
-
-function tensCodeBlock(lines) {
-  return ["```tens", ...lines, "```"].join("\n");
 }
 
 function insertTableIntoMarkdown() {

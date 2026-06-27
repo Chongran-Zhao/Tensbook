@@ -1,4 +1,6 @@
-// Completion data and CodeMirror completion sources.
+// Completion + signature data for tens code.
+// Autocomplete is frontend-only: static builtin schemas drive both the popup and
+// the small signature hint rendered by main.js.
 
 export const BUILTINS = [
   { name: "Scalar", sig: 'Scalar("\\mu")', doc: "declare a symbolic scalar" },
@@ -14,44 +16,202 @@ export const BUILTINS = [
   { name: "Inv", sig: "Inv(A)", doc: "symbolic tensor inverse" },
   { name: "Simplify", sig: "Simplify(expr, rules=...)", doc: "exact rewriting; rules = algebra | tensor | continuum (default)" },
   { name: "Sum", sig: "Sum(expr, a)", doc: "indexed symbolic sum over the set index a" },
-  { name: "log", sig: "log(x)", doc: "scalar logarithm; tensor spectral forms are written with Sum(log(c[a]) * N[a] & N[a], a)" },
-  { name: "sqrt", sig: "sqrt(x)", doc: "scalar square root; tensor spectral forms are written with indexed sums" },
-  { name: "exp", sig: "exp(x)", doc: "scalar exponential; tensor spectral forms are written with indexed sums" },
-  { name: "sin", sig: "sin(x)", doc: "scalar sine with symbolic derivative and integration rules" },
-  { name: "cos", sig: "cos(x)", doc: "scalar cosine with symbolic derivative and integration rules" },
-  { name: "tan", sig: "tan(x)", doc: "scalar tangent with symbolic derivative and integration rules" },
-  { name: "sinh", sig: "sinh(x)", doc: "hyperbolic sine (symbolic, with derivative rule)" },
-  { name: "cosh", sig: "cosh(x)", doc: "hyperbolic cosine (symbolic, with derivative rule)" },
-  { name: "tanh", sig: "tanh(x)", doc: "hyperbolic tangent (symbolic, with derivative rule)" },
+  { name: "log", sig: "log(x)", doc: "scalar logarithm" },
+  { name: "sqrt", sig: "sqrt(x)", doc: "scalar square root" },
+  { name: "exp", sig: "exp(x)", doc: "scalar exponential" },
+  { name: "sin", sig: "sin(x)", doc: "scalar sine" },
+  { name: "cos", sig: "cos(x)", doc: "scalar cosine" },
+  { name: "tan", sig: "tan(x)", doc: "scalar tangent" },
+  { name: "sinh", sig: "sinh(x)", doc: "hyperbolic sine" },
+  { name: "cosh", sig: "cosh(x)", doc: "hyperbolic cosine" },
+  { name: "tanh", sig: "tanh(x)", doc: "hyperbolic tangent" },
   { name: "Var", sig: 'Var("\\lambda")', doc: "declare a scalar function argument" },
   { name: "Function", sig: 'Function("y", x)', doc: "declare an unknown scalar function; accepts one or more Var arguments" },
   { name: "Equation", sig: "Equation(lhs, rhs)", doc: "declare a scalar equation for ODE/PDE classification and solving" },
-  { name: "Integrate", sig: "Integrate(expr, x)", doc: "rule-based scalar integration; returns Integral(...) when unsupported" },
+  { name: "Integrate", sig: "Integrate(expr, x)", doc: "rule-based scalar integration" },
   { name: "Integral", sig: "Integral(expr, x)", doc: "formal unevaluated scalar integral" },
   { name: "ClassifyODE", sig: "ClassifyODE(eq, y, x)", doc: "classify an ODE/PDE by order, linearity, and first-order subtype" },
-  { name: "SolveODE", sig: "SolveODE(eq, y, x, ic=IC(y(x0), y0))", doc: "solve supported first-order linear, separable, or exact ODEs" },
+  { name: "SolveODE", sig: "SolveODE(eq, y, x, ic)", doc: "solve supported first-order linear, separable, or exact ODEs" },
   { name: "IC", sig: "IC(y(x0), y0)", doc: "initial condition for supported ODE solvers" },
   { name: "ScalarSet", sig: 'ScalarSet("\\lambda", dim=3)', doc: "declare an indexed scalar family lambda[a]" },
   { name: "VectorSet", sig: 'VectorSet("\\bm N", dim=3)', doc: "declare an indexed vector family N[a]" },
-  { name: "Spec_Decomp", sig: "[c, N] = Spec_Decomp(C)", doc: "symbolic eigendecomposition of a diagonal component-filled tensor into declared sets" },
-  { name: "Spectral", sig: '[lambda, N] = Spectral(C, "\\lambda", "\\bm N")', doc: "declare symbolic eigenvalue/eigenvector sets for a symmetric tensor" },
+  { name: "Spec_Decomp", sig: "Spec_Decomp(C)", doc: "symbolic eigendecomposition of a diagonal component-filled tensor" },
+  { name: "Spectral", sig: 'Spectral(C, "\\lambda", "\\bm N")', doc: "declare symbolic eigenvalue/eigenvector sets for a symmetric tensor" },
 ];
 
-const ENUM_VALUES = {
-  rules: ["algebra", "tensor", "continuum"],
+const BUILTIN_BY_NAME = new Map(BUILTINS.map((builtin) => [builtin.name, builtin]));
+const SHOW_MODES = ["symbol", "components", "matrix", "block_components", "details"];
+const BOOLEAN_VALUES = ["true", "false"];
+const ORDER_VALUES = ["1", "2", "4"];
+const DIM_VALUES = ["2", "3"];
+const SIMPLIFY_RULES = ["continuum", "tensor", "algebra"];
+
+const EXPRESSION_BUILTINS = [
+  "Diff",
+  "Derivative",
+  "Det",
+  "Tr",
+  "Inv",
+  "Simplify",
+  "Sum",
+  "log",
+  "sqrt",
+  "exp",
+  "sin",
+  "cos",
+  "tan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "Equation",
+  "Integrate",
+  "Integral",
+  "IC",
+];
+
+const tensorKwargs = [
+  { name: "order", detail: "integer tensor order", values: ORDER_VALUES },
+  { name: "dim", detail: "tensor dimension", values: DIM_VALUES },
+  { name: "identity", detail: "boolean identity tensor flag", values: BOOLEAN_VALUES },
+  { name: "symmetric", detail: "boolean symmetry flag", values: BOOLEAN_VALUES },
+  { name: "antisymmetric", detail: "boolean antisymmetry flag", values: BOOLEAN_VALUES },
+  { name: "orthogonal", detail: "boolean orthogonal tensor flag", values: BOOLEAN_VALUES },
+  { name: "isotropic", detail: "boolean isotropic tensor flag", values: BOOLEAN_VALUES },
+];
+
+const setKwargs = [{ name: "dim", detail: "set dimension", values: DIM_VALUES }];
+const orderKwarg = { name: "order", detail: "integer derivative order", values: ORDER_VALUES };
+
+const BUILTIN_SCHEMAS = {
+  Scalar: {
+    hintParams: ["label"],
+    positional: [{ name: "label", detail: "LaTeX scalar symbol string", suggestions: [{ label: '"\\mu"', detail: "label example" }] }],
+  },
+  Tensor: {
+    hintParams: ["label", "order=2", "dim=3", "symmetric=false", "..."],
+    positional: [{ name: "label", detail: "LaTeX tensor symbol string", suggestions: [{ label: '"\\bm F"', detail: "label example" }] }],
+    kwargs: tensorKwargs,
+  },
+  ScalarSet: {
+    hintParams: ["label", "dim=3"],
+    positional: [{ name: "label", detail: "LaTeX scalar-set symbol string", suggestions: [{ label: '"\\lambda"', detail: "label example" }] }],
+    kwargs: setKwargs,
+  },
+  VectorSet: {
+    hintParams: ["label", "dim=3"],
+    positional: [{ name: "label", detail: "LaTeX vector-set symbol string", suggestions: [{ label: '"\\bm N"', detail: "label example" }] }],
+    kwargs: setKwargs,
+  },
+  Var: {
+    hintParams: ["label"],
+    positional: [{ name: "label", detail: "LaTeX variable symbol string", suggestions: [{ label: '"x"', detail: "label example" }] }],
+  },
+  Function: {
+    hintParams: ["name", "arg", "..."],
+    positional: [
+      { name: "name", detail: "unknown function name string", suggestions: [{ label: '"y"', detail: "name example" }] },
+      { name: "arg", detail: "independent variable", kind: "expression", variadic: true },
+    ],
+  },
+  Diff: {
+    hintParams: ["expr", "X", "order=1"],
+    positional: [
+      { name: "expr", detail: "explicit scalar/tensor expression", kind: "expression" },
+      { name: "X", detail: "differentiation variable or tensor", kind: "expression" },
+    ],
+    kwargs: [orderKwarg],
+  },
+  Derivative: {
+    hintParams: ["f", "x", "order=1"],
+    positional: [
+      { name: "f", detail: "unknown Function(...) value", kind: "expression" },
+      { name: "x", detail: "formal derivative variable", kind: "expression" },
+    ],
+    kwargs: [orderKwarg],
+  },
+  Simplify: {
+    hintParams: ["expr", "rules=continuum"],
+    positional: [{ name: "expr", detail: "expression to simplify", kind: "expression" }],
+    kwargs: [{ name: "rules", detail: "simplification rule set", values: SIMPLIFY_RULES }],
+  },
+  Equation: {
+    hintParams: ["lhs", "rhs"],
+    positional: [
+      { name: "lhs", detail: "left-hand scalar expression", kind: "expression" },
+      { name: "rhs", detail: "right-hand scalar expression", kind: "expression" },
+    ],
+  },
+  Integrate: {
+    hintParams: ["expr", "x"],
+    positional: [
+      { name: "expr", detail: "integrand expression", kind: "expression" },
+      { name: "x", detail: "integration variable", kind: "expression" },
+    ],
+  },
+  Integral: {
+    hintParams: ["expr", "x"],
+    positional: [
+      { name: "expr", detail: "formal integrand expression", kind: "expression" },
+      { name: "x", detail: "integration variable", kind: "expression" },
+    ],
+  },
+  ClassifyODE: {
+    hintParams: ["eq", "y", "x"],
+    positional: [
+      { name: "eq", detail: "Equation(...) object", kind: "expression" },
+      { name: "y", detail: "unknown Function(...) value", kind: "expression" },
+      { name: "x", detail: "independent variable", kind: "expression" },
+    ],
+  },
+  SolveODE: {
+    hintParams: ["eq", "y", "x", "ic"],
+    positional: [
+      { name: "eq", detail: "Equation(...) object", kind: "expression" },
+      { name: "y", detail: "unknown Function(...) value", kind: "expression" },
+      { name: "x", detail: "independent variable", kind: "expression" },
+      { name: "ic", detail: "optional IC(...) object", kind: "expression" },
+    ],
+    kwargs: [{ name: "ic", detail: "initial condition", kind: "expression" }],
+  },
+  IC: {
+    hintParams: ["y(x0)", "y0"],
+    positional: [
+      { name: "y(x0)", detail: "function value at initial point", kind: "expression" },
+      { name: "y0", detail: "initial value", kind: "expression" },
+    ],
+  },
+  Sum: {
+    hintParams: ["expr", "a"],
+    positional: [
+      { name: "expr", detail: "summand expression", kind: "expression" },
+      { name: "a", detail: "set index", kind: "expression" },
+    ],
+  },
+  Det: { hintParams: ["A"], positional: [{ name: "A", detail: "tensor expression", kind: "expression" }] },
+  Tr: { hintParams: ["A"], positional: [{ name: "A", detail: "tensor expression", kind: "expression" }] },
+  Inv: { hintParams: ["A"], positional: [{ name: "A", detail: "tensor expression", kind: "expression" }] },
+  log: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  sqrt: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  exp: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  sin: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  cos: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  tan: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  sinh: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  cosh: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  tanh: { hintParams: ["x"], positional: [{ name: "x", detail: "scalar expression", kind: "expression" }] },
+  Spec_Decomp: {
+    hintParams: ["C"],
+    positional: [{ name: "C", detail: "component-filled tensor", kind: "expression" }],
+  },
+  Spectral: {
+    hintParams: ["C", "lambda", "N"],
+    positional: [
+      { name: "C", detail: "symmetric tensor", kind: "expression" },
+      { name: "lambda", detail: "eigenvalue LaTeX label", suggestions: [{ label: '"\\lambda"', detail: "label example" }] },
+      { name: "N", detail: "eigenvector LaTeX label", suggestions: [{ label: '"\\bm N"', detail: "label example" }] },
+    ],
+  },
 };
-
-const SHOW_MODES = ["symbol", "components", "matrix", "block_components", "details", "solution", "steps"];
-const TENSOR_KWARGS = [
-  "order",
-  "dim",
-  "identity",
-  "symmetric",
-  "antisymmetric",
-  "orthogonal",
-  "isotropic",
-];
-const KEYWORDS = ["true", "false"];
 
 export const MARKDOWN_COMMANDS = [
   { name: "h1", sig: "/h1", doc: "insert a level-1 heading", text: "# ", cursor: 2 },
@@ -70,139 +230,12 @@ export const MARKDOWN_COMMANDS = [
   { name: "hr", sig: "/hr", doc: "insert a horizontal rule", text: "---", cursor: 3 },
 ];
 
-let completionSymbols = new Map();
-
-export function setCompletionSymbols(symbols = []) {
-  completionSymbols = new Map(symbols.map((s) => [s.name, s]));
-  window.dispatchEvent(new CustomEvent("tensorforge:completion-symbols"));
-}
-
-export function completionSymbolsSnapshot() {
-  return completionSymbols;
-}
-
-function cmOption(label, options = {}) {
-  const {
-    type = "keyword",
-    detail = "",
-    info = "",
-    apply = null,
-    section = null,
-    boost = 0,
-    class: className = "",
-  } = options;
+function cmOption(label, { type = "keyword", detail = "", apply = null, boost = 0 } = {}) {
   const option = { label, type };
   if (detail) option.detail = detail;
-  if (info) option.info = info;
   if (apply) option.apply = apply;
-  if (section) option.section = section;
   if (boost) option.boost = boost;
-  if (className) option.class = className;
   return option;
-}
-
-function kindType(info) {
-  return typeof info?.kind === "object" ? info.kind.type : info?.kind;
-}
-
-function boolFlag(info, name) {
-  return info?.characteristic?.[name] === true || info?.kind?.[name] === true;
-}
-
-function dimOf(info) {
-  return info?.kind?.dim ?? info?.characteristic?.dim;
-}
-
-function orderOf(info) {
-  return info?.kind?.order ?? info?.characteristic?.order;
-}
-
-function symbolType(_info) {
-  return "variable";
-}
-
-function symbolDetail(info) {
-  const type = kindType(info);
-  const dim = dimOf(info);
-  const order = orderOf(info);
-  const parts = [];
-
-  if (type === "tensor") {
-    if (order === 2 && dim) parts.push(`tensor · ${dim}×${dim}`);
-    else if (order && dim) parts.push(`order-${order} tensor · dim ${dim}`);
-    else if (order) parts.push(`order-${order} tensor`);
-    else parts.push("tensor");
-  } else if (type === "scalar") {
-    parts.push("scalar");
-  } else if (type === "scalar_function_like") {
-    parts.push("scalar fn");
-  } else if (type === "scalar_set") {
-    parts.push(dim ? `scalar set · dim ${dim}` : "scalar set");
-  } else if (type === "vector_set") {
-    parts.push(dim ? `vector set · dim ${dim}` : "vector set");
-  } else if (type === "equation") {
-    parts.push("equation");
-  } else if (type === "initial_condition") {
-    parts.push("initial condition");
-  } else if (type === "ode_classification") {
-    parts.push("ODE classification");
-  } else if (type === "ode_solution") {
-    parts.push("ODE solution");
-  } else if (type) {
-    parts.push(type.replaceAll("_", " "));
-  } else {
-    parts.push("symbol");
-  }
-
-  if (boolFlag(info, "symmetric")) parts.push("symmetric");
-  if (boolFlag(info, "identity")) parts.push("identity");
-  if (boolFlag(info, "antisymmetric")) parts.push("antisymmetric");
-  return parts.join(" · ");
-}
-
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function symbolDefinition(name, sourceText) {
-  const match = sourceText.match(new RegExp(`^[ \\t]*${escapeRegExp(name)}[ \\t]*=[ \\t]*(.*)$`, "m"));
-  return match?.[1]?.trim() ?? "";
-}
-
-function appendText(parent, className, text) {
-  if (!text) return null;
-  const el = document.createElement("div");
-  el.className = className;
-  el.textContent = text;
-  parent.appendChild(el);
-  return el;
-}
-
-function symbolInfoNode(info, sourceText) {
-  const root = document.createElement("div");
-  root.className = "tf-completion-info";
-
-  appendText(root, "tf-completion-info-title", info.name);
-  appendText(root, "tf-completion-info-meta", symbolDetail(info));
-
-  const definition = symbolDefinition(info.name, sourceText);
-  if (definition) appendText(root, "tf-completion-info-definition", `= ${definition}`);
-
-  const availableModes = (info.display_modes ?? []).filter((mode) => mode.state === "available");
-  if (availableModes.length > 0) {
-    appendText(root, "tf-completion-info-modes-label", "show modes");
-    const chips = document.createElement("div");
-    chips.className = "tf-completion-info-chips";
-    for (const mode of availableModes) {
-      const chip = document.createElement("span");
-      chip.className = "tf-completion-info-chip";
-      chip.textContent = mode.mode;
-      chips.appendChild(chip);
-    }
-    root.appendChild(chips);
-  }
-
-  return root;
 }
 
 function wordBefore(context) {
@@ -214,117 +247,337 @@ function linePrefix(context) {
   return context.state.doc.sliceString(line.from, context.pos);
 }
 
-function enclosingCall(prefix) {
-  let depth = 0;
-  for (let i = prefix.length - 1; i >= 0; i--) {
-    const ch = prefix[i];
-    if (ch === ")") depth++;
-    else if (ch === "(") {
-      if (depth === 0) {
-        const head = prefix.slice(0, i).match(/([A-Za-z_]\w*)\s*$/);
-        return head ? head[1] : null;
+function scanStructure(text) {
+  const stack = [];
+  let quote = null;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "[") {
+      stack.push({ ch, pos: i });
+    } else if (ch === ")" || ch === "]") {
+      const open = stack[stack.length - 1];
+      if (!open) return { stack, inString: false, invalid: true };
+      if ((open.ch === "(" && ch === ")") || (open.ch === "[" && ch === "]")) {
+        stack.pop();
+      } else {
+        return { stack, inString: false, invalid: true };
       }
-      depth--;
     }
   }
-  return null;
+  return { stack, inString: quote != null, invalid: false };
 }
 
-function showExpressionBefore(prefix) {
-  const m = prefix.match(/\.show\s*\([^()\n]*$/);
-  if (!m) return "";
-  let expr = prefix.slice(0, m.index).trim();
-  const rowStart = Math.max(expr.lastIndexOf("["), expr.lastIndexOf(","));
-  if (rowStart >= 0) expr = expr.slice(rowStart + 1).trim();
-  return expr;
-}
-
-function showModeCandidates(expr = "") {
-  const component = expr.match(/^([A-Za-z_]\w*)(\[[^\]]+\])+$/);
-  if (component && completionSymbols.has(component[1])) {
-    return [cmOption("symbol", { type: "property", detail: "✓ available", section: "display modes", boost: 2 })];
+function splitTopLevelArgs(text) {
+  const out = [];
+  let depth = 0;
+  let quote = null;
+  let escape = false;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    else if (ch === "," && depth === 0) {
+      out.push({ from: start, to: i, text: text.slice(start, i) });
+      start = i + 1;
+    }
   }
-  const info = completionSymbols.get(expr);
-  if (info?.display_modes?.length) {
-    return info.display_modes.map((mode) => {
-      const available = mode.state === "available";
-      return cmOption(mode.mode, {
-        type: "property",
-        detail: available ? "✓ available" : (mode.message || mode.state),
-        section: `display modes for ${expr} · ${symbolDetail(info)}`,
-        boost: available ? 2 : -2,
-        class: available ? "" : "cm-completion-unavailable",
-      });
-    });
-  }
-  return SHOW_MODES.map((mode) => cmOption(mode, { type: "property", detail: "show mode", section: "display modes" }));
+  out.push({ from: start, to: text.length, text: text.slice(start) });
+  return out;
 }
 
-function assignedNames(source) {
-  const names = [];
-  for (const m of source.matchAll(/^[ \t]*([A-Za-z_]\w*)[ \t]*=/gm)) names.push(m[1]);
-  return names;
+function topLevelEqualIndex(text) {
+  let depth = 0;
+  let quote = null;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    else if (ch === "=" && depth === 0) return i;
+  }
+  return -1;
 }
+
+function trailingWord(text) {
+  return text.match(/[A-Za-z_]\w*$/);
+}
+
+function trailingValueToken(text) {
+  return text.match(/[A-Za-z0-9_]*$/);
+}
+
+function completionContext(prefix) {
+  const scan = scanStructure(prefix);
+  if (scan.inString) return { inString: true };
+  if (scan.invalid) return null;
+
+  const open = scan.stack[scan.stack.length - 1];
+  if (!open || open.ch !== "(") return null;
+
+  const head = prefix.slice(0, open.pos).match(/([A-Za-z_]\w*)\s*$/);
+  if (!head) return null;
+
+  const argsText = prefix.slice(open.pos + 1);
+  const args = splitTopLevelArgs(argsText);
+  const current = args[args.length - 1] ?? { from: 0, text: "" };
+  const currentStartRel = open.pos + 1 + current.from;
+  const equal = topLevelEqualIndex(current.text);
+  if (equal >= 0) {
+    const rawKey = current.text.slice(0, equal).trim();
+    const afterEqualRel = currentStartRel + equal + 1;
+    const afterEqual = prefix.slice(afterEqualRel);
+    const leadingSpaces = afterEqual.match(/^\s*/)?.[0].length ?? 0;
+    const valueStartRel = afterEqualRel + leadingSpaces;
+    const valueText = prefix.slice(valueStartRel);
+    const valueToken = trailingValueToken(valueText);
+    return {
+      callName: head[1],
+      argIndex: args.length - 1,
+      args,
+      currentArg: current.text,
+      currentArgStartRel: currentStartRel,
+      keyword: /^[A-Za-z_]\w*$/.test(rawKey) ? rawKey : null,
+      valueMode: true,
+      typed: valueToken?.[0] ?? "",
+      replaceFromRel: valueStartRel + (valueToken?.index ?? valueText.length),
+    };
+  }
+
+  const token = trailingWord(current.text);
+  const leadingSpaces = current.text.match(/^\s*/)?.[0].length ?? 0;
+  return {
+    callName: head[1],
+    argIndex: args.length - 1,
+    args,
+    currentArg: current.text,
+    currentArgStartRel: currentStartRel,
+    keyword: null,
+    valueMode: false,
+    typed: token?.[0] ?? "",
+    replaceFromRel: token ? currentStartRel + token.index : currentStartRel + leadingSpaces,
+  };
+}
+
+function schemaFor(name) {
+  if (name === "show") {
+    return {
+      hintParams: SHOW_MODES,
+      positional: [{ name: "mode", detail: "display mode", values: SHOW_MODES }],
+    };
+  }
+  return BUILTIN_SCHEMAS[name] ?? null;
+}
+
+function kwargFor(schema, name) {
+  return schema?.kwargs?.find((kwarg) => kwarg.name === name) ?? null;
+}
+
+function positionalFor(schema, argIndex) {
+  const positional = schema?.positional ?? [];
+  return positional[argIndex] ?? positional.find((param) => param.variadic) ?? null;
+}
+
+function topLevelBuiltinOptions() {
+  return BUILTINS.map((builtin) => cmOption(builtin.name, { type: "function", detail: builtin.sig }));
+}
+
+function expressionBuiltinOptions() {
+  return EXPRESSION_BUILTINS.map((name) => {
+    const builtin = BUILTIN_BY_NAME.get(name);
+    return cmOption(name, { type: "function", detail: builtin?.sig ?? "" });
+  });
+}
+
+function keywordOptions(schema, typed) {
+  return (schema.kwargs ?? [])
+    .filter((kwarg) => kwarg.name.startsWith(typed))
+    .map((kwarg) => cmOption(kwarg.name, { type: "property", detail: kwarg.detail, apply: `${kwarg.name}=`, boost: 1 }));
+}
+
+function valueOptions(kwarg) {
+  if (!kwarg?.values) return [];
+  return kwarg.values.map((value) => cmOption(value, { type: "constant", detail: kwarg.detail }));
+}
+
+function positionalOptions(param, typed) {
+  if (!param?.suggestions) return [];
+  if (typed && !typed.startsWith('"') && !typed.startsWith("'")) return [];
+  return param.suggestions
+    .filter((suggestion) => suggestion.label.startsWith(typed))
+    .map((suggestion) =>
+      cmOption(suggestion.label, {
+        type: "text",
+        detail: suggestion.detail ?? param.detail,
+        apply: suggestion.apply ?? suggestion.label,
+        boost: 2,
+      }),
+    );
+}
+
+function completionResult(context, prefix, replaceFromRel, options, validFor = /^[A-Za-z_]\w*$/) {
+  if (options.length === 0) return null;
+  return {
+    from: context.pos - (prefix.length - replaceFromRel),
+    options,
+    validFor,
+  };
+}
+
+function dotCompletion(prefix) {
+  const match = prefix.match(/\.([A-Za-z_]*)$/);
+  if (!match) return null;
+  const beforeDot = prefix.slice(0, match.index).trim();
+  if (!beforeDot) return null;
+  return {
+    typed: match[1],
+    replaceFromRel: prefix.length - match[1].length,
+  };
+}
+
+function contextualCompletion(context, prefix, callContext) {
+  const schema = schemaFor(callContext.callName);
+  if (!schema) return null;
+
+  if (callContext.callName === "show") {
+    const options = SHOW_MODES.filter((mode) => mode.startsWith(callContext.typed)).map((mode) =>
+      cmOption(mode, { type: "property", detail: "display mode" }),
+    );
+    return completionResult(context, prefix, callContext.replaceFromRel, options);
+  }
+
+  if (callContext.valueMode) {
+    const kwarg = kwargFor(schema, callContext.keyword);
+    if (!kwarg) return null;
+    const options = kwarg.values ? valueOptions(kwarg) : expressionBuiltinOptions();
+    return completionResult(context, prefix, callContext.replaceFromRel, options, /^[A-Za-z0-9_]*$/);
+  }
+
+  const param = positionalFor(schema, callContext.argIndex);
+  const options = [];
+  if (param?.kind === "expression") {
+    options.push(...expressionBuiltinOptions());
+  } else {
+    options.push(...positionalOptions(param, callContext.typed));
+  }
+  options.push(...keywordOptions(schema, callContext.typed));
+  return completionResult(context, prefix, callContext.replaceFromRel, options);
+}
+
+function paramDetail(param, kwarg) {
+  const item = kwarg ?? param;
+  if (!item) return "";
+  const values = item.values?.join(" | ");
+  return values ? `${item.name} · ${item.detail} · ${values}` : `${item.name} · ${item.detail}`;
+}
+
+// Given the line text up to the caret, return signature data for the enclosing
+// known call, or null when the caret is not inside a known call.
+export function signatureHint(prefix) {
+  const ctx = completionContext(prefix);
+  if (!ctx || ctx.inString) return null;
+  const schema = schemaFor(ctx.callName);
+  if (!schema) return null;
+
+  const params = schema.hintParams ?? schema.positional?.map((param) => param.name) ?? [];
+  if (params.length === 0) return null;
+
+  if (ctx.callName === "show") {
+    return {
+      fn: "show",
+      params,
+      argIndex: 0,
+      choice: true,
+      detail: "mode · display mode",
+    };
+  }
+
+  let activeParam = positionalFor(schema, ctx.argIndex);
+  let activeIndex = Math.min(ctx.argIndex, params.length - 1);
+  let activeKwarg = null;
+  if (ctx.valueMode && ctx.keyword) {
+    activeKwarg = kwargFor(schema, ctx.keyword);
+    activeParam = null;
+    const keywordIndex = params.findIndex((param) => param === ctx.keyword || param.startsWith(`${ctx.keyword}=`));
+    if (keywordIndex >= 0) activeIndex = keywordIndex;
+  } else if (ctx.typed && schema.kwargs?.length) {
+    const matches = schema.kwargs.filter((kwarg) => kwarg.name.startsWith(ctx.typed));
+    if (matches.length === 1) {
+      activeKwarg = matches[0];
+      activeParam = null;
+      const keywordIndex = params.findIndex((param) => param === activeKwarg.name || param.startsWith(`${activeKwarg.name}=`));
+      if (keywordIndex >= 0) activeIndex = keywordIndex;
+    } else if (matches.length > 1) {
+      activeParam = { name: "keyword", detail: matches.map((kwarg) => kwarg.name).join(" | ") };
+    }
+  }
+
+  return {
+    fn: ctx.callName,
+    params,
+    argIndex: activeIndex,
+    choice: false,
+    detail: paramDetail(activeParam, activeKwarg),
+  };
+}
+
+// ---- completion sources ----------------------------------------------------
 
 export function tensorForgeCompletionSource(context) {
-  const word = wordBefore(context);
   const prefix = linePrefix(context);
-  const dotShow = prefix.endsWith(".");
-  if (!word && !dotShow && !context.explicit) return null;
+  const structure = scanStructure(prefix);
+  if (structure.inString) return null;
 
-  const from = dotShow ? context.pos : (word?.from ?? context.pos);
-  const kw = prefix.slice(0, from - context.state.doc.lineAt(context.pos).from).match(/([A-Za-z_]\w*)\s*=\s*$/);
-  const call = enclosingCall(prefix);
-  const sourceText = context.state.doc.toString();
-  const options = [];
-
-  if (dotShow) {
-    options.push(cmOption("show", { type: "function", detail: "show()", info: "render output", apply: "show()" }));
-  } else if (call === "show") {
-    const expr = showExpressionBefore(prefix);
-    options.push(...showModeCandidates(expr));
-  } else if (kw && ENUM_VALUES[kw[1]]) {
-    options.push(...ENUM_VALUES[kw[1]].map((name) => cmOption(name, { type: "property", detail: "value", section: "values" })));
-  } else if (kw) {
-    options.push(...KEYWORDS.map((name) => cmOption(name, { type: "keyword", detail: "value", section: "keywords" })));
-  } else {
-    if (call === "Tensor") {
-      options.push(...TENSOR_KWARGS.map((name) => cmOption(name, { type: "property", detail: "kwarg", section: "kwargs" })));
-    }
-    options.push(
-      ...[...completionSymbols.values()].map((info) =>
-        cmOption(info.name, {
-          type: symbolType(info),
-          detail: symbolDetail(info),
-          info: () => symbolInfoNode(info, sourceText),
-          section: "your symbols",
-          boost: 2,
-        }),
-      ),
-      ...assignedNames(sourceText)
-        .filter((name) => !completionSymbols.has(name))
-        .map((name) =>
-          cmOption(name, {
-            type: "variable",
-            detail: "assigned name",
-            section: "your symbols",
-            boost: 1,
-          }),
-        ),
-      ...BUILTINS.map((b) => cmOption(b.name, { type: "function", detail: b.sig, info: b.doc, section: "builtins" })),
-      ...KEYWORDS.map((name) => cmOption(name, { type: "keyword", detail: "keyword", section: "keywords" })),
-    );
+  const dot = dotCompletion(prefix);
+  if (dot) {
+    const options = [
+      cmOption("show", { type: "method", detail: ".show(mode)" }),
+      cmOption("T", { type: "property", detail: "transpose" }),
+    ].filter((option) => option.label.startsWith(dot.typed));
+    return completionResult(context, prefix, dot.replaceFromRel, options);
   }
 
-  const seen = new Set();
-  return {
-    from,
-    options: options.filter((option) => {
-      if (seen.has(option.label)) return false;
-      seen.add(option.label);
-      return true;
-    }),
-  };
+  const callContext = completionContext(prefix);
+  if (callContext && !callContext.inString) {
+    const result = contextualCompletion(context, prefix, callContext);
+    if (result) return result;
+  }
+
+  const word = wordBefore(context);
+  if (!word && !context.explicit) return null;
+  const from = word?.from ?? context.pos;
+  return { from, options: topLevelBuiltinOptions(), validFor: /^[A-Za-z_]\w*$/ };
 }
 
 export function markdownSlashCompletionSource(context) {

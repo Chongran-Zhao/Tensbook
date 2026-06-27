@@ -30,6 +30,7 @@ export {
   syntaxHighlighting,
 } from "@codemirror/language";
 export {
+  acceptCompletion,
   autocompletion,
   closeCompletion,
   completionKeymap,
