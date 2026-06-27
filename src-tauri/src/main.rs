@@ -6,7 +6,6 @@
 
 use serde::Serialize;
 use tauri_plugin_dialog::DialogExt;
-use tensorforge::metadata::{DisplayCapabilityState, SymbolInfo, TensorCharacteristic, ValueKind};
 
 #[derive(Serialize)]
 struct RunOutput {
@@ -22,68 +21,6 @@ struct RunResult {
     ok: bool,
     outputs: Vec<RunOutput>,
     error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct AnalyzeResult {
-    ok: bool,
-    symbols: Vec<SerializableSymbolInfo>,
-    diagnostics: Vec<AnalyzeDiagnostic>,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct AnalyzeDiagnostic {
-    line: usize,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct SerializableSymbolInfo {
-    name: String,
-    latex: String,
-    kind: SerializableValueKind,
-    characteristic: Option<TensorCharacteristicInfo>,
-    display_modes: Vec<SerializableDisplayCapability>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum SerializableValueKind {
-    Scalar,
-    ScalarFunctionLike,
-    Equation,
-    InitialCondition,
-    OdeClassification,
-    OdeSolution,
-    Tensor { order: usize, dim: usize },
-    ScalarSet { dim: usize },
-    VectorSet { dim: usize },
-}
-
-#[derive(Serialize)]
-struct TensorCharacteristicInfo {
-    order: usize,
-    dim: usize,
-    symmetric: bool,
-    identity: bool,
-    antisymmetric: bool,
-    orthogonal: bool,
-    isotropic: bool,
-    filled: bool,
-    derived: bool,
-    derivative: bool,
-    spectral: bool,
-    sum: bool,
-    outer_like: bool,
-    boxtimes_like: bool,
-}
-
-#[derive(Serialize)]
-struct SerializableDisplayCapability {
-    mode: String,
-    state: String,
-    message: Option<String>,
 }
 
 /// Result of an open dialog: `None` if the user cancelled.
@@ -188,49 +125,6 @@ fn run_tens(source: String) -> RunResult {
     }
 }
 
-/// Lightweight source analysis for editor completion. It executes statements
-/// up to `upto_line` with the same interpreter as `run_tens`, but returns the
-/// symbol metadata instead of rendered outputs.
-#[tauri::command]
-fn analyze_tens(source: String, upto_line: Option<usize>) -> AnalyzeResult {
-    let stmts = match tensorforge::parser::parse(&source) {
-        Ok(stmts) => stmts,
-        Err(e) => {
-            return AnalyzeResult {
-                ok: false,
-                symbols: vec![],
-                diagnostics: vec![],
-                error: Some(e.to_string()),
-            }
-        }
-    };
-    let filtered: Vec<_> = stmts
-        .into_iter()
-        .filter(|stmt| upto_line.is_none_or(|line| stmt.line() <= line))
-        .collect();
-    let mut interp = tensorforge::interpreter::Interpreter::new();
-    let outputs = interp.run_lenient(&filtered);
-    let diagnostics = outputs
-        .into_iter()
-        .filter_map(|o| {
-            o.error.map(|message| AnalyzeDiagnostic {
-                line: o.line,
-                message,
-            })
-        })
-        .collect();
-    AnalyzeResult {
-        ok: true,
-        symbols: interp
-            .symbol_infos()
-            .into_iter()
-            .map(SerializableSymbolInfo::from)
-            .collect(),
-        diagnostics,
-        error: None,
-    }
-}
-
 /// Show a native open dialog and read the chosen `.tens` file.
 /// Returns `Ok(None)` if the user cancelled.
 ///
@@ -331,81 +225,12 @@ async fn export_text(
     Ok(Some(target.display().to_string()))
 }
 
-impl From<SymbolInfo> for SerializableSymbolInfo {
-    fn from(info: SymbolInfo) -> Self {
-        Self {
-            name: info.name,
-            latex: info.latex,
-            kind: SerializableValueKind::from(info.kind),
-            characteristic: info.characteristic.map(TensorCharacteristicInfo::from),
-            display_modes: info
-                .display_modes
-                .into_iter()
-                .map(SerializableDisplayCapability::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<ValueKind> for SerializableValueKind {
-    fn from(kind: ValueKind) -> Self {
-        match kind {
-            ValueKind::Scalar => Self::Scalar,
-            ValueKind::ScalarFunctionLike => Self::ScalarFunctionLike,
-            ValueKind::Equation => Self::Equation,
-            ValueKind::InitialCondition => Self::InitialCondition,
-            ValueKind::OdeClassification => Self::OdeClassification,
-            ValueKind::OdeSolution => Self::OdeSolution,
-            ValueKind::Tensor { order, dim } => Self::Tensor { order, dim },
-            ValueKind::ScalarSet { dim } => Self::ScalarSet { dim },
-            ValueKind::VectorSet { dim } => Self::VectorSet { dim },
-        }
-    }
-}
-
-impl From<TensorCharacteristic> for TensorCharacteristicInfo {
-    fn from(ch: TensorCharacteristic) -> Self {
-        Self {
-            order: ch.order,
-            dim: ch.dim,
-            symmetric: ch.symmetric,
-            identity: ch.identity,
-            antisymmetric: ch.antisymmetric,
-            orthogonal: ch.orthogonal,
-            isotropic: ch.isotropic,
-            filled: ch.filled,
-            derived: ch.derived,
-            derivative: ch.derivative,
-            spectral: ch.spectral,
-            sum: ch.sum,
-            outer_like: ch.outer_like,
-            boxtimes_like: ch.boxtimes_like,
-        }
-    }
-}
-
-impl From<tensorforge::metadata::DisplayCapability> for SerializableDisplayCapability {
-    fn from(cap: tensorforge::metadata::DisplayCapability) -> Self {
-        let state = match cap.state {
-            DisplayCapabilityState::Available => "available",
-            DisplayCapabilityState::UnsupportedRenderer => "unsupported_renderer",
-            DisplayCapabilityState::InvalidForType => "invalid_for_type",
-        };
-        Self {
-            mode: cap.mode,
-            state: state.to_string(),
-            message: cap.message,
-        }
-    }
-}
-
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             run_tens,
-            analyze_tens,
             open_tens,
             read_tens,
             list_folder,
