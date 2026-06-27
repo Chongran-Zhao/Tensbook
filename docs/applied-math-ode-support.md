@@ -1,0 +1,241 @@
+# Applied Math ODE Support
+
+This document describes the ODE/PDE functionality currently implemented in
+TensorForge. It is a capability reference, not a roadmap.
+
+The runnable notebook example is `examples/applied-math-ode.tens`.
+
+## Public DSL
+
+| Command | Current behavior |
+|---|---|
+| `Var("x")` | Declares an independent scalar variable. |
+| `Function("y", x)` | Declares a one-variable unknown function `y(x)`. |
+| `Function("u", x, z)` | Declares a multi-variable unknown function for formal partial derivatives and PDE classification. |
+| `Derivative(f, x, order=1)` | Constructs formal derivatives of unknown `Function(...)` objects. |
+| `Diff(expr, x, order=1)` | Evaluates explicit scalar/tensor derivatives. It intentionally rejects unknown functions and tells the user to use `Derivative(...)`. |
+| `Equation(lhs, rhs)` | Builds a scalar equation object and stores the residual `lhs - rhs`. |
+| `Integrate(expr, x)` | Applies conservative rule-based indefinite integration. |
+| `Integral(expr, x)` | Builds an unevaluated formal integral. |
+| `ClassifyODE(eq, y, x)` | Classifies an ODE/PDE by kind, order, linearity, homogeneity, and first-order subtype. |
+| `SolveODE(eq, y, x, ic=IC(y(x0), y0))` | Solves supported first-order ODEs. |
+| `IC(y(x0), y0)` | Declares an initial condition for supported solvers. |
+
+## Formal Derivatives
+
+`Derivative(...)` is for unknown functions:
+
+```text
+x = Var("x")
+z = Var("z")
+y = Function("y", x)
+u = Function("u", x, z)
+
+Derivative(y, x)
+Derivative(y, x, order=2)
+Derivative(u, x)
+Derivative(u, z, order=2)
+Derivative(Derivative(u, x), z, order=2)
+```
+
+One-variable derivatives render with prime notation. Multi-variable derivatives
+render as partial derivatives. `Derivative(x^2, x)` is rejected because explicit
+expressions should use `Diff(x^2, x)`.
+
+## Integration
+
+`Integrate(expr, x)` is intentionally rule-based. When no rule applies,
+TensorForge keeps a formal `Integral(...)` node instead of guessing.
+
+Implemented rules include:
+
+- constants independent of `x`: `Integrate(c, x) = c*x`
+- powers: `Integrate(x^n, x) = x^(n+1)/(n+1)` for `n != -1`
+- reciprocal: `Integrate(1/x, x) = log(x)`
+- linearity over addition and subtraction
+- constant-factor extraction
+- affine elementary functions:
+  - `exp(a*x + b)`
+  - `sin(a*x + b)`
+  - `cos(a*x + b)`
+  - `sinh(a*x + b)`
+  - `cosh(a*x + b)`
+  - `tan(a*x + b)`, rendered through `-log(cos(...))`
+- simple chain-rule products such as:
+  - `Integrate(Diff(u, x) * exp(u), x)`
+  - `Integrate(Diff(u, x) * sin(u), x)`
+  - `Integrate(Diff(u, x) * cos(u), x)`
+  - `Integrate(Diff(u, x) / u, x)`
+  - `Integrate(Diff(u, x) * u^n, x)` for `n != -1`
+
+Unsupported examples remain formal:
+
+```text
+Integrate(exp(-2/x)/x, x)
+```
+
+## Classification
+
+`ClassifyODE(eq, y, x)` inspects the target unknown function and returns an
+`OdeClassification` object.
+
+It currently detects:
+
+- `ODE` vs `PDE`
+- highest derivative order
+- linear vs nonlinear
+- homogeneous vs nonhomogeneous for linear equations
+- supported first-order subtypes:
+  - `linear`
+  - `separable`
+  - `exact`
+
+Display modes:
+
+```text
+kind.show()
+kind.show(details)
+```
+
+`details` includes short reason rows such as the number of independent variables,
+highest derivative order, and linearity reason.
+
+## Solvers
+
+`SolveODE(eq, y, x)` currently solves supported first-order ODEs only.
+
+### First-Order Linear
+
+Equations equivalent to:
+
+```text
+y' + p(x) y = q(x)
+```
+
+are solved by the integrating-factor method:
+
+```text
+mu = exp(Integrate(p(x), x))
+y = (Integrate(mu*q(x), x) + C_1) / mu
+```
+
+Example:
+
+```text
+x = Var("x")
+y = Function("y", x)
+
+eq = Equation(Derivative(y, x) + 2*y, exp(x))
+sol = SolveODE(eq, y, x, ic=IC(y(0), 1))
+
+sol.show(steps)
+sol.show(solution)
+```
+
+If a required integral is unsupported, the solution keeps a formal
+`Integral(...)`.
+
+### Separable
+
+TensorForge recognizes forms such as:
+
+```text
+A(y) * y' = B(x)
+y' = g(x) * h(y)
+```
+
+and returns an implicit equation.
+
+Example:
+
+```text
+eq = Equation(3*y^2*Derivative(y, x), cos(x))
+SolveODE(eq, y, x).show(solution)
+```
+
+This produces an implicit solution equivalent to:
+
+```text
+y^3 = sin(x) + C_1
+```
+
+### Exact
+
+TensorForge recognizes first-order differential form:
+
+```text
+M(x,y) + N(x,y) * y' = 0
+```
+
+It checks exactness by comparing:
+
+```text
+Diff(M, y) == Diff(N, x)
+```
+
+When exact, it constructs a potential function `phi(x,y) = C_1`.
+
+Example:
+
+```text
+eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
+sol = SolveODE(eq, y, x, ic=IC(y(1), 2))
+```
+
+The tested solution includes the potential:
+
+```text
+2*y + 1/2*x^2*y^2 = 6
+```
+
+## Initial Conditions
+
+Initial conditions are supported when the constant can be eliminated through
+simple symbolic substitution and linear extraction.
+
+For explicit linear solutions, TensorForge substitutes `x = x0`, evaluates
+`y(x0) = y0`, and solves for `C_1` when the expression is linear in `C_1`.
+
+For implicit separable/exact solutions, TensorForge substitutes both `x0` and
+`y0` into the implicit equation to determine the constant when possible.
+
+If the constant cannot be eliminated safely, the solver keeps `C_1` and reports a
+warning in `show(steps)`.
+
+## Display
+
+Supported display calls:
+
+```text
+eq.show()
+kind.show()
+kind.show(details)
+sol.show()
+sol.show(solution)
+sol.show(steps)
+```
+
+`show(steps)` includes method-specific rows such as:
+
+- standard form
+- coefficient of derivative
+- integrating factor
+- differential form `M + N y' = 0`
+- exactness check
+- implicit solution
+- warnings
+
+## Unsupported Boundaries
+
+TensorForge does not currently support:
+
+- PDE solving
+- second-order or higher-order ODE solving
+- general integrating-factor search for nonlinear non-exact equations
+- numerical ODE solving
+- broad CAS integration or special functions such as `Ei`
+- arbitrary algebraic equation solving for initial conditions
+
+PDEs and higher-order ODEs can still be classified. Unsupported solver calls
+return a diagnostic object instead of guessing.
+

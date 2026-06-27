@@ -121,6 +121,8 @@ Current 1.x limits:
 ## Applied Math / ODE Example
 
 The full runnable demo is available at `examples/applied-math-ode.tens`.
+The current ODE capability reference lives in
+`docs/applied-math-ode-support.md`.
 
 ```text
 x = Var("x")
