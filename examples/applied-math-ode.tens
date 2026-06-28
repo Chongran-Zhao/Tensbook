@@ -6,10 +6,11 @@ to be read like lecture notes and run like a regression example.
 | Feature | Where it appears |
 | --- | --- |
 | `Equation(lhs, rhs)` | Sections 4-9 |
+| `ODE(eq, y, x, BoundaryCondition(...))` | Sections 4-9 |
 | `Integrate(expr, x)` and `Integral(expr, x)` | Section 3 |
-| `ClassifyODE(eq, y, x)` | Section 4 |
-| `SolveODE(eq, y, x)` | Sections 5-9 |
-| `IC(y(x0), y0)` | Sections 5 and 8 |
+| `ode.classify()` | Section 4 |
+| `ode.solve(details=true)` | Sections 5-9 |
+| `BoundaryCondition(y(x0), y0)` | Sections 5 and 8 |
 | multi-variable `Function` and partial derivatives | Sections 2 and 4 |
 | `Derivative(f, x)` | Sections 1, 2, and 4-8 |
 | `sin`, `cos`, `tan` | Sections 2, 3, and 7 |
@@ -18,7 +19,7 @@ to be read like lecture notes and run like a regression example.
 
 The ODE tools use symbolic variables declared with `Var`, and unknown
 functions declared with `Function`. A one-variable unknown renders ordinary
-derivatives with prime notation; a multi-variable unknown renders partial
+derivatives with Leibniz notation; a multi-variable unknown renders partial
 derivatives.
 
 <!-- tensorforge:tens -->
@@ -88,7 +89,8 @@ I_formal = Integral(exp(-2/x)/x, x)
 
 ## 4. ODE/PDE classification
 
-`Equation(lhs, rhs)` stores a scalar equation. `ClassifyODE` checks whether
+`Equation(lhs, rhs)` stores a scalar equation. `ODE(eq, y, x)` turns that
+equation into a differential-equation problem. `ode.classify()` checks whether
 the target is an ODE or PDE, finds the highest derivative order, detects
 linearity and homogeneity, and records first-order subtypes when available.
 
@@ -97,29 +99,31 @@ linear_eq = Equation(Derivative(y, x) + sin(x), 0)
 second_eq = Equation(Derivative(y, x, order=2) + x*Derivative(y, x) + y^2, 0)
 pde_eq = Equation(Derivative(u, x, order=4) + Derivative(u, z, order=4), exp(-(x^2 + z^2)))
 
-linear_kind = ClassifyODE(linear_eq, y, x)
-second_kind = ClassifyODE(second_eq, y, x)
-pde_kind = ClassifyODE(pde_eq, u, x)
+linear_problem = ODE(linear_eq, y, x)
+second_problem = ODE(second_eq, y, x)
+pde_problem = ODE(pde_eq, u, x)
 
 linear_eq.show()
-linear_kind.show(details)
-[second_kind.show(), pde_kind.show(details)]
+linear_problem.classify()
+second_problem.classify()
+pde_problem.classify()
 <!-- /tensorforge:tens -->
 
-## 5. First-order linear ODE with integrating factor and IC
+## 5. First-order linear ODE with integrating factor and a boundary condition
 
-For a supported first-order linear equation, `SolveODE` normalizes the equation
-to `y' + p(x)y = q(x)`, computes the integrating factor, and returns the
-solution. If the initial condition is simple enough, it eliminates `C_1`.
+For a supported first-order linear equation, `ode.solve(details=true)`
+normalizes the equation to `dy/dx + p(x)y = q(x)`, computes the integrating
+factor, and returns the solution. If the boundary condition is simple enough,
+it eliminates `C_1`.
 
 <!-- tensorforge:tens -->
 linear_solve_eq = Equation(Derivative(y, x) + 2*y, exp(x))
-linear_ic = IC(y(0), 1)
-linear_sol = SolveODE(linear_solve_eq, y, x, ic=linear_ic)
+linear_bc = BoundaryCondition(y(0), 1)
+linear_problem = ODE(linear_solve_eq, y, x, linear_bc)
 
-[linear_solve_eq.show(), linear_ic.show()]
-linear_sol.show(steps)
-linear_sol.show(solution)
+[linear_solve_eq.show(), linear_bc.show()]
+linear_problem.solve(details=true)
+linear_problem.solve()
 <!-- /tensorforge:tens -->
 
 ## 6. First-order linear ODE with non-elementary integral fallback
@@ -129,10 +133,10 @@ by the current rule set. The solution keeps that piece as a formal integral.
 
 <!-- tensorforge:tens -->
 hard_linear_eq = Equation(x^2*Derivative(y, x) + 2*y, 5*x)
-hard_linear_sol = SolveODE(hard_linear_eq, y, x)
+hard_linear_problem = ODE(hard_linear_eq, y, x)
 
-hard_linear_sol.show(steps)
-hard_linear_sol.show(solution)
+hard_linear_problem.solve(details=true)
+hard_linear_problem.solve()
 <!-- /tensorforge:tens -->
 
 ## 7. Separable ODE
@@ -141,23 +145,23 @@ For separable equations, TensorForge returns an implicit solution.
 
 <!-- tensorforge:tens -->
 sep_eq = Equation(3*y^2*Derivative(y, x), cos(x))
-sep_sol = SolveODE(sep_eq, y, x)
+sep_problem = ODE(sep_eq, y, x)
 
-sep_sol.show(steps)
-sep_sol.show(solution)
+sep_problem.solve(details=true)
+sep_problem.solve()
 <!-- /tensorforge:tens -->
 
-## 8. Exact ODE with IC
+## 8. Exact ODE with a boundary condition
 
 Exact equations are checked through `M_y = N_x`. The solver constructs a
 potential function and applies a simple initial condition when possible.
 
 <!-- tensorforge:tens -->
 exact_eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
-exact_sol = SolveODE(exact_eq, y, x, ic=IC(y(1), 2))
+exact_problem = ODE(exact_eq, y, x, BoundaryCondition(y(1), 2))
 
-exact_sol.show(steps)
-exact_sol.show(solution)
+exact_problem.solve(details=true)
+exact_problem.solve()
 <!-- /tensorforge:tens -->
 
 ## 9. Unsupported boundaries
@@ -166,8 +170,9 @@ PDEs and higher-order ODEs can be classified, but this release does not solve
 them. Unsupported solver calls return a diagnostic object rather than guessing.
 
 <!-- tensorforge:tens -->
-unsupported_pde = SolveODE(pde_eq, u, x)
-unsupported_second = SolveODE(second_eq, y, x)
+unsupported_pde = ODE(pde_eq, u, x)
+unsupported_second = ODE(second_eq, y, x)
 
-[unsupported_pde.show(solution), unsupported_second.show(solution)]
+unsupported_pde.solve()
+unsupported_second.solve()
 <!-- /tensorforge:tens -->

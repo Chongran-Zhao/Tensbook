@@ -75,13 +75,14 @@ charts.
 | `Derivative(f, x, order=1)` | Formal derivative or partial derivative of an unknown `Function(...)`. |
 | `Equation(lhs, rhs)` | Declare a scalar equation object. |
 | `Integrate(expr, x)`, `Integral(expr, x)` | Rule-based scalar integration, with a formal `Integral(...)` fallback when unsupported. |
-| `ClassifyODE(eq, y, x)` | Classify ODE/PDE type, order, linearity, homogeneity, and supported first-order subtypes. |
-| `SolveODE(eq, y, x, ic=IC(y(x0), y0))` | Solve supported first-order linear, separable, and exact ODEs. |
-| `IC(y(x0), y0)` | Initial condition used by supported ODE solvers. |
+| `ODE(eq, y, x, BoundaryCondition(...))` | Declare an ODE/PDE problem object. The boundary condition is optional. |
+| `BoundaryCondition(y(x0), y0)` | Boundary/initial condition used by supported ODE solvers. |
+| `ode.show()` | Output the equation and boundary-condition status. |
+| `ode.classify()` | Output ODE/PDE type, order, linearity, homogeneity, subtype, and reasons. |
+| `ode.solve()`, `ode.solve(details=true)` | Solve supported first-order linear, separable, and exact ODEs. |
 | `Simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
 | `expr.show()` | Render symbol mode output in the app. |
 | `expr.show(matrix)`, `expr.show(components)`, `expr.show(block_components)` | Render a specific output mode. |
-| `kind.show(details)`, `sol.show(steps)`, `sol.show(solution)` | Render ODE classification details or solution steps. |
 
 Operators: `+`, `-`, `*`, `/`, `^`, `A & B`, `A : B`, and `A.T`.
 
@@ -129,12 +130,10 @@ x = Var("x")
 y = Function("y", x)
 
 eq = Equation(Derivative(y, x) + 2*y, exp(x))
-kind = ClassifyODE(eq, y, x)
-sol = SolveODE(eq, y, x, ic=IC(y(0), 1))
+ode = ODE(eq, y, x, BoundaryCondition(y(0), 1))
 
-kind.show(details)
-sol.show(steps)
-sol.show(solution)
+ode.classify()
+ode.solve(details=true)
 ```
 
 Separable and exact equations are supported in the same style:
@@ -146,8 +145,8 @@ y = Function("y", x)
 sep = Equation(3*y^2*Derivative(y, x), cos(x))
 exact = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
 
-SolveODE(sep, y, x).show(solution)
-SolveODE(exact, y, x, ic=IC(y(1), 2)).show(solution)
+ODE(sep, y, x).solve()
+ODE(exact, y, x, BoundaryCondition(y(1), 2)).solve()
 ```
 
 ## Example

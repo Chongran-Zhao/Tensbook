@@ -15,11 +15,26 @@ The runnable notebook example is `examples/applied-math-ode.tens`.
 | `Derivative(f, x, order=1)` | Constructs formal derivatives of unknown `Function(...)` objects. |
 | `Diff(expr, x, order=1)` | Evaluates explicit scalar/tensor derivatives. It intentionally rejects unknown functions and tells the user to use `Derivative(...)`. |
 | `Equation(lhs, rhs)` | Builds a scalar equation object and stores the residual `lhs - rhs`. |
+| `BoundaryCondition(y(x0), y0)` | Declares a boundary/initial condition for supported solvers. |
+| `ODE(eq, y, x)` | Builds an ODE/PDE problem object from an equation, target function, and independent variable. |
+| `ODE(eq, y, x, BoundaryCondition(...))` | Builds the same problem with one supported boundary condition. |
+| `ode.show()` | Outputs the equation and either the boundary condition or `no explicit boundary condition`. |
+| `ode.classify()` | Outputs ODE/PDE kind, order, linearity, homogeneity, subtype, and reasons. |
+| `ode.solve()` | Outputs the final solution or an unsupported diagnostic. |
+| `ode.solve(details=true)` | Outputs worked solution steps, warnings, and the final solution. |
 | `Integrate(expr, x)` | Applies conservative rule-based indefinite integration. |
 | `Integral(expr, x)` | Builds an unevaluated formal integral. |
-| `ClassifyODE(eq, y, x)` | Classifies an ODE/PDE by kind, order, linearity, homogeneity, and first-order subtype. |
-| `SolveODE(eq, y, x, ic=IC(y(x0), y0))` | Solves supported first-order ODEs. |
-| `IC(y(x0), y0)` | Declares an initial condition for supported solvers. |
+
+Old entry points are intentionally removed from the public DSL:
+
+```text
+IC(...)
+ClassifyODE(eq, y, x)
+SolveODE(eq, y, x, ic=...)
+```
+
+Use `BoundaryCondition(...)` and `ODE(...).classify()` / `ODE(...).solve(...)`
+instead.
 
 ## Formal Derivatives
 
@@ -38,9 +53,129 @@ Derivative(u, z, order=2)
 Derivative(Derivative(u, x), z, order=2)
 ```
 
-One-variable derivatives render with prime notation. Multi-variable derivatives
-render as partial derivatives. `Derivative(x^2, x)` is rejected because explicit
-expressions should use `Diff(x^2, x)`.
+One-variable derivatives render in Leibniz notation:
+
+```text
+dy/dx
+d^2y/dx^2
+```
+
+Multi-variable derivatives render as partial derivatives. `Derivative(x^2, x)`
+is rejected because explicit expressions should use `Diff(x^2, x)`.
+
+## Classification
+
+`ode.classify()` inspects the target unknown function and outputs:
+
+- `ODE` vs `PDE`
+- highest derivative order
+- linear vs nonlinear
+- homogeneous vs non-homogeneous for linear equations
+- supported first-order subtypes:
+  - `linear`
+  - `separable`
+  - `exact`
+- short reason rows
+
+Example:
+
+```text
+x = Var("x")
+y = Function("y", x)
+
+eq = Equation(Derivative(y, x) + sin(x), 0)
+ode = ODE(eq, y, x)
+
+ode.classify()
+```
+
+## Solvers
+
+`ode.solve()` currently solves supported first-order ODEs only.
+
+### First-Order Linear
+
+Equations equivalent to:
+
+```text
+dy/dx + p(x)y = q(x)
+```
+
+are solved by the integrating-factor method:
+
+```text
+mu = exp(Integrate(p(x), x))
+y = (Integrate(mu*q(x), x) + C_1) / mu
+```
+
+Example:
+
+```text
+x = Var("x")
+y = Function("y", x)
+
+eq = Equation(Derivative(y, x) + 2*y, exp(x))
+ode = ODE(eq, y, x, BoundaryCondition(y(0), 1))
+
+ode.solve(details=true)
+```
+
+If a required integral is unsupported, the solution keeps a formal
+`Integral(...)`.
+
+### Separable
+
+TensorForge recognizes forms such as:
+
+```text
+A(y) * dy/dx = B(x)
+dy/dx = g(x) * h(y)
+```
+
+and returns an implicit equation.
+
+Example:
+
+```text
+eq = Equation(3*y^2*Derivative(y, x), cos(x))
+ODE(eq, y, x).solve()
+```
+
+This produces an implicit solution equivalent to:
+
+```text
+y^3 = sin(x) + C_1
+```
+
+### Exact
+
+TensorForge recognizes first-order differential form:
+
+```text
+M(x,y) + N(x,y) * dy/dx = 0
+```
+
+It checks exactness by comparing:
+
+```text
+Diff(M, y) == Diff(N, x)
+```
+
+When exact, it constructs a potential function `phi(x,y) = C_1`.
+
+Example:
+
+```text
+eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
+ode = ODE(eq, y, x, BoundaryCondition(y(1), 2))
+ode.solve(details=true)
+```
+
+The tested solution includes the potential:
+
+```text
+2*y + 1/2*x^2*y^2 = 6
+```
 
 ## Integration
 
@@ -74,123 +209,9 @@ Unsupported examples remain formal:
 Integrate(exp(-2/x)/x, x)
 ```
 
-## Classification
+## Boundary Conditions
 
-`ClassifyODE(eq, y, x)` inspects the target unknown function and returns an
-`OdeClassification` object.
-
-It currently detects:
-
-- `ODE` vs `PDE`
-- highest derivative order
-- linear vs nonlinear
-- homogeneous vs nonhomogeneous for linear equations
-- supported first-order subtypes:
-  - `linear`
-  - `separable`
-  - `exact`
-
-Display modes:
-
-```text
-kind.show()
-kind.show(details)
-```
-
-`details` includes short reason rows such as the number of independent variables,
-highest derivative order, and linearity reason.
-
-## Solvers
-
-`SolveODE(eq, y, x)` currently solves supported first-order ODEs only.
-
-### First-Order Linear
-
-Equations equivalent to:
-
-```text
-y' + p(x) y = q(x)
-```
-
-are solved by the integrating-factor method:
-
-```text
-mu = exp(Integrate(p(x), x))
-y = (Integrate(mu*q(x), x) + C_1) / mu
-```
-
-Example:
-
-```text
-x = Var("x")
-y = Function("y", x)
-
-eq = Equation(Derivative(y, x) + 2*y, exp(x))
-sol = SolveODE(eq, y, x, ic=IC(y(0), 1))
-
-sol.show(steps)
-sol.show(solution)
-```
-
-If a required integral is unsupported, the solution keeps a formal
-`Integral(...)`.
-
-### Separable
-
-TensorForge recognizes forms such as:
-
-```text
-A(y) * y' = B(x)
-y' = g(x) * h(y)
-```
-
-and returns an implicit equation.
-
-Example:
-
-```text
-eq = Equation(3*y^2*Derivative(y, x), cos(x))
-SolveODE(eq, y, x).show(solution)
-```
-
-This produces an implicit solution equivalent to:
-
-```text
-y^3 = sin(x) + C_1
-```
-
-### Exact
-
-TensorForge recognizes first-order differential form:
-
-```text
-M(x,y) + N(x,y) * y' = 0
-```
-
-It checks exactness by comparing:
-
-```text
-Diff(M, y) == Diff(N, x)
-```
-
-When exact, it constructs a potential function `phi(x,y) = C_1`.
-
-Example:
-
-```text
-eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
-sol = SolveODE(eq, y, x, ic=IC(y(1), 2))
-```
-
-The tested solution includes the potential:
-
-```text
-2*y + 1/2*x^2*y^2 = 6
-```
-
-## Initial Conditions
-
-Initial conditions are supported when the constant can be eliminated through
+One boundary condition is supported when the constant can be eliminated through
 simple symbolic substitution and linear extraction.
 
 For explicit linear solutions, TensorForge substitutes `x = x0`, evaluates
@@ -199,31 +220,8 @@ For explicit linear solutions, TensorForge substitutes `x = x0`, evaluates
 For implicit separable/exact solutions, TensorForge substitutes both `x0` and
 `y0` into the implicit equation to determine the constant when possible.
 
-If the constant cannot be eliminated safely, the solver keeps `C_1` and reports a
-warning in `show(steps)`.
-
-## Display
-
-Supported display calls:
-
-```text
-eq.show()
-kind.show()
-kind.show(details)
-sol.show()
-sol.show(solution)
-sol.show(steps)
-```
-
-`show(steps)` includes method-specific rows such as:
-
-- standard form
-- coefficient of derivative
-- integrating factor
-- differential form `M + N y' = 0`
-- exactness check
-- implicit solution
-- warnings
+If the constant cannot be eliminated safely, the solver keeps `C_1` and reports
+a warning in `ode.solve(details=true)`.
 
 ## Unsupported Boundaries
 
@@ -231,11 +229,11 @@ TensorForge does not currently support:
 
 - PDE solving
 - second-order or higher-order ODE solving
+- multiple boundary conditions
 - general integrating-factor search for nonlinear non-exact equations
 - numerical ODE solving
 - broad CAS integration or special functions such as `Ei`
-- arbitrary algebraic equation solving for initial conditions
+- arbitrary algebraic equation solving for boundary conditions
 
 PDEs and higher-order ODEs can still be classified. Unsupported solver calls
 return a diagnostic object instead of guessing.
-
