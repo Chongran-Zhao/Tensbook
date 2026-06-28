@@ -290,6 +290,53 @@
     border-radius: 10px; padding: 14px 16px; overflow-x: auto;
     box-shadow: var(--shadow);
   }
+  .block.plot-output .head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plot {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    padding: 10px 12px 8px;
+  }
+  .tf-plot-svg {
+    display: block;
+    width: 100%;
+    height: 260px;
+    color: var(--muted);
+  }
+  .tf-plot-frame {
+    fill: color-mix(in srgb, var(--panel-2) 42%, transparent);
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+  .tf-plot-grid {
+    stroke: color-mix(in srgb, var(--border) 72%, transparent);
+    stroke-width: 1;
+  }
+  .tf-plot-axis {
+    stroke: color-mix(in srgb, var(--muted) 58%, transparent);
+    stroke-width: 1.2;
+  }
+  .tf-plot-tick,
+  .tf-plot-axis-label {
+    fill: var(--muted);
+    font: 11px/1 "SF Mono", Menlo, Consolas, monospace;
+  }
+  .tf-plot-line {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+  .tf-plot-line-0 { stroke: var(--accent); }
+  .tf-plot-line-1 { stroke: var(--syntax-number); }
+  .tf-plot-line-2 { stroke: var(--syntax-keyword); }
+  .tf-plot-line-3 { stroke: var(--note-accent); }
+  .tf-plot-line-4 { stroke: var(--syntax-function); }
+  .tf-plot-line-5 { stroke: var(--syntax-math); }
   .output-row {
     display: grid;
     grid-auto-flow: column;

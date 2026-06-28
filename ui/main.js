@@ -46,7 +46,7 @@ const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writin
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 const SCROLL_SYNC_ANCHOR = 0.22;
-const TENS_BUILTINS = new Set([...BUILTINS.map((b) => b.name), "show"]);
+const TENS_BUILTINS = new Set([...BUILTINS.map((b) => b.name), "show", "plot"]);
 const TENS_KEYWORDS = new Set([
   "true",
   "false",
@@ -1865,7 +1865,7 @@ function groupViewSourcePreviewBlocks(blocks) {
 }
 
 function renderOutputBlock(item) {
-  const { header, latex, line, error } = item;
+  const { header, latex, line, error, detail } = item;
   const block = document.createElement("div");
   block.className = "block";
   const sourceBlock = Number.isFinite(line) ? blockForSourceLine(line) : null;
@@ -1898,6 +1898,13 @@ function renderOutputBlock(item) {
   label.textContent = `[${header}]`;
   head.appendChild(label);
   const tex = stripDisplayMath(latex);
+
+  if (detail?.type === "plot") {
+    block.classList.add("plot-output");
+    block.append(head, renderPlot(detail));
+    return block;
+  }
+
   const bar = document.createElement("span");
   bar.className = "copy-bar";
   bar.append(copyButton("copy latex", tex));
@@ -1917,6 +1924,162 @@ function renderOutputBlock(item) {
   block.append(head, math);
   return block;
 }
+
+// ---- Plot preview ----------------------------------------------------------
+
+let nextPlotClipId = 1;
+
+function svgNode(name, attrs = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value != null) node.setAttribute(key, String(value));
+  }
+  return node;
+}
+
+function formatPlotTick(value) {
+  if (!Number.isFinite(value)) return "";
+  if (Math.abs(value) < 1e-10) return "0";
+  const abs = Math.abs(value);
+  if (abs >= 1000 || abs < 0.01) return value.toExponential(1).replace("+", "");
+  return Number(value.toPrecision(3)).toString();
+}
+
+function plotTicks(min, max, count = 5) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return [];
+  return Array.from({ length: count }, (_, i) => min + ((max - min) * i) / (count - 1));
+}
+
+function plotPath(segment, scaleX, scaleY) {
+  return segment
+    .map(([x, y], index) => `${index === 0 ? "M" : "L"}${scaleX(x).toFixed(2)},${scaleY(y).toFixed(2)}`)
+    .join(" ");
+}
+
+function renderPlot(detail) {
+  const width = 720;
+  const height = 260;
+  const margin = { top: 18, right: 18, bottom: 34, left: 48 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const [xMin, xMax] = detail.x_range;
+  const [yMin, yMax] = detail.y_range;
+  const scaleX = (x) => margin.left + ((x - xMin) / (xMax - xMin)) * plotWidth;
+  const scaleY = (y) => margin.top + (1 - (y - yMin) / (yMax - yMin)) * plotHeight;
+  const clipId = `tf-plot-clip-${nextPlotClipId++}`;
+
+  const wrap = document.createElement("div");
+  wrap.className = "plot";
+  const svg = svgNode("svg", {
+    class: "tf-plot-svg",
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    "aria-label": `Plot over ${detail.x_label}`,
+  });
+
+  const defs = svgNode("defs");
+  const clip = svgNode("clipPath", { id: clipId });
+  clip.appendChild(svgNode("rect", {
+    x: margin.left,
+    y: margin.top,
+    width: plotWidth,
+    height: plotHeight,
+  }));
+  defs.appendChild(clip);
+  svg.appendChild(defs);
+
+  svg.appendChild(svgNode("rect", {
+    class: "tf-plot-frame",
+    x: margin.left,
+    y: margin.top,
+    width: plotWidth,
+    height: plotHeight,
+  }));
+
+  for (const x of plotTicks(xMin, xMax)) {
+    const px = scaleX(x);
+    svg.appendChild(svgNode("line", {
+      class: "tf-plot-grid",
+      x1: px,
+      x2: px,
+      y1: margin.top,
+      y2: margin.top + plotHeight,
+    }));
+    const label = svgNode("text", {
+      class: "tf-plot-tick",
+      x: px,
+      y: height - 11,
+      "text-anchor": "middle",
+    });
+    label.textContent = formatPlotTick(x);
+    svg.appendChild(label);
+  }
+
+  for (const y of plotTicks(yMin, yMax)) {
+    const py = scaleY(y);
+    svg.appendChild(svgNode("line", {
+      class: "tf-plot-grid",
+      x1: margin.left,
+      x2: margin.left + plotWidth,
+      y1: py,
+      y2: py,
+    }));
+    const label = svgNode("text", {
+      class: "tf-plot-tick",
+      x: margin.left - 8,
+      y: py + 4,
+      "text-anchor": "end",
+    });
+    label.textContent = formatPlotTick(y);
+    svg.appendChild(label);
+  }
+
+  if (xMin < 0 && xMax > 0) {
+    const px = scaleX(0);
+    svg.appendChild(svgNode("line", {
+      class: "tf-plot-axis",
+      x1: px,
+      x2: px,
+      y1: margin.top,
+      y2: margin.top + plotHeight,
+    }));
+  }
+  if (yMin < 0 && yMax > 0) {
+    const py = scaleY(0);
+    svg.appendChild(svgNode("line", {
+      class: "tf-plot-axis",
+      x1: margin.left,
+      x2: margin.left + plotWidth,
+      y1: py,
+      y2: py,
+    }));
+  }
+
+  const curves = svgNode("g", { "clip-path": `url(#${clipId})` });
+  detail.series.forEach((series, index) => {
+    for (const segment of series.segments ?? []) {
+      if (segment.length < 2) continue;
+      curves.appendChild(svgNode("path", {
+        class: `tf-plot-line tf-plot-line-${index % 6}`,
+        d: plotPath(segment, scaleX, scaleY),
+      }));
+    }
+  });
+  svg.appendChild(curves);
+
+  const xLabel = svgNode("text", {
+    class: "tf-plot-axis-label",
+    x: margin.left + plotWidth,
+    y: height - 11,
+    "text-anchor": "end",
+  });
+  xLabel.textContent = detail.x_label;
+  svg.appendChild(xLabel);
+
+  wrap.appendChild(svg);
+  return wrap;
+}
+
 
 function renderViewSourceBlock(group) {
   const wrapper = document.createElement("div");
@@ -1969,7 +2132,7 @@ function countOutputCalls(source) {
     .reduce(
       (count, line) =>
         count +
-        (line.replace(/#.*/, "").match(/\.(?:show|classify|solve)\s*\(/g)?.length ?? 0),
+        (line.replace(/#.*/, "").match(/\.(?:show|classify|solve|plot)\s*\(/g)?.length ?? 0),
       0,
     );
 }
