@@ -337,6 +337,33 @@
   .tf-plot-line-3 { stroke: var(--note-accent); }
   .tf-plot-line-4 { stroke: var(--syntax-function); }
   .tf-plot-line-5 { stroke: var(--syntax-math); }
+  .tf-plot-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    justify-content: flex-end;
+    padding: 0 3px 4px;
+  }
+  .tf-plot-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tf-plot-legend-swatch {
+    width: 18px;
+    height: 0;
+    border-top: 2px solid currentColor;
+    border-radius: 99px;
+  }
+  .tf-plot-legend-swatch.tf-plot-line-0 { color: var(--accent); }
+  .tf-plot-legend-swatch.tf-plot-line-1 { color: var(--syntax-number); }
+  .tf-plot-legend-swatch.tf-plot-line-2 { color: var(--syntax-keyword); }
+  .tf-plot-legend-swatch.tf-plot-line-3 { color: var(--note-accent); }
+  .tf-plot-legend-swatch.tf-plot-line-4 { color: var(--syntax-function); }
+  .tf-plot-legend-swatch.tf-plot-line-5 { color: var(--syntax-math); }
+  .tf-plot-legend-label .katex { font-size: 1em; }
   .output-row {
     display: grid;
     grid-auto-flow: column;

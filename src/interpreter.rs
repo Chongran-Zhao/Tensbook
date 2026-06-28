@@ -657,6 +657,9 @@ impl Interpreter {
                 let r = self.eval(rhs)?;
                 self.eval_binary(*op, l, r)
             }
+            Expr::List(_) => Err(Error::msg(
+                "list literals are only valid as a `.plot(...)` target",
+            )),
             Expr::Index { target, index } => self.eval_index(target, index),
             Expr::MethodCall { method, .. } if method == "show" || method == "plot" => {
                 Err(Error::msg(format!(
@@ -2160,16 +2163,35 @@ impl Interpreter {
             ));
         }
         let subject = self.output_subject(target);
-        let curve = match self.eval(target)? {
-            Value::Scalar(expr) => expr,
-            other => {
-                return Err(Error::msg(format!(
-                    "`.plot(...)` expects a scalar expression, got {}",
-                    kind(&other)
-                )))
+        let curves = match target {
+            Expr::List(items) => {
+                if items.is_empty() {
+                    return Err(Error::msg("`.plot(...)` needs at least one curve"));
+                }
+                let mut curves = Vec::with_capacity(items.len());
+                for item in items {
+                    match self.eval(item)? {
+                        Value::Scalar(expr) => curves.push(expr),
+                        other => {
+                            return Err(Error::msg(format!(
+                                "`.plot(...)` expects scalar expressions, got {}",
+                                kind(&other)
+                            )))
+                        }
+                    }
+                }
+                curves
             }
+            _ => match self.eval(target)? {
+                Value::Scalar(expr) => vec![expr],
+                other => {
+                    return Err(Error::msg(format!(
+                        "`.plot(...)` expects a scalar expression, got {}",
+                        kind(&other)
+                    )))
+                }
+            },
         };
-        let curves = vec![curve];
         let abscissa = self.plot_abscissa(&curves)?;
         for curve in &curves {
             let unbound = crate::numeric::unbound_symbols(curve, &abscissa);
@@ -2208,7 +2230,7 @@ impl Interpreter {
             .collect::<Vec<_>>()
             .join(", ");
         self.outputs.push(Output {
-            header: format!("{}.plot(...)", subject.header),
+            header: format!("{}.plot(...)", plot_header(target, &subject.header)),
             latex,
             line,
             error: None,
@@ -2453,6 +2475,9 @@ impl Interpreter {
                         .iter()
                         .any(|(_, value)| self.expr_is_derived_display_result(value))
             }
+            Expr::List(items) => items
+                .iter()
+                .any(|item| self.expr_is_derived_display_result(item)),
             Expr::Num(_) | Expr::Str(_) | Expr::Bool(_) => false,
         }
     }
@@ -2682,6 +2707,14 @@ fn ode_method_header(
         }
     }
     format!("{subject}.{method}(...)")
+}
+
+fn plot_header(target: &Expr, fallback: &str) -> String {
+    match target {
+        Expr::List(_) => "[...]",
+        _ => fallback,
+    }
+    .to_string()
 }
 
 fn renamed_builtin_error(old: &str, new: &str) -> Error {

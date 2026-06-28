@@ -56,3 +56,21 @@ p = sin(x).plot(0, 1)
     .unwrap_err();
     assert!(err.message.contains("`.plot(...)` is an output statement"));
 }
+
+#[test]
+fn plots_multiple_scalar_curves() {
+    let outputs = run_source(
+        r#"
+x = Var("x")
+[sin(x), cos(x)].plot(-pi, pi)
+"#,
+    )
+    .unwrap();
+    assert_eq!(outputs.len(), 1);
+    let OutputDetail::Plot(plot) = outputs[0].detail.as_ref().expect("plot detail") else {
+        panic!("expected plot detail");
+    };
+    assert_eq!(plot.series.len(), 2);
+    assert_eq!(plot.series[0].label_latex, "\\sin x");
+    assert_eq!(plot.series[1].label_latex, "\\cos x");
+}

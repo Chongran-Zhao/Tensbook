@@ -269,6 +269,9 @@ impl Parser {
             if self.looks_like_pair_assignment() {
                 return self.parse_pair_assignment(line, block);
             }
+            if self.looks_like_list_method_call() {
+                return Ok(Stmt::Expr(self.parse_expr()?, line, block));
+            }
             return self.parse_output_row(line, block);
         }
         if let Tok::Ident(name) = self.peek().clone() {
@@ -315,6 +318,26 @@ impl Parser {
             self.tokens.get(self.pos + 4).map(|t| &t.tok),
             Some(Tok::RBracket)
         ) && matches!(self.tokens.get(self.pos + 5).map(|t| &t.tok), Some(Tok::Eq))
+    }
+
+    fn looks_like_list_method_call(&self) -> bool {
+        let mut depth = 0usize;
+        let mut idx = self.pos;
+        while let Some(token) = self.tokens.get(idx) {
+            match &token.tok {
+                Tok::LBracket => depth += 1,
+                Tok::RBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(self.tokens.get(idx + 1).map(|t| &t.tok), Some(Tok::Dot));
+                    }
+                }
+                Tok::Eof | Tok::Newline if depth > 0 => return false,
+                _ => {}
+            }
+            idx += 1;
+        }
+        false
     }
 
     /// `[A.show() B.show()]` or `[A.show(), B.show()]`.
@@ -559,6 +582,27 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 self.expect(&Tok::RParen, "`)`")?;
                 Ok(expr)
+            }
+            Tok::LBracket => {
+                let mut items = Vec::new();
+                if matches!(self.peek(), Tok::RBracket) {
+                    self.next();
+                    return Ok(Expr::List(items));
+                }
+                loop {
+                    items.push(self.parse_expr()?);
+                    match self.next() {
+                        Tok::Comma => continue,
+                        Tok::RBracket => break,
+                        tok => {
+                            return Err(Error::new(
+                                format!("expected `,` or `]` in list, found {tok:?}"),
+                                Some(line),
+                            ))
+                        }
+                    }
+                }
+                Ok(Expr::List(items))
             }
             tok => Err(Error::new(format!("unexpected token {tok:?}"), Some(line))),
         }

@@ -1956,6 +1956,32 @@ function plotPath(segment, scaleX, scaleY) {
     .join(" ");
 }
 
+function renderPlotLegend(detail) {
+  if (!detail.series || detail.series.length < 2) return null;
+  const legend = document.createElement("div");
+  legend.className = "tf-plot-legend";
+  detail.series.forEach((series, index) => {
+    const item = document.createElement("span");
+    item.className = "tf-plot-legend-item";
+    const swatch = document.createElement("span");
+    swatch.className = `tf-plot-legend-swatch tf-plot-line-${index % 6}`;
+    const label = document.createElement("span");
+    label.className = "tf-plot-legend-label";
+    try {
+      katex.render(series.label_latex, label, {
+        displayMode: false,
+        macros: KATEX_MACROS,
+        throwOnError: true,
+      });
+    } catch (e) {
+      label.textContent = series.label_latex;
+    }
+    item.append(swatch, label);
+    legend.appendChild(item);
+  });
+  return legend;
+}
+
 function renderPlot(detail) {
   const width = 720;
   const height = 260;
@@ -2077,6 +2103,8 @@ function renderPlot(detail) {
   svg.appendChild(xLabel);
 
   wrap.appendChild(svg);
+  const legend = renderPlotLegend(detail);
+  if (legend) wrap.appendChild(legend);
   return wrap;
 }
 

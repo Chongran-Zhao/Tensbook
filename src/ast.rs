@@ -95,6 +95,8 @@ pub enum Expr {
         args: Vec<Expr>,
         kwargs: Vec<(String, Expr)>,
     },
+    /// Receiver list for multi-curve plots, e.g. `[sin(x), cos(x)].plot(...)`.
+    List(Vec<Expr>),
     /// Set element access, e.g. `lambda[a]` or `N[1]`. The index is an
     /// abstract index name (Ident) or a concrete position (Num).
     Index {
