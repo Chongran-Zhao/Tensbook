@@ -14,6 +14,44 @@ struct RunOutput {
     line: usize,
     error: Option<String>,
     row: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<RunDetail>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum RunDetail {
+    #[serde(rename = "plot")]
+    CurvePlot {
+        x_label: String,
+        x_range: [f64; 2],
+        y_range: [f64; 2],
+        series: Vec<RunPlotSeries>,
+    },
+}
+
+#[derive(Serialize)]
+struct RunPlotSeries {
+    label_latex: String,
+    segments: Vec<Vec<[f64; 2]>>,
+}
+
+fn convert_detail(detail: tensorforge::interpreter::OutputDetail) -> RunDetail {
+    match detail {
+        tensorforge::interpreter::OutputDetail::Plot(plot) => RunDetail::CurvePlot {
+            x_label: plot.x_label,
+            x_range: plot.x_range,
+            y_range: plot.y_range,
+            series: plot
+                .series
+                .into_iter()
+                .map(|series| RunPlotSeries {
+                    label_latex: series.label_latex,
+                    segments: series.segments,
+                })
+                .collect(),
+        },
+    }
 }
 
 #[derive(Serialize)]
@@ -119,6 +157,7 @@ fn run_tens(source: String) -> RunResult {
                 line: o.line,
                 error: o.error,
                 row: o.row,
+                detail: o.detail.map(convert_detail),
             })
             .collect(),
         error: None,

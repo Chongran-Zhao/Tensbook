@@ -34,6 +34,25 @@ pub enum Value {
     OdeSolution(Rc<OdeSolution>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputDetail {
+    Plot(PlotData),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlotData {
+    pub x_label: String,
+    pub x_range: [f64; 2],
+    pub y_range: [f64; 2],
+    pub series: Vec<PlotSeries>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlotSeries {
+    pub label_latex: String,
+    pub segments: Vec<Vec<[f64; 2]>>,
+}
+
 /// One line of output produced by `.show(...)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Output {
@@ -47,6 +66,8 @@ pub struct Output {
     pub error: Option<String>,
     /// Outputs sharing the same row id are rendered side by side in the UI.
     pub row: Option<usize>,
+    /// Structured UI payload, `None` for plain math.
+    pub detail: Option<OutputDetail>,
 }
 
 #[derive(Default)]
@@ -142,6 +163,7 @@ impl Interpreter {
                     line: e.line.unwrap_or(stmt.line()),
                     error: Some(e.message),
                     row: None,
+                    detail: None,
                 });
             }
         }
@@ -264,6 +286,16 @@ impl Interpreter {
                 line,
                 block,
             ) if method == "show" => self.exec_show(target, args, kwargs, *line, *block, None),
+            Stmt::Expr(
+                Expr::MethodCall {
+                    target,
+                    method,
+                    args,
+                    kwargs,
+                },
+                line,
+                block,
+            ) if method == "plot" => self.exec_plot(target, args, kwargs, *line, *block, None),
             Stmt::Expr(
                 Expr::MethodCall {
                     target,
@@ -626,9 +658,11 @@ impl Interpreter {
                 self.eval_binary(*op, l, r)
             }
             Expr::Index { target, index } => self.eval_index(target, index),
-            Expr::MethodCall { method, .. } if method == "show" => Err(Error::msg(
-                "`.show(...)` is an output statement and cannot be used inside an expression",
-            )),
+            Expr::MethodCall { method, .. } if method == "show" || method == "plot" => {
+                Err(Error::msg(format!(
+                    "`.{method}(...)` is an output statement and cannot be used inside an expression"
+                )))
+            }
             Expr::MethodCall {
                 target,
                 method,
@@ -1225,6 +1259,7 @@ impl Interpreter {
             line,
             error: None,
             row: None,
+            detail: None,
         });
         Ok(())
     }
@@ -2057,6 +2092,7 @@ impl Interpreter {
                     line,
                     error: None,
                     row,
+                    detail: None,
                 });
                 return Ok(());
             }
@@ -2104,6 +2140,85 @@ impl Interpreter {
             line,
             error: None,
             row,
+            detail: None,
+        });
+        Ok(())
+    }
+
+    fn exec_plot(
+        &mut self,
+        target: &Expr,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+        line: usize,
+        _block: usize,
+        row: Option<usize>,
+    ) -> Result<(), Error> {
+        if !kwargs.is_empty() || args.len() != 2 {
+            return Err(Error::msg(
+                "`.plot(...)` expects exactly two range bounds: expr.plot(from, to)",
+            ));
+        }
+        let subject = self.output_subject(target);
+        let curve = match self.eval(target)? {
+            Value::Scalar(expr) => expr,
+            other => {
+                return Err(Error::msg(format!(
+                    "`.plot(...)` expects a scalar expression, got {}",
+                    kind(&other)
+                )))
+            }
+        };
+        let curves = vec![curve];
+        let abscissa = self.plot_abscissa(&curves)?;
+        for curve in &curves {
+            let unbound = crate::numeric::unbound_symbols(curve, &abscissa);
+            if let Some(name) = unbound.first() {
+                return Err(Error::msg(format!(
+                    "`{name}` is unbound; plot needs a concrete function"
+                )));
+            }
+        }
+        let from = self.eval_plot_bound(&args[0], "from")?;
+        let to = self.eval_plot_bound(&args[1], "to")?;
+        if from >= to {
+            return Err(Error::msg("plot range requires from < to"));
+        }
+
+        let series = curves
+            .iter()
+            .map(|expr| sample_plot_series(expr, &abscissa, from, to))
+            .collect::<Result<Vec<_>, _>>()?;
+        let all_y = series
+            .iter()
+            .flat_map(|series| series.segments.iter())
+            .flat_map(|segment| segment.iter().map(|point| point[1]))
+            .collect::<Vec<_>>();
+        let y_range = robust_y_range(&all_y)?;
+        let series = series
+            .into_iter()
+            .map(|series| PlotSeries {
+                label_latex: series.label_latex,
+                segments: split_asymptote_jumps(series.segments, y_range),
+            })
+            .collect::<Vec<_>>();
+        let latex = series
+            .iter()
+            .map(|series| series.label_latex.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.outputs.push(Output {
+            header: format!("{}.plot(...)", subject.header),
+            latex,
+            line,
+            error: None,
+            row,
+            detail: Some(OutputDetail::Plot(PlotData {
+                x_label: abscissa,
+                x_range: [from, to],
+                y_range,
+                series,
+            })),
         });
         Ok(())
     }
@@ -2120,19 +2235,59 @@ impl Interpreter {
             } = expr
             else {
                 return Err(Error::new(
-                    "output row items must be `.show(...)` calls",
+                    "output row items must be `.show(...)` or `.plot(...)` calls",
                     Some(line),
                 ));
             };
-            if method != "show" {
+            if method == "show" {
+                self.exec_show(target, args, kwargs, line, block, row)?;
+            } else if method == "plot" {
+                self.exec_plot(target, args, kwargs, line, block, row)?;
+            } else {
                 return Err(Error::new(
-                    "output row items must be `.show(...)` calls",
+                    "output row items must be `.show(...)` or `.plot(...)` calls",
                     Some(line),
                 ));
             }
-            self.exec_show(target, args, kwargs, line, block, row)?;
         }
         Ok(())
+    }
+
+    fn plot_abscissa(&self, curves: &[Rc<ScalarExpr>]) -> Result<String, Error> {
+        let vars = self
+            .fn_vars
+            .iter()
+            .filter(|var| {
+                curves
+                    .iter()
+                    .any(|curve| crate::differentiation::scalar_mentions_scalar(curve, var))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        match vars.as_slice() {
+            [var] => Ok(var.clone()),
+            [] => Err(Error::msg(
+                "plot needs a variable; declare one with `Var(\"x\")`",
+            )),
+            _ => Err(Error::msg(format!(
+                "plot needs exactly one variable; found {}",
+                vars.join(", ")
+            ))),
+        }
+    }
+
+    fn eval_plot_bound(&mut self, expr: &Expr, name: &str) -> Result<f64, Error> {
+        let value = match self.eval(expr)? {
+            Value::Scalar(expr) => expr,
+            other => {
+                return Err(Error::msg(format!(
+                    "plot range bound `{name}` must be a scalar constant, got {}",
+                    kind(&other)
+                )))
+            }
+        };
+        crate::numeric::eval_at(&value, "", 0.0)
+            .ok_or_else(|| Error::msg("plot range bounds must be constant"))
     }
 
     fn display_defs_for_block(&self, block: usize) -> Vec<crate::substitute::Def> {
@@ -2531,6 +2686,83 @@ fn ode_method_header(
 
 fn renamed_builtin_error(old: &str, new: &str) -> Error {
     Error::msg(format!("`{old}(...)` was renamed; use `{new}(...)`"))
+}
+
+fn sample_plot_series(
+    expr: &Rc<ScalarExpr>,
+    abscissa: &str,
+    from: f64,
+    to: f64,
+) -> Result<PlotSeries, Error> {
+    const SAMPLES: usize = 512;
+    let mut segments = Vec::new();
+    let mut current = Vec::new();
+    for i in 0..SAMPLES {
+        let t = i as f64 / (SAMPLES - 1) as f64;
+        let x = from + (to - from) * t;
+        if let Some(y) = crate::numeric::eval_at(expr, abscissa, x) {
+            current.push([x, y]);
+        } else if !current.is_empty() {
+            if current.len() > 1 {
+                segments.push(std::mem::take(&mut current));
+            } else {
+                current.clear();
+            }
+        }
+    }
+    if current.len() > 1 {
+        segments.push(current);
+    }
+    if segments.is_empty() {
+        return Err(Error::msg("nothing to plot over this range"));
+    }
+    Ok(PlotSeries {
+        label_latex: scalar_to_latex(expr),
+        segments,
+    })
+}
+
+fn robust_y_range(values: &[f64]) -> Result<[f64; 2], Error> {
+    if values.is_empty() {
+        return Err(Error::msg("nothing to plot over this range"));
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let last = sorted.len() - 1;
+    let low = sorted[last * 2 / 100];
+    let high = sorted[last * 98 / 100];
+    if (high - low).abs() < 1e-12 {
+        return Ok([low - 1.0, high + 1.0]);
+    }
+    let pad = (high - low).abs() * 0.06;
+    Ok([low - pad, high + pad])
+}
+
+fn split_asymptote_jumps(segments: Vec<Vec<[f64; 2]>>, y_range: [f64; 2]) -> Vec<Vec<[f64; 2]>> {
+    let [y_min, y_max] = y_range;
+    let mut split_segments = Vec::new();
+    for segment in segments {
+        let mut current: Vec<[f64; 2]> = Vec::new();
+        for point in segment {
+            if let Some(prev) = current.last().copied() {
+                let jumps_across_band = ((prev[1] < y_min && point[1] > y_max)
+                    || (prev[1] > y_max && point[1] < y_min))
+                    && prev[1].signum() != point[1].signum();
+                if jumps_across_band {
+                    if current.len() > 1 {
+                        split_segments.push(std::mem::take(&mut current));
+                    } else {
+                        current.clear();
+                    }
+                }
+            }
+            current.push(point);
+        }
+        if current.len() > 1 {
+            split_segments.push(current);
+        }
+    }
+    split_segments
 }
 
 fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
