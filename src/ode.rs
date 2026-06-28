@@ -16,20 +16,30 @@ pub struct Equation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct InitialCondition {
+pub struct BoundaryCondition {
     pub function: Rc<ScalarExpr>,
     pub point: Rc<ScalarExpr>,
     pub value: Rc<ScalarExpr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct OdeProblem {
+    pub equation: Equation,
+    pub target: Rc<ScalarExpr>,
+    pub independent: Rc<ScalarExpr>,
+    pub boundary_condition: Option<BoundaryCondition>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct OdeClassification {
+    pub equation: Equation,
     pub kind: DifferentialKind,
     pub order: usize,
     pub linear: bool,
     pub homogeneous: Option<bool>,
     pub subtypes: Vec<String>,
     pub reasons: Vec<String>,
+    pub boundary_condition: Option<BoundaryCondition>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,7 +85,7 @@ struct ImplicitSolveParams<'a> {
     target: &'a Target,
     left: Rc<ScalarExpr>,
     right_without_c: Rc<ScalarExpr>,
-    ic: Option<InitialCondition>,
+    ic: Option<BoundaryCondition>,
     steps: Vec<SolutionStep>,
 }
 
@@ -94,7 +104,7 @@ pub fn classify(
 ) -> Result<OdeClassification, Error> {
     let target = target_from_expr(target)?;
     let x_name = scalar_symbol_name(independent)
-        .ok_or_else(|| Error::msg("ClassifyODE expects an independent variable such as x"))?;
+        .ok_or_else(|| Error::msg("ODE expects an independent variable such as x"))?;
     let occurrences = target_occurrences(&eq.residual, &target.name);
     let order = occurrences
         .iter()
@@ -141,20 +151,51 @@ pub fn classify(
         "target function appears nonlinearly".to_string()
     });
     Ok(OdeClassification {
+        equation: eq.clone(),
         kind,
         order,
         linear,
         homogeneous,
         subtypes,
         reasons,
+        boundary_condition: None,
     })
+}
+
+pub fn problem(
+    equation: Equation,
+    target: Rc<ScalarExpr>,
+    independent: Rc<ScalarExpr>,
+    boundary_condition: Option<BoundaryCondition>,
+) -> OdeProblem {
+    OdeProblem {
+        equation,
+        target,
+        independent,
+        boundary_condition,
+    }
+}
+
+pub fn classify_problem(problem: &OdeProblem) -> Result<OdeClassification, Error> {
+    let mut class = classify(&problem.equation, &problem.target, &problem.independent)?;
+    class.boundary_condition = problem.boundary_condition.clone();
+    Ok(class)
+}
+
+pub fn solve_problem(problem: &OdeProblem) -> Result<OdeSolution, Error> {
+    solve(
+        &problem.equation,
+        &problem.target,
+        &problem.independent,
+        problem.boundary_condition.clone(),
+    )
 }
 
 pub fn solve(
     eq: &Equation,
     target: &Rc<ScalarExpr>,
     independent: &Rc<ScalarExpr>,
-    ic: Option<InitialCondition>,
+    ic: Option<BoundaryCondition>,
 ) -> Result<OdeSolution, Error> {
     let class = classify(eq, target, independent)?;
     if matches!(class.kind, DifferentialKind::Pde) {
@@ -168,7 +209,7 @@ pub fn solve(
     }
     let target = target_from_expr(target)?;
     let x_name = scalar_symbol_name(independent)
-        .ok_or_else(|| Error::msg("SolveODE expects an independent variable such as x"))?;
+        .ok_or_else(|| Error::msg("ODE.solve expects an independent variable such as x"))?;
 
     if let Some((p, q, form)) = linear_first_order_coeffs(&eq.residual, &target, x_name) {
         return solve_linear_first_order(eq, &target, independent, p, q, form, ic);
@@ -217,7 +258,7 @@ fn solve_linear_first_order(
     p: Rc<ScalarExpr>,
     q: Rc<ScalarExpr>,
     form: FirstOrderForm,
-    ic: Option<InitialCondition>,
+    ic: Option<BoundaryCondition>,
 ) -> Result<OdeSolution, Error> {
     let mu = Rc::new(ScalarExpr::Func {
         name: "exp".to_string(),
@@ -474,7 +515,7 @@ fn exact_form(
         phi,
         vec![
             SolutionStep {
-                label: "differential form M + N y' = 0".to_string(),
+                label: "differential form M + N dy/dx = 0".to_string(),
                 equation: Some(equation(
                     m.clone(),
                     Rc::new(ScalarExpr::Neg(Rc::new(ScalarExpr::Mul(
@@ -496,12 +537,104 @@ fn exact_form(
 pub fn render_equation(eq: &Equation) -> String {
     format!(
         "{} = {}",
-        scalar_to_latex(&eq.lhs),
-        scalar_to_latex(&eq.rhs)
+        ode_scalar_to_latex(&eq.lhs),
+        ode_scalar_to_latex(&eq.rhs)
+    )
+}
+
+fn ode_scalar_to_latex(expr: &Rc<ScalarExpr>) -> String {
+    scalar_to_latex(&ode_display_expr(expr))
+}
+
+fn ode_display_expr(expr: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
+    match &**expr {
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::Det(_)
+        | ScalarExpr::Tr(_)
+        | ScalarExpr::Ddot(_, _)
+        | ScalarExpr::SetElem { .. } => expr.clone(),
+        ScalarExpr::Add(a, b) => Rc::new(ScalarExpr::Add(ode_display_expr(a), ode_display_expr(b))),
+        ScalarExpr::Sub(a, b) => Rc::new(ScalarExpr::Sub(ode_display_expr(a), ode_display_expr(b))),
+        ScalarExpr::Mul(a, b) => Rc::new(ScalarExpr::Mul(ode_display_expr(a), ode_display_expr(b))),
+        ScalarExpr::Div(a, b) => Rc::new(ScalarExpr::Div(ode_display_expr(a), ode_display_expr(b))),
+        ScalarExpr::Pow(base, exp) => Rc::new(ScalarExpr::Pow(
+            ode_display_expr(base),
+            ode_display_expr(exp),
+        )),
+        ScalarExpr::Neg(inner) => Rc::new(ScalarExpr::Neg(ode_display_expr(inner))),
+        ScalarExpr::Log(inner) => Rc::new(ScalarExpr::Log(ode_display_expr(inner))),
+        ScalarExpr::Func { name, arg } => Rc::new(ScalarExpr::Func {
+            name: name.clone(),
+            arg: ode_display_expr(arg),
+        }),
+        ScalarExpr::UnknownFunc {
+            name,
+            args,
+            derivative_orders,
+        } => {
+            if derivative_orders.iter().all(|order| *order == 0) {
+                Rc::new(ScalarExpr::Sym {
+                    name: name.clone(),
+                    latex: name.clone(),
+                })
+            } else {
+                Rc::new(ScalarExpr::UnknownFunc {
+                    name: name.clone(),
+                    args: args.clone(),
+                    derivative_orders: derivative_orders.clone(),
+                })
+            }
+        }
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => Rc::new(ScalarExpr::Integral {
+            integrand: ode_display_expr(integrand),
+            variable: variable.clone(),
+        }),
+        ScalarExpr::SpecSum { body, index, dim } => Rc::new(ScalarExpr::SpecSum {
+            body: ode_display_expr(body),
+            index: index.clone(),
+            dim: *dim,
+        }),
+    }
+}
+
+pub fn render_boundary_condition(bc: &BoundaryCondition) -> String {
+    format!(
+        "{} = {}",
+        scalar_to_latex(&bc.function),
+        scalar_to_latex(&bc.value)
+    )
+}
+
+fn render_boundary_condition_status(bc: Option<&BoundaryCondition>) -> String {
+    match bc {
+        Some(bc) => render_boundary_condition(bc),
+        None => "\\text{no explicit boundary condition}".to_string(),
+    }
+}
+
+pub fn render_problem(problem: &OdeProblem) -> String {
+    format!(
+        "\\begin{{gathered}}\n{}\\\\[6pt]\n{}\n\\end{{gathered}}",
+        render_equation(&problem.equation),
+        render_boundary_condition_status(problem.boundary_condition.as_ref())
     )
 }
 
 pub fn render_classification(class: &OdeClassification, mode: &str) -> String {
+    let _ = mode;
+    format!(
+        "\\begin{{gathered}}\n{}\\\\[6pt]\n{}\\\\[6pt]\n{}\n\\end{{gathered}}",
+        render_equation(&class.equation),
+        classification_summary(class),
+        render_boundary_condition_status(class.boundary_condition.as_ref())
+    )
+}
+
+fn classification_values(class: &OdeClassification) -> (String, String, String, String, String) {
     let kind = match class.kind {
         DifferentialKind::Ode => "ODE",
         DifferentialKind::Pde => "PDE",
@@ -509,63 +642,42 @@ pub fn render_classification(class: &OdeClassification, mode: &str) -> String {
     let linear = if class.linear { "linear" } else { "nonlinear" };
     let homogeneous = match class.homogeneous {
         Some(true) => "homogeneous",
-        Some(false) => "nonhomogeneous",
-        None => "not applicable",
+        Some(false) => "non-homogeneous",
+        None => "n/a",
     };
     let subtypes = if class.subtypes.is_empty() {
-        "none".to_string()
+        "--".to_string()
     } else {
         class.subtypes.join(", ")
     };
-    let mut rows = vec![
-        format!("\\text{{type}} &= \\text{{{kind}}}"),
-        format!("\\text{{order}} &= {}", class.order),
-        format!("\\text{{linearity}} &= \\text{{{linear}}}"),
-        format!("\\text{{homogeneity}} &= \\text{{{homogeneous}}}"),
-        format!("\\text{{first-order subtype}} &= \\text{{{subtypes}}}"),
-    ];
-    if mode == "details" {
-        for reason in &class.reasons {
-            rows.push(format!(
-                "\\text{{reason}} &= \\text{{{}}}",
-                escape_text(reason)
-            ));
-        }
-    }
-    format!(
-        "\\begin{{aligned}}\n{}\n\\end{{aligned}}",
-        rows.join("\\\\\n")
+    (
+        kind.to_string(),
+        class.order.to_string(),
+        linear.to_string(),
+        homogeneous.to_string(),
+        subtypes,
     )
+}
+
+fn classification_summary(class: &OdeClassification) -> String {
+    let (kind, order, linear, homogeneous, subtypes) = classification_values(class);
+    let mut parts = vec![kind, format!("order {order}"), linear, homogeneous];
+    if subtypes != "--" {
+        parts.push(subtypes);
+    }
+    let cols = "c".repeat(parts.len());
+    let row = parts
+        .iter()
+        .map(|part| format!("\\text{{{}}}", escape_text(part)))
+        .collect::<Vec<_>>()
+        .join(" & ");
+    format!("\\begin{{array}}{{{cols}}}{row}\\end{{array}}")
 }
 
 pub fn render_solution(sol: &OdeSolution, mode: &str) -> String {
     match mode {
         "steps" => {
-            let mut rows = vec![format!(
-                "\\text{{method}} &= \\text{{{}}}",
-                escape_text(&sol.method)
-            )];
-            for step in &sol.steps {
-                if let Some(eq) = &step.equation {
-                    rows.push(format!(
-                        "\\text{{{}}} &: {}",
-                        escape_text(&step.label),
-                        render_equation(eq)
-                    ));
-                } else if let Some(expr) = &step.expr {
-                    rows.push(format!(
-                        "\\text{{{}}} &= {}",
-                        escape_text(&step.label),
-                        scalar_to_latex(expr)
-                    ));
-                }
-            }
-            if let Some(warning) = &sol.warning {
-                rows.push(format!(
-                    "\\text{{warning}} &= \\text{{{}}}",
-                    escape_text(warning)
-                ));
-            }
+            let rows = solution_step_rows(sol, false);
             format!(
                 "\\begin{{aligned}}\n{}\n\\end{{aligned}}",
                 rows.join("\\\\\n")
@@ -586,6 +698,198 @@ pub fn render_solution(sol: &OdeSolution, mode: &str) -> String {
             }
         }
     }
+}
+
+pub fn render_solution_details(sol: &OdeSolution, class: &OdeClassification) -> String {
+    let _ = class;
+    format!(
+        "\\begin{{gathered}}\n{}\n\\end{{gathered}}",
+        render_solution_process(sol)
+    )
+}
+
+fn solution_step_rows(sol: &OdeSolution, include_solution: bool) -> Vec<String> {
+    let mut rows = vec![format!(
+        "\\text{{method}} &= \\text{{{}}}",
+        escape_text(&sol.method)
+    )];
+    for step in &sol.steps {
+        if let Some(eq) = &step.equation {
+            rows.push(format!(
+                "\\text{{{}}} &: {}",
+                escape_text(&step.label),
+                render_equation(eq)
+            ));
+        } else if let Some(expr) = &step.expr {
+            rows.push(format!(
+                "\\text{{{}}} &= {}",
+                escape_text(&step.label),
+                ode_scalar_to_latex(expr)
+            ));
+        }
+    }
+    if include_solution {
+        if let Some(solution) = &sol.solution {
+            rows.push(format!(
+                "\\text{{solution}} &: {}",
+                render_equation(solution)
+            ));
+        }
+    }
+    if let Some(warning) = &sol.warning {
+        rows.push(format!(
+            "\\text{{warning}} &= \\text{{{}}}",
+            escape_text(warning)
+        ));
+    }
+    rows
+}
+
+fn render_solution_process(sol: &OdeSolution) -> String {
+    match sol.method.as_str() {
+        "linear first-order integrating factor" => render_linear_solution_process(sol),
+        "separable" => render_separable_solution_process(sol),
+        "exact" => render_exact_solution_process(sol),
+        _ => render_generic_solution_process(sol),
+    }
+}
+
+fn render_linear_solution_process(sol: &OdeSolution) -> String {
+    let mut rows = Vec::new();
+    if let Some(standard) = step_equation(sol, "standard form") {
+        rows.push(render_equation(standard));
+    }
+    if let Some(mu) = step_equation(sol, "integrating factor") {
+        rows.push(render_equation(mu));
+    }
+    if let Some(standard) = step_equation(sol, "standard form") {
+        let q = ode_scalar_to_latex(&standard.rhs);
+        let target = sol
+            .solution
+            .as_ref()
+            .map(|solution| ode_scalar_to_latex(&solution.lhs))
+            .unwrap_or_else(|| "\\text{unknown}".to_string());
+        let independent = sol
+            .solution
+            .as_ref()
+            .and_then(|solution| one_variable_unknown_arg_latex(&solution.lhs))
+            .unwrap_or_else(|| "x".to_string());
+        rows.push(format!(
+            "\\frac{{d}}{{d {}}}\\left(\\mu\\, {}\\right)=\\mu\\, {}",
+            independent, target, q
+        ));
+        rows.push(format!(
+            "\\mu\\, {}=\\int \\mu\\, {}\\, d{}+C_1",
+            target, q, independent
+        ));
+    }
+    if let Some(solution) = &sol.solution {
+        rows.push(render_equation(solution));
+    }
+    push_warning(&mut rows, sol);
+    aligned_process(rows)
+}
+
+fn render_separable_solution_process(sol: &OdeSolution) -> String {
+    let mut rows = Vec::new();
+    if let Some(solution) = &sol.solution {
+        rows.push(render_equation(solution));
+    } else {
+        rows.push(unsupported_text(sol));
+    }
+    push_warning(&mut rows, sol);
+    aligned_process(rows)
+}
+
+fn render_exact_solution_process(sol: &OdeSolution) -> String {
+    let mut rows = Vec::new();
+    if let Some(form) = step_equation(sol, "differential form M + N dy/dx = 0") {
+        rows.push(render_equation(form));
+    }
+    if let Some(check) = step_equation(sol, "exactness check") {
+        rows.push(render_equation(check));
+    }
+    if let Some(solution) = &sol.solution {
+        rows.push(render_equation(solution));
+    }
+    push_warning(&mut rows, sol);
+    aligned_process(rows)
+}
+
+fn render_generic_solution_process(sol: &OdeSolution) -> String {
+    let mut rows = Vec::new();
+    for step in &sol.steps {
+        if let Some(eq) = &step.equation {
+            rows.push(format!("\\text{{{}:}}", escape_text(&step.label)));
+            rows.push(render_equation(eq));
+        } else if let Some(expr) = &step.expr {
+            rows.push(format!(
+                "\\text{{{}: }}{}",
+                escape_text(&step.label),
+                ode_scalar_to_latex(expr)
+            ));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(unsupported_text(sol));
+    } else {
+        push_final_solution(&mut rows, sol);
+    }
+    push_warning(&mut rows, sol);
+    aligned_process(rows)
+}
+
+fn step_equation<'a>(sol: &'a OdeSolution, label: &str) -> Option<&'a Equation> {
+    sol.steps
+        .iter()
+        .find(|step| step.label == label)
+        .and_then(|step| step.equation.as_ref())
+}
+
+fn one_variable_unknown_arg_latex(expr: &Rc<ScalarExpr>) -> Option<String> {
+    match &**expr {
+        ScalarExpr::UnknownFunc {
+            args,
+            derivative_orders,
+            ..
+        } if args.len() == 1 && derivative_orders.iter().all(|order| *order == 0) => {
+            Some(scalar_to_latex(&args[0]))
+        }
+        _ => None,
+    }
+}
+
+fn push_final_solution(rows: &mut Vec<String>, sol: &OdeSolution) {
+    if let Some(solution) = &sol.solution {
+        rows.push(render_equation(solution));
+    }
+}
+
+fn push_warning(rows: &mut Vec<String>, sol: &OdeSolution) {
+    if let Some(warning) = &sol.warning {
+        rows.push(format!("\\text{{Note: {}}}", escape_text(warning)));
+    }
+}
+
+fn unsupported_text(sol: &OdeSolution) -> String {
+    format!(
+        "\\text{{Unsupported: {}}}",
+        escape_text(
+            sol.warning
+                .as_deref()
+                .unwrap_or("no symbolic method matched")
+        )
+    )
+}
+
+fn aligned_process(rows: Vec<String>) -> String {
+    if rows.is_empty() {
+        return "\\text{No symbolic steps available.}".to_string();
+    }
+    format!(
+        "\\begin{{aligned}}\n&{}\n\\end{{aligned}}",
+        rows.join("\\\\[3pt]\n&")
+    )
 }
 
 fn target_from_expr(expr: &Rc<ScalarExpr>) -> Result<Target, Error> {
@@ -1049,7 +1353,7 @@ fn solve_constant_from_explicit(
     rhs: &Rc<ScalarExpr>,
     target: &Target,
     independent: &Rc<ScalarExpr>,
-    ic: &InitialCondition,
+    ic: &BoundaryCondition,
     _c: &Rc<ScalarExpr>,
 ) -> Option<Rc<ScalarExpr>> {
     validate_ic(target, ic)?;
@@ -1071,7 +1375,7 @@ fn solve_constant_from_implicit(
     right_without_c: &Rc<ScalarExpr>,
     target: &Target,
     independent: &Rc<ScalarExpr>,
-    ic: &InitialCondition,
+    ic: &BoundaryCondition,
 ) -> Option<Rc<ScalarExpr>> {
     validate_ic(target, ic)?;
     let x_name = scalar_symbol_name(independent)?;
@@ -1084,7 +1388,7 @@ fn solve_constant_from_implicit(
     ))
 }
 
-fn validate_ic(target: &Target, ic: &InitialCondition) -> Option<()> {
+fn validate_ic(target: &Target, ic: &BoundaryCondition) -> Option<()> {
     match &*ic.function {
         ScalarExpr::UnknownFunc {
             name,

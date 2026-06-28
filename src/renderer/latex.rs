@@ -169,13 +169,17 @@ fn render_unknown_func(name: &str, args: &[Rc<ScalarExpr>], derivative_orders: &
         return format!("{name}\\left( {arg_list} \\right)");
     }
     if args.len() == 1 {
-        let mark = match total {
-            1 => "'".to_string(),
-            2 => "''".to_string(),
-            3 => "'''".to_string(),
-            n => format!("^{{({n})}}"),
+        let numerator = if total == 1 {
+            format!("d {name}")
+        } else {
+            format!("d^{{{total}}} {name}")
         };
-        return format!("{name}{mark}\\left( {arg_list} \\right)");
+        let denominator = if total == 1 {
+            format!("d {arg_list}")
+        } else {
+            format!("d {arg_list}^{{{total}}}")
+        };
+        return format!("\\frac{{{numerator}}}{{{denominator}}}");
     }
     let numerator = if total == 1 {
         format!("\\partial {name}")

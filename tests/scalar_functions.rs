@@ -120,8 +120,8 @@ dy.show()
 d2y.show()
 "#;
     let outputs = run_source(src).unwrap();
-    assert_eq!(outputs[0].latex, "dy = y'\\left( x \\right)");
-    assert_eq!(outputs[1].latex, "d2y = y''\\left( x \\right)");
+    assert_eq!(outputs[0].latex, "dy = \\frac{d y}{d x}");
+    assert_eq!(outputs[1].latex, "d2y = \\frac{d^{2} y}{d x^{2}}");
 }
 
 #[test]

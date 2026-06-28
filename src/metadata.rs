@@ -16,7 +16,8 @@ pub enum ValueKind {
     ScalarSet { dim: usize },
     VectorSet { dim: usize },
     Equation,
-    InitialCondition,
+    BoundaryCondition,
+    OdeProblem,
     OdeClassification,
     OdeSolution,
 }
@@ -97,7 +98,8 @@ pub fn value_kind(value: &Value, function_like: bool) -> ValueKind {
             dim: t.dim(),
         },
         Value::Equation(_) => ValueKind::Equation,
-        Value::InitialCondition(_) => ValueKind::InitialCondition,
+        Value::BoundaryCondition(_) => ValueKind::BoundaryCondition,
+        Value::OdeProblem(_) => ValueKind::OdeProblem,
         Value::OdeClassification(_) => ValueKind::OdeClassification,
         Value::OdeSolution(_) => ValueKind::OdeSolution,
     }
@@ -136,7 +138,8 @@ pub fn display_capability_for_kind(kind: &ValueKind, mode: &str) -> DisplayCapab
         | (ValueKind::ScalarSet { .. } | ValueKind::VectorSet { .. }, "symbol")
         | (ValueKind::Tensor { .. }, "symbol")
         | (ValueKind::Equation, "symbol")
-        | (ValueKind::InitialCondition, "symbol")
+        | (ValueKind::BoundaryCondition, "symbol")
+        | (ValueKind::OdeProblem, "symbol")
         | (ValueKind::OdeClassification, "symbol" | "details")
         | (ValueKind::OdeSolution, "symbol" | "solution" | "steps") => {
             DisplayCapability::available(mode)
@@ -170,7 +173,8 @@ pub fn display_capability_for_kind(kind: &ValueKind, mode: &str) -> DisplayCapab
         }
         (
             ValueKind::Equation
-            | ValueKind::InitialCondition
+            | ValueKind::BoundaryCondition
+            | ValueKind::OdeProblem
             | ValueKind::OdeClassification
             | ValueKind::OdeSolution,
             other,

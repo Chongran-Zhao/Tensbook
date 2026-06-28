@@ -53,21 +53,47 @@ u = Function("u", x, y)
 ode = Equation(Derivative(f, x) + sin(x), 0)
 nonlinear = Equation(Derivative(f, x, order=2) + x*Derivative(f, x) + f^2, 0)
 pde = Equation(Derivative(u, x, order=4) + Derivative(u, y, order=4), exp(-(x^2 + y^2)))
-c1 = ClassifyODE(ode, f, x)
-c2 = ClassifyODE(nonlinear, f, x)
-c3 = ClassifyODE(pde, u, x)
-c1.show(details)
-c2.show()
-c3.show()
+ode_problem = ODE(ode, f, x)
+nonlinear_problem = ODE(nonlinear, f, x)
+pde_problem = ODE(pde, u, x)
+ode_problem.classify()
+nonlinear_problem.classify()
+pde_problem.classify()
 "#;
     let outputs = run_source(src).unwrap();
     assert!(outputs[0].latex.contains("\\text{ODE}"));
     assert!(outputs[0].latex.contains("\\text{linear}"));
-    assert!(outputs[0].latex.contains("\\text{nonhomogeneous}"));
+    assert!(outputs[0].latex.contains("\\text{non-homogeneous}"));
     assert!(outputs[1].latex.contains("2"));
     assert!(outputs[1].latex.contains("\\text{nonlinear}"));
     assert!(outputs[2].latex.contains("\\text{PDE}"));
     assert!(outputs[2].latex.contains("4"));
+}
+
+#[test]
+fn ode_show_and_classify_include_boundary_condition_status() {
+    let src = r#"
+x = Var("x")
+y = Function("y", x)
+eq = Equation(Derivative(y, x) + 2*y, exp(x))
+plain = ODE(eq, y, x)
+with_bc = ODE(eq, y, x, BoundaryCondition(y(0), 1))
+plain.show()
+plain.classify()
+with_bc.show()
+with_bc.classify()
+"#;
+    let outputs = run_source(src).unwrap();
+    assert!(outputs[0]
+        .latex
+        .contains("\\text{no explicit boundary condition}"));
+    assert!(outputs[1]
+        .latex
+        .contains("\\text{no explicit boundary condition}"));
+    assert!(outputs[1].latex.contains("\\frac{d y}{d x}"));
+    assert!(outputs[2].latex.contains("y\\left( 0 \\right) = 1"));
+    assert!(outputs[3].latex.contains("y\\left( 0 \\right) = 1"));
+    assert!(outputs[3].latex.contains("\\frac{d y}{d x}"));
 }
 
 #[test]
@@ -76,14 +102,17 @@ fn solve_linear_first_order_keeps_nonelementary_integral() {
 x = Var("x")
 y = Function("y", x)
 eq = Equation(x^2 * Derivative(y, x) + 2*y, 5*x)
-sol = SolveODE(eq, y, x)
-sol.show(steps)
-sol.show(solution)
+ode = ODE(eq, y, x)
+ode.solve(details=true)
+ode.solve()
 "#;
     let outputs = run_source(src).unwrap();
-    assert!(outputs[0].latex.contains("\\text{integrating factor}"));
+    assert!(outputs[0].latex.contains("\\mu ="));
+    assert!(!outputs[0].latex.contains("\\text{ODE}"));
+    assert!(!outputs[0].latex.contains("y\\left"));
     assert!(outputs[0].latex.contains("e^{-2") || outputs[0].latex.contains("-2"));
     assert!(outputs[1].latex.contains("\\int"));
+    assert!(!outputs[1].latex.contains("y\\left"));
     assert!(outputs[1].latex.contains("C\\_1") || outputs[1].latex.contains("C_1"));
 }
 
@@ -93,8 +122,8 @@ fn solve_separable_first_order() {
 x = Var("x")
 y = Function("y", x)
 eq = Equation(3*y^2*Derivative(y, x), cos(x))
-sol = SolveODE(eq, y, x)
-sol.show(solution)
+ode = ODE(eq, y, x)
+ode.solve()
 "#;
     let outputs = run_source(src).unwrap();
     assert!(outputs[0].latex.contains("{y}^{3}"));
@@ -107,14 +136,44 @@ fn solve_exact_first_order_with_initial_condition() {
 x = Var("x")
 y = Function("y", x)
 eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
-sol = SolveODE(eq, y, x, ic=IC(y(1), 2))
-sol.show(steps)
-sol.show(solution)
+ode = ODE(eq, y, x, BoundaryCondition(y(1), 2))
+ode.solve(details=true)
+ode.solve()
 "#;
     let outputs = run_source(src).unwrap();
-    assert!(outputs[0].latex.contains("\\text{exactness check}"));
+    assert!(outputs[0].latex.contains("2 \\, x \\, y = 2 \\, x \\, y"));
     assert!(outputs[1].latex.contains("2 \\, y"));
     assert!(outputs[1].latex.contains("6"));
+}
+
+#[test]
+fn old_ode_entry_points_report_migration_hint() {
+    let src = r#"
+x = Var("x")
+y = Function("y", x)
+eq = Equation(Derivative(y, x), 0)
+sol = SolveODE(eq, y, x, ic=IC(y(0), 1))
+"#;
+    let err = run_source(src).unwrap_err();
+    assert!(err.message.contains("ODE(eq, y, x"), "got: {}", err.message);
+    assert!(
+        err.message.contains("BoundaryCondition"),
+        "got: {}",
+        err.message
+    );
+
+    let src = r#"
+x = Var("x")
+y = Function("y", x)
+eq = Equation(Derivative(y, x), 0)
+kind = ClassifyODE(eq, y, x)
+"#;
+    let err = run_source(src).unwrap_err();
+    assert!(
+        err.message.contains("ODE(eq, y, x).classify"),
+        "got: {}",
+        err.message
+    );
 }
 
 #[test]
@@ -131,15 +190,17 @@ fn applied_math_ode_example_runs_end_to_end() {
     assert!(outputs.iter().any(|o| o.latex.contains("\\int")));
     assert!(outputs
         .iter()
-        .any(|o| o.latex.contains("\\text{exactness check}")));
+        .any(|o| o.latex.contains("2 \\, x \\, y = 2 \\, x \\, y")));
     assert!(outputs
         .iter()
         .any(|o| o.latex.contains("\\text{unsupported")));
     assert!(outputs
         .iter()
-        .any(|o| o.header.starts_with("linear_sol.show")));
-    assert!(outputs.iter().any(|o| o.header.starts_with("sep_sol.show")));
+        .any(|o| o.header.starts_with("linear_problem.solve")));
     assert!(outputs
         .iter()
-        .any(|o| o.header.starts_with("exact_sol.show")));
+        .any(|o| o.header.starts_with("sep_problem.solve")));
+    assert!(outputs
+        .iter()
+        .any(|o| o.header.starts_with("exact_problem.solve")));
 }
