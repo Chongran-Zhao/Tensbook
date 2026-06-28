@@ -74,3 +74,27 @@ x = Var("x")
     assert_eq!(plot.series[0].label_latex, "\\sin x");
     assert_eq!(plot.series[1].label_latex, "\\cos x");
 }
+
+#[test]
+fn plots_explicit_ode_solution() {
+    let outputs = run_source(
+        r#"
+x = Var("x")
+y = Function("y", x)
+eq = Equation(Derivative(y, x), x)
+problem = ODE(eq, y, x, BoundaryCondition(y(0), 0))
+solution = problem.solve()
+solution.plot(0, 2)
+"#,
+    )
+    .unwrap();
+    let OutputDetail::Plot(plot) = outputs[0].detail.as_ref().expect("plot detail") else {
+        panic!("expected plot detail");
+    };
+    assert_eq!(plot.series.len(), 1);
+    assert!(plot.series[0]
+        .segments
+        .iter()
+        .flatten()
+        .any(|point| approx(point[0], 2.0, 0.01) && approx(point[1], 2.0, 0.05)));
+}

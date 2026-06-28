@@ -2184,9 +2184,19 @@ impl Interpreter {
             }
             _ => match self.eval(target)? {
                 Value::Scalar(expr) => vec![expr],
+                Value::OdeSolution(solution) => {
+                    let solution = solution
+                        .solution
+                        .as_ref()
+                        .ok_or_else(|| Error::msg("no closed-form solution to plot"))?;
+                    if !is_numeric_plot_candidate(&solution.rhs) {
+                        return Err(Error::msg("solution is not in closed form; cannot plot"));
+                    }
+                    vec![solution.rhs.clone()]
+                }
                 other => {
                     return Err(Error::msg(format!(
-                        "`.plot(...)` expects a scalar expression, got {}",
+                        "`.plot(...)` expects a scalar expression or explicit ODE solution, got {}",
                         kind(&other)
                     )))
                 }
@@ -2715,6 +2725,25 @@ fn plot_header(target: &Expr, fallback: &str) -> String {
         _ => fallback,
     }
     .to_string()
+}
+
+fn is_numeric_plot_candidate(expr: &ScalarExpr) -> bool {
+    match expr {
+        ScalarExpr::Num(_) | ScalarExpr::Sym { .. } => true,
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Pow(a, b) => is_numeric_plot_candidate(a) && is_numeric_plot_candidate(b),
+        ScalarExpr::Neg(a) | ScalarExpr::Log(a) => is_numeric_plot_candidate(a),
+        ScalarExpr::Func { arg, .. } => is_numeric_plot_candidate(arg),
+        ScalarExpr::UnknownFunc { .. } | ScalarExpr::Integral { .. } => false,
+        ScalarExpr::Det(_)
+        | ScalarExpr::Tr(_)
+        | ScalarExpr::Ddot(_, _)
+        | ScalarExpr::SpecSum { .. }
+        | ScalarExpr::SetElem { .. } => false,
+    }
 }
 
 fn renamed_builtin_error(old: &str, new: &str) -> Error {

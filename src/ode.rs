@@ -1165,6 +1165,13 @@ fn factor_atom(expr: &Rc<ScalarExpr>, atom: &Rc<ScalarExpr>) -> Option<Rc<Scalar
     if simplify_scalar(expr, RuleSet::Continuum) == simplify_scalar(atom, RuleSet::Continuum) {
         return Some(Rc::new(ScalarExpr::Num(1.0)));
     }
+    if let ScalarExpr::Div(num, den) = &**expr {
+        if let Some(coeff) = factor_atom(num, atom) {
+            if !contains_atom(den, atom) {
+                return Some(Rc::new(ScalarExpr::Div(coeff, den.clone())));
+            }
+        }
+    }
     let factors = product_factors(expr);
     let mut hit = None;
     let mut rest = Vec::new();
@@ -1179,6 +1186,34 @@ fn factor_atom(expr: &Rc<ScalarExpr>, atom: &Rc<ScalarExpr>) -> Option<Rc<Scalar
         }
     }
     hit.map(|_| multiply_all(rest))
+}
+
+fn contains_atom(expr: &Rc<ScalarExpr>, atom: &Rc<ScalarExpr>) -> bool {
+    if simplify_scalar(expr, RuleSet::Continuum) == simplify_scalar(atom, RuleSet::Continuum) {
+        return true;
+    }
+    match &**expr {
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Pow(a, b) => contains_atom(a, atom) || contains_atom(b, atom),
+        ScalarExpr::Neg(a) | ScalarExpr::Log(a) | ScalarExpr::Func { arg: a, .. } => {
+            contains_atom(a, atom)
+        }
+        ScalarExpr::UnknownFunc { args, .. } => args.iter().any(|arg| contains_atom(arg, atom)),
+        ScalarExpr::Integral {
+            integrand,
+            variable,
+        } => contains_atom(integrand, atom) || contains_atom(variable, atom),
+        ScalarExpr::SpecSum { body, .. } => contains_atom(body, atom),
+        ScalarExpr::Sym { .. }
+        | ScalarExpr::Num(_)
+        | ScalarExpr::SetElem { .. }
+        | ScalarExpr::Det(_)
+        | ScalarExpr::Tr(_)
+        | ScalarExpr::Ddot(_, _) => false,
+    }
 }
 
 fn product_factors(expr: &Rc<ScalarExpr>) -> Vec<&Rc<ScalarExpr>> {
