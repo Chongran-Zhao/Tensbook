@@ -575,14 +575,27 @@ impl Interpreter {
 
     // ---- evaluation ------------------------------------------------------
 
+    fn eval_identifier(&self, name: &str) -> Result<Value, Error> {
+        if let Some(value) = self.env.get(name) {
+            return Ok(value.clone());
+        }
+        match name {
+            "pi" if !self.sets.contains_key(name) => Ok(Value::Scalar(Rc::new(ScalarExpr::Sym {
+                name: "pi".to_string(),
+                latex: "\\pi".to_string(),
+            }))),
+            "e" if !self.sets.contains_key(name) => Ok(Value::Scalar(Rc::new(ScalarExpr::Sym {
+                name: "e".to_string(),
+                latex: "e".to_string(),
+            }))),
+            _ => Err(Error::msg(format!("undefined variable `{name}`"))),
+        }
+    }
+
     fn eval(&mut self, expr: &Expr) -> Result<Value, Error> {
         match expr {
             Expr::Num(n) => Ok(Value::Scalar(Rc::new(ScalarExpr::Num(*n)))),
-            Expr::Ident(name) => self
-                .env
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::msg(format!("undefined variable `{name}`"))),
+            Expr::Ident(name) => self.eval_identifier(name),
             Expr::Str(_) | Expr::Bool(_) => Err(Error::msg(
                 "string/bool literals are only valid as supported command arguments",
             )),

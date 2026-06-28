@@ -22,6 +22,7 @@ pub mod indices;
 pub mod integration;
 pub mod interpreter;
 pub mod metadata;
+pub mod numeric;
 pub mod ode;
 pub mod parser;
 pub mod renderer;
