@@ -104,6 +104,8 @@ let scrollSyncSource = null;
 let scrollSyncFrame = null;
 let scrollSyncSuppressedUntil = 0;
 
+const VIEW_SOURCE_DIRECTIVE_RE = /^\s*ViewSource\s+(on|off)\s*$/i;
+
 // ---- theme ----------------------------------------------------------------
 
 function applyTheme(theme, { persist = true } = {}) {
@@ -230,7 +232,7 @@ function looksLikeTensorForgeSource(source) {
     if (t.startsWith("#")) continue;
     return (
       /\.show\s*\(/.test(t) ||
-      /^(?:Scalar|Var|Function|Tensor|ScalarSet|VectorSet|Diff|Derivative|Simplify|Sum|Det|Tr|Inv|Equation|Integrate|Integral|ClassifyODE|SolveODE|IC|log|sqrt|exp|sin|cos|tan|sinh|cosh|tanh)\s*\(/.test(t) ||
+      /^(?:Scalar|Var|Function|Tensor|ScalarSet|VectorSet|Diff|Derivative|Simplify|Sum|Det|Tr|Inv|Equation|ODE|BoundaryCondition|Integrate|Integral|log|sqrt|exp|sin|cos|tan|sinh|cosh|tanh)\s*\(/.test(t) ||
       /^\[[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*\]\s*=\s*(?:Spec_Decomp|Spectral)\s*\(/.test(t) ||
       /^[A-Za-z_]\w*(?:\[[^\]]+\])+\s*=/.test(t) ||
       /^[A-Za-z_]\w*\s*=/.test(t)
@@ -339,8 +341,32 @@ function documentSource() {
   return editorView?.state.doc.toString() ?? "";
 }
 
+function isViewSourceDirective(line) {
+  return VIEW_SOURCE_DIRECTIVE_RE.test(line);
+}
+
+function sourceWithPreviewDirectivesRemoved(source) {
+  const hasTensSentinels = source.split(/\r?\n/).some((line) => isTensOpen(line));
+  const lines = source.split(/\r?\n/);
+  let inTens = !hasTensSentinels && blockKindForFreeform(source) === "tens";
+  for (let i = 0; i < lines.length; i++) {
+    if (isTensOpen(lines[i])) {
+      inTens = true;
+      continue;
+    }
+    if (isTensClose(lines[i])) {
+      inTens = false;
+      continue;
+    }
+    if (inTens && isViewSourceDirective(lines[i])) lines[i] = "";
+  }
+  return lines.join("\n");
+}
+
 function executableSource() {
-  return docBlocks.some((block) => block.kind === "tens") ? documentSource() : null;
+  return docBlocks.some((block) => block.kind === "tens")
+    ? sourceWithPreviewDirectivesRemoved(documentSource())
+    : null;
 }
 
 function refreshDocumentModel() {
@@ -448,6 +474,15 @@ function addMark(builder, line, from, to, className) {
 
 function decorateTensTokens(builder, line) {
   const text = line.text;
+  const directive = text.match(/^(\s*)(ViewSource)(\s+)(on|off)(\s*)$/i);
+  if (directive) {
+    const keywordFrom = directive[1].length;
+    const keywordTo = keywordFrom + directive[2].length;
+    const valueFrom = keywordTo + directive[3].length;
+    addMark(builder, line, keywordFrom, keywordTo, "tf-token-directive");
+    addMark(builder, line, valueFrom, valueFrom + directive[4].length, "tf-token-constant");
+    return;
+  }
   for (let i = 0; i < text.length; ) {
     const ch = text[i];
     if (ch === "#") {
@@ -614,10 +649,10 @@ function normalizeAdjacentTensBlocks(view) {
   for (let closeLineNo = 1; closeLineNo < doc.lines; closeLineNo++) {
     if (tensSentinelKind(doc.line(closeLineNo).text) !== "close") continue;
 
-    let nextOpenLineNo = closeLineNo + 1;
-    while (nextOpenLineNo <= doc.lines && doc.line(nextOpenLineNo).text.trim() === "") {
-      nextOpenLineNo++;
-    }
+    // Only merge blocks that are *directly* adjacent (no lines between the
+    // close and open sentinels). A blank line is an intentional Markdown gap
+    // — e.g. from splitting a block with a double Enter — and must survive.
+    const nextOpenLineNo = closeLineNo + 1;
     if (nextOpenLineNo > doc.lines) continue;
     if (tensSentinelKind(doc.line(nextOpenLineNo).text) !== "open") continue;
 
@@ -810,6 +845,8 @@ const editorTheme = EditorView.theme({
   ".tf-token-number": { color: "var(--syntax-number)" },
   ".tf-token-builtin": { color: "var(--syntax-function)", fontWeight: "600" },
   ".tf-token-keyword": { color: "var(--syntax-keyword)" },
+  ".tf-token-directive": { color: "var(--syntax-keyword)", fontWeight: "650" },
+  ".tf-token-constant": { color: "var(--syntax-number)", fontWeight: "550" },
   ".tf-token-op": { color: "var(--muted)" },
 });
 
@@ -909,6 +946,13 @@ function initEditor() {
         EditorView.updateListener.of(handleEditorUpdate),
         EditorView.domEventHandlers({
           beforeinput(event, view) {
+            if (event.inputType === "insertParagraph") {
+              if (exitTensBlockOnDoubleBlankEnter(view)) {
+                event.preventDefault();
+                return true;
+              }
+              return false;
+            }
             if (event.inputType !== "deleteContentBackward" && event.inputType !== "deleteContentForward") {
               return false;
             }
@@ -1738,6 +1782,88 @@ function tensBlockNoteHint(line, error) {
   return "This line is inside a TensorForge code block. Press Enter on an empty tens line to return to Markdown.";
 }
 
+function viewSourceRegionsForBlock(block) {
+  if (!block || block.kind !== "tens") return [];
+  const lines = block.text.split(/\r?\n/);
+  const regions = [];
+  let startIndex = null;
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(VIEW_SOURCE_DIRECTIVE_RE);
+    if (!match) continue;
+    if (match[1].toLowerCase() === "on") {
+      startIndex = i + 1;
+    } else if (startIndex != null) {
+      regions.push(makeViewSourceRegion(block, startIndex, i - 1));
+      startIndex = null;
+    }
+  }
+  if (startIndex != null) {
+    regions.push(makeViewSourceRegion(block, startIndex, lines.length - 1));
+  }
+  return regions.filter((region) => region.sourceText.trim());
+}
+
+function makeViewSourceRegion(block, startIndex, endIndex) {
+  const lines = block.text.split(/\r?\n/);
+  let start = Math.max(0, startIndex);
+  let end = Math.min(lines.length - 1, endIndex);
+  while (start <= end && lines[start].trim() === "") start++;
+  while (end >= start && lines[end].trim() === "") end--;
+  const sourceLines =
+    start <= end ? lines.slice(start, end + 1).filter((line) => !isViewSourceDirective(line)) : [];
+  return {
+    blockId: block.id,
+    sourceLine: block.sourceLine + start,
+    sourceEndLine: block.sourceLine + end,
+    sourceText: sourceLines.join("\n"),
+  };
+}
+
+function viewSourceRegionForLine(line) {
+  if (!Number.isFinite(line)) return null;
+  const block = blockForSourceLine(line);
+  if (!block || block.kind !== "tens") return null;
+  return (
+    viewSourceRegionsForBlock(block).find(
+      (region) => line >= region.sourceLine && line <= region.sourceEndLine,
+    ) ?? null
+  );
+}
+
+function outputLineForPreviewBlock(block) {
+  if (block.kind === "output") return block.line;
+  if (block.kind === "output-row") {
+    return block.items.find((item) => Number.isFinite(item.line))?.line;
+  }
+  return null;
+}
+
+function viewSourceRegionKey(region) {
+  return region ? `${region.blockId}:${region.sourceLine}:${region.sourceEndLine}` : "";
+}
+
+function groupViewSourcePreviewBlocks(blocks) {
+  const grouped = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const region = viewSourceRegionForLine(outputLineForPreviewBlock(block));
+    if (!region) {
+      grouped.push(block);
+      continue;
+    }
+
+    const key = viewSourceRegionKey(region);
+    const items = [block];
+    while (i + 1 < blocks.length) {
+      const nextRegion = viewSourceRegionForLine(outputLineForPreviewBlock(blocks[i + 1]));
+      if (viewSourceRegionKey(nextRegion) !== key) break;
+      items.push(blocks[++i]);
+    }
+    grouped.push({ kind: "view-source", region, items });
+  }
+  return grouped;
+}
+
 function renderOutputBlock(item) {
   const { header, latex, line, error } = item;
   const block = document.createElement("div");
@@ -1792,6 +1918,40 @@ function renderOutputBlock(item) {
   return block;
 }
 
+function renderViewSourceBlock(group) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "block tens-source-preview";
+  wrapper.dataset.sourceBlockId = String(group.region.blockId);
+  wrapper.dataset.sourceLine = String(group.region.sourceLine);
+  makeBlockJump(wrapper, group.region.sourceLine);
+
+  const sourcePane = document.createElement("div");
+  sourcePane.className = "tens-source-pane";
+  const sourceHead = document.createElement("div");
+  sourceHead.className = "tens-source-head";
+  sourceHead.textContent = "source";
+  const pre = document.createElement("pre");
+  pre.className = "tens-source-code";
+  const code = document.createElement("code");
+  code.textContent = group.region.sourceText;
+  pre.appendChild(code);
+  sourcePane.append(sourceHead, pre);
+
+  const renderedPane = document.createElement("div");
+  renderedPane.className = "tens-render-pane";
+  const renderHead = document.createElement("div");
+  renderHead.className = "tens-source-head";
+  renderHead.textContent = "preview";
+  renderedPane.appendChild(renderHead);
+  for (const item of group.items) {
+    if (item.kind === "output-row") renderedPane.appendChild(renderOutputRowBlock(item.items));
+    else renderedPane.appendChild(renderOutputBlock(item));
+  }
+
+  wrapper.append(sourcePane, renderedPane);
+  return wrapper;
+}
+
 function renderOutputRowBlock(items) {
   const row = document.createElement("div");
   row.className = "output-row";
@@ -1808,7 +1968,8 @@ function countOutputCalls(source) {
     .split(/\r?\n/)
     .reduce(
       (count, line) =>
-        count + (line.replace(/#.*/, "").match(/\.show\s*\(/g)?.length ?? 0),
+        count +
+        (line.replace(/#.*/, "").match(/\.(?:show|classify|solve)\s*\(/g)?.length ?? 0),
       0,
     );
 }
@@ -1826,7 +1987,9 @@ function orderedPreviewBlocks(outputs) {
 
   const tensBlocks = docBlocks.filter((block) => block.kind === "tens");
   const outputInBlock = (item, block) =>
-    item.line >= block.sourceLine && item.line <= block.sourceEndLine;
+    Number.isFinite(item.line) &&
+    item.line >= block.sourceLine &&
+    item.line <= block.sourceEndLine;
 
   const put = (item, block) => {
     buckets.get(block.id)?.push(item);
@@ -1834,20 +1997,12 @@ function orderedPreviewBlocks(outputs) {
   };
 
   for (const item of items) {
-    if (!item.error) continue;
     const block = tensBlocks.find((candidate) => outputInBlock(item, candidate));
     if (block) put(item, block);
   }
 
   for (const item of items) {
     if (assigned.has(item.index)) continue;
-    if (item.error) {
-      const block = tensBlocks.find((candidate) => outputInBlock(item, candidate));
-      if (block) {
-        put(item, block);
-        continue;
-      }
-    }
 
     while (
       sequentialBlockIndex < tensBlocks.length &&
@@ -1909,7 +2064,7 @@ function renderOutputs(outputs, options = {}) {
   if (preserveScroll) suppressScrollSync();
   output.innerHTML = "";
   lastRenderedOutputs = outputs;
-  const blocks = groupOutputRows(orderedPreviewBlocks(outputs));
+  const blocks = groupViewSourcePreviewBlocks(groupOutputRows(orderedPreviewBlocks(outputs)));
 
   if (blocks.length === 0) {
     output.innerHTML = '<div class="placeholder">No output yet. Add expr.show(...).</div>';
@@ -1921,6 +2076,7 @@ function renderOutputs(outputs, options = {}) {
   }
   for (const block of blocks) {
     if (block.kind === "markdown") output.appendChild(renderMarkdownBlock(block));
+    else if (block.kind === "view-source") output.appendChild(renderViewSourceBlock(block));
     else if (block.kind === "output-row") output.appendChild(renderOutputRowBlock(block.items));
     else output.appendChild(renderOutputBlock(block));
   }
@@ -2079,7 +2235,7 @@ function updateSignatureHint() {
   if (regionKindAtPos(pos) !== "tens") return hideSignatureHint();
   const line = editorView.state.doc.lineAt(pos);
   const prefix = editorView.state.doc.sliceString(line.from, pos);
-  const hint = signatureHint(prefix);
+  const hint = signatureHint(prefix, editorView.state.doc.toString(), pos);
   if (!hint) return hideSignatureHint();
   const coords = editorView.coordsAtPos(pos);
   if (!coords) return hideSignatureHint();

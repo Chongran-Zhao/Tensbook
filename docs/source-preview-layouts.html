@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TensorForge · source / preview layout options</title>
+<style>
+  :root, html[data-theme="dark"] {
+    --bg: #2a2521; --panel: #332e28; --panel-2: #2c2722; --border: #464037;
+    --text: #ece6da; --muted: #a59c8c; --accent: #93b6df; --tens-frame: #93b6df;
+    --error: #e8867a; --shadow: 0 1px 3px rgba(0,0,0,0.35);
+    --serif: ui-serif, Georgia, Charter, "Times New Roman", "Songti SC", serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f1ea; --panel: #fffdf8; --panel-2: #ece8dd; --border: #e0dccf;
+    --text: #2b2924; --muted: #8c887d; --accent: #355e8a; --tens-frame: #355e8a;
+    --error: #b0432e; --shadow: 0 1px 3px rgba(60,50,30,0.10);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; padding: 28px 22px 60px; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 26px; }
+  .toolbar button { font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  .toolbar button:hover { border-color: var(--accent); background: var(--panel-2); }
+  .toolbar .hint { color: var(--muted); font-size: 12.5px; }
+  h2.vt { font: 600 12px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin: 34px 0 4px; }
+  .vd { color: var(--muted); font-size: 13px; margin: 0 0 14px; max-width: 78ch; }
+  .vd b { color: var(--text); font-weight: 600; }
+
+  .lbl { font: 11px/1.4 var(--mono); letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 7px; }
+  .src-code { margin: 0; font: 12px/1.7 var(--mono); color: var(--text);
+    white-space: pre; overflow-x: auto; }
+  .out-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin: 0 0 6px; }
+  .out-head .tag { font: italic 13px var(--serif); color: var(--muted); }
+  .copy { font: 11px/1 var(--mono); color: var(--muted); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; cursor: default; }
+  .eq { font-family: var(--serif); font-size: 21px; color: var(--text); display: inline-flex;
+    align-items: center; gap: 0.12em; }
+  .eq i { font-style: italic; }
+  .eq sup { font-size: 0.66em; vertical-align: super; }
+  .frac { display: inline-flex; flex-direction: column; text-align: center; vertical-align: middle;
+    margin: 0 0.18em; font-size: 0.84em; }
+  .frac .n { border-bottom: 1px solid currentColor; padding: 0 0.35em; }
+  .frac .d { padding: 0 0.35em; }
+  .tags { font-family: var(--serif); font-size: 13.5px; color: var(--muted); margin-top: 8px; }
+  .tags b { color: var(--text); font-weight: 600; font-variant: small-caps; letter-spacing: 0.02em; }
+
+  /* ---- current (two separate cards) ---- */
+  .cur { display: grid; grid-template-columns: minmax(340px, 1.15fr) minmax(280px, 0.85fr);
+    gap: 14px; align-items: start; }
+  .cur .src { padding: 12px 14px; background: color-mix(in srgb, var(--tens-frame) 7%, var(--panel));
+    border: 1px solid var(--border); border-left: 3px solid var(--tens-frame); border-radius: 8px;
+    box-shadow: var(--shadow); overflow-x: auto; }
+  .cur .prev .card { border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+    box-shadow: var(--shadow); padding: 14px 16px; }
+
+  /* ---- shared unified shell ---- */
+  .unit { border: 1px solid var(--border); border-radius: 11px; background: var(--panel);
+    box-shadow: var(--shadow); overflow: hidden; }
+
+  /* ---- V1 content-fit ---- */
+  .v1 { display: grid; grid-template-columns: fit-content(60ch) minmax(0, 1fr); }
+  .v1 .src { padding: 14px 16px; border-right: 1px solid var(--border);
+    background: color-mix(in srgb, var(--tens-frame) 5%, var(--panel)); min-width: 0; overflow-x: auto; }
+  .v1 .prev { padding: 14px 18px; min-width: 0; }
+
+  /* ---- V2 balanced + header bar ---- */
+  .v2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .v2 .h { background: var(--panel-2); border-bottom: 1px solid var(--border); padding: 8px 16px;
+    font: 11px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .v2 .h.left, .v2 .src { border-right: 1px solid var(--border); }
+  .v2 .src { padding: 14px 16px; min-width: 0; overflow-x: auto;
+    background: color-mix(in srgb, var(--tens-frame) 4%, var(--panel)); }
+  .v2 .prev { padding: 14px 18px; min-width: 0; }
+
+  /* ---- V3 preview-first, source rail ---- */
+  .v3 { display: grid; grid-template-columns: fit-content(46ch) minmax(0, 1.7fr); }
+  .v3 .src { padding: 14px 14px 14px 13px; border-right: 1px solid var(--border);
+    border-left: 3px solid var(--tens-frame);
+    background: color-mix(in srgb, var(--tens-frame) 9%, var(--panel)); min-width: 0; overflow-x: auto; }
+  .v3 .src .src-code { font-size: 11.5px; line-height: 1.75; }
+  .v3 .prev { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
+  .v3 .prev .eq { font-size: 23px; }
+
+  .stack > * + * { margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar">
+    <button id="toggle" type="button">Toggle light / dark</button>
+    <span class="hint">Same content in four layouts. The on-disk <code>.tens</code> source is unchanged.</span>
+  </div>
+
+  <h2 class="vt">Current — two separate cards</h2>
+  <p class="vd">Source and preview are two independent boxes with a gap and a fixed 1.15 : 0.85 split.
+    They read as two disconnected things, and the ratio never adapts to the code or the math.</p>
+  <div class="cur">
+    <pre class="src src-code">x = Var("x")
+f = Function("f", x)
+linear_example = Equation(x^2*Derivative(f, x) + 2*f, 5*x)
+linear_problem = ODE(linear_example, f, x)
+linear_problem.show()</pre>
+    <div class="prev">
+      <div class="card">
+        <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
+        <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
+        <div class="tags">no explicit boundary condition</div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="vt">Option 1 — unified card · source auto-fits its content &nbsp;·&nbsp; recommended</h2>
+  <p class="vd">One bordered panel with a single divider. The source column is <b>sized to the longest
+    code line</b> (capped), and the preview automatically takes whatever width is left — so short code
+    gives the math more room, long code borrows it back. No fixed ratio to tune.</p>
+  <div class="unit v1">
+    <div class="src">
+      <p class="lbl">source</p>
+      <pre class="src-code">x = Var("x")
+f = Function("f", x)
+linear_example = Equation(x^2*Derivative(f, x) + 2*f, 5*x)
+linear_problem = ODE(linear_example, f, x)
+linear_problem.show()</pre>
+    </div>
+    <div class="prev">
+      <p class="lbl">preview</p>
+      <div class="stack">
+        <div>
+          <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
+          <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
+          <div class="tags">no explicit boundary condition</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="vt">Option 2 — balanced columns · aligned header bar</h2>
+  <p class="vd">A shared <b>source / preview</b> header strip sits across the top, with the body in
+    two equal columns underneath the same divider. The most structured, table-like reading; the 50 : 50
+    split stays predictable regardless of content.</p>
+  <div class="unit v2">
+    <div class="h left">source</div>
+    <div class="h">preview</div>
+    <div class="src">
+      <pre class="src-code">x = Var("x")
+f = Function("f", x)
+linear_example = Equation(x^2*Derivative(f, x) + 2*f, 5*x)
+linear_problem = ODE(linear_example, f, x)
+linear_problem.show()</pre>
+    </div>
+    <div class="prev">
+      <div class="stack">
+        <div>
+          <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
+          <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
+          <div class="tags">no explicit boundary condition</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="vt">Option 3 — preview-first · source as a side rail</h2>
+  <p class="vd">The result is the hero: a generous, centered preview with the source tucked into a slim
+    tinted rail on the left (the same accent as a tens block in the editor). Best when the reader cares
+    about the math and treats the code as reference.</p>
+  <div class="unit v3">
+    <div class="src">
+      <p class="lbl">source</p>
+      <pre class="src-code">x = Var("x")
+f = Function("f", x)
+linear_example =
+  Equation(x^2*Derivative(f, x)
+           + 2*f, 5*x)
+linear_problem =
+  ODE(linear_example, f, x)
+linear_problem.show()
+linear_problem.classify()</pre>
+    </div>
+    <div class="prev">
+      <div>
+        <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
+        <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
+      </div>
+      <div>
+        <div class="out-head"><span class="tag">[linear_problem.classify()]</span><span class="copy">copy latex</span></div>
+        <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
+        <div class="tags"><b>DE</b> &nbsp; order 1 &nbsp; linear &nbsp; non-homogeneous<br>no explicit boundary condition</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.getElementById("toggle").addEventListener("click", () => {
+    const el = document.documentElement;
+    el.dataset.theme = el.dataset.theme === "light" ? "dark" : "light";
+  });
+</script>
+</body>
+</html>

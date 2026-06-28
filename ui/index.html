@@ -323,6 +323,79 @@
     min-width: max-content;
     margin: 0 auto;
   }
+  /* Unified card, preview-first: source sits in a slim tinted side rail. */
+  .tens-source-preview {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.6fr) minmax(0, 1.55fr);
+    align-items: stretch;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .tens-source-pane {
+    min-width: 0;
+    padding: 13px 14px 14px 13px;
+    border-left: 3px solid var(--tens-frame);
+    border-right: 1px solid var(--border);
+    background: color-mix(in srgb, var(--tens-frame) 9%, var(--panel));
+  }
+  .tens-render-pane {
+    min-width: 0;
+    padding: 16px 20px;
+  }
+  .tens-source-head {
+    color: var(--muted);
+    font: 11px/1.4 "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: 0.05em;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+  }
+  /* Each output carries its own [name] header, so drop the "preview" label. */
+  .tens-render-pane > .tens-source-head {
+    display: none;
+  }
+  .tens-source-code {
+    margin: 0;
+    overflow-x: auto;
+    color: var(--text);
+    white-space: pre;
+    font: 11.5px/1.7 "SF Mono", Menlo, Consolas, monospace;
+  }
+  .tens-render-pane > .block,
+  .tens-render-pane > .output-row {
+    margin-bottom: 16px;
+  }
+  .tens-render-pane > .block {
+    width: fit-content;
+    max-width: 100%;
+  }
+  /* Math sits bare inside the one card — no nested per-equation frame. */
+  .tens-render-pane .block .math {
+    width: fit-content;
+    max-width: 100%;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .tens-render-pane .block .math .katex {
+    font-size: 1.28em;
+  }
+  .tens-render-pane > :last-child {
+    margin-bottom: 0;
+  }
+  @media (max-width: 980px) {
+    .tens-source-preview {
+      grid-template-columns: 1fr;
+    }
+    .tens-source-pane {
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+  }
   .block .math .katex { font-size: 1.15em; }
   .error {
     color: var(--error); white-space: pre-wrap;
