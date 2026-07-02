@@ -28,7 +28,7 @@ export const BUILTINS = [
   { name: "Var", sig: 'Var("\\lambda")', doc: "declare a scalar function argument" },
   { name: "Function", sig: 'Function("y", x)', doc: "declare an unknown scalar function; accepts one or more Var arguments" },
   { name: "Equation", sig: "Equation(lhs, rhs)", doc: "declare a scalar equation for ODE/PDE classification and solving" },
-  { name: "ODE", sig: "ODE(eq, y, x, BoundaryCondition(...))", doc: "declare an ODE/PDE problem object" },
+  { name: "ODE", sig: "ODE(eq, y, x, BoundaryCondition(...), ...)", doc: "declare an ODE/PDE problem object" },
   { name: "BoundaryCondition", sig: "BoundaryCondition(y(x0), y0)", doc: "boundary condition for supported ODE solvers" },
   { name: "Integrate", sig: "Integrate(expr, x)", doc: "rule-based scalar integration" },
   { name: "Integral", sig: "Integral(expr, x)", doc: "formal unevaluated scalar integral" },
@@ -39,18 +39,43 @@ export const BUILTINS = [
 ];
 
 const BUILTIN_BY_NAME = new Map(BUILTINS.map((builtin) => [builtin.name, builtin]));
-const ALL_SHOW_MODES = ["symbol", "components", "matrix", "block_components", "details", "solution", "steps"];
+const ALL_SHOW_MODES = [
+  "symbol",
+  "components",
+  "matrix",
+  "block_components",
+  "equation",
+  "boundary",
+  "classification",
+  "methods",
+  "solution",
+  "steps",
+];
 const SAFE_SHOW_MODES = ["symbol"];
 const SHOW_MODE_DETAILS = {
   symbol: "symbolic display",
   components: "component display",
   matrix: "matrix display",
   block_components: "block component display",
-  details: "classification details",
+  equation: "ODE equation",
+  boundary: "boundary condition",
+  classification: "ODE/PDE classification",
+  methods: "available solver methods",
   solution: "solution only",
   steps: "solution steps",
 };
 const BOOLEAN_VALUES = ["true", "false"];
+const SOLVE_METHOD_VALUES = [
+  "auto",
+  "linear",
+  "separable",
+  "exact",
+  "characteristic",
+  "undetermined",
+  "variation",
+  "power_series",
+  "frobenius",
+];
 const ORDER_VALUES = ["1", "2", "4"];
 const DIM_VALUES = ["2", "3"];
 const SIMPLIFY_RULES = ["continuum", "tensor", "algebra"];
@@ -153,7 +178,7 @@ const BUILTIN_SCHEMAS = {
     ],
   },
   ODE: {
-    hintParams: ["eq", "y", "x", "BoundaryCondition(...)"],
+    hintParams: ["eq", "y", "x", "BoundaryCondition(...)", "..."],
     positional: [
       { name: "eq", detail: "Equation(...) object", kind: "expression" },
       { name: "y", detail: "unknown Function(...) value", kind: "expression" },
@@ -164,8 +189,9 @@ const BUILTIN_SCHEMAS = {
   BoundaryCondition: {
     hintParams: ["y(x0)", "y0"],
     positional: [
-      { name: "y(x0)", detail: "function value at boundary point", kind: "expression" },
-      { name: "y0", detail: "boundary value", kind: "expression" },
+      { name: "y(x0)", detail: "function value, or Derivative(y, x) with a separate point", kind: "expression" },
+      { name: "x0", detail: "boundary point or boundary value in two-argument form", kind: "expression" },
+      { name: "y0", detail: "boundary value for derivative conditions", kind: "expression" },
     ],
   },
   Integrate: {
@@ -182,14 +208,15 @@ const BUILTIN_SCHEMAS = {
       { name: "x", detail: "integration variable", kind: "expression" },
     ],
   },
-  classify: {
-    hintParams: [],
-    positional: [],
-  },
   solve: {
-    hintParams: ["details=false"],
+    hintParams: ["method=auto", "details=false", "about=0", "terms=6"],
     positional: [],
-    kwargs: [{ name: "details", detail: "show solving steps and final solution", values: BOOLEAN_VALUES }],
+    kwargs: [
+      { name: "method", detail: "solver method", values: SOLVE_METHOD_VALUES },
+      { name: "details", detail: "show solving steps and final solution", values: BOOLEAN_VALUES },
+      { name: "about", detail: "series expansion point", kind: "expression" },
+      { name: "terms", detail: "number of displayed series terms", values: ["4", "6", "8", "10"] },
+    ],
   },
   Sum: {
     hintParams: ["expr", "a"],
@@ -644,7 +671,6 @@ function inferExprKind(expr, symbols) {
 
   const method = directMethodName(text);
   if (method === "solve") return { kind: "ode_solution" };
-  if (method === "classify") return { kind: "ode_classification" };
 
   const call = directCallName(text);
   if (call) {
@@ -767,11 +793,11 @@ function modesForKind(kind) {
       if (kind.order === 4) return ["symbol", "block_components"];
       return SAFE_SHOW_MODES;
     case "ode_classification":
-      return ["symbol", "details"];
+      return ["symbol"];
     case "ode_solution":
       return ["symbol", "solution", "steps"];
     case "ode_problem":
-      return ["symbol"];
+      return ["equation", "boundary", "classification", "methods"];
     case "equation":
     case "boundary_condition":
     case "var":
@@ -907,10 +933,7 @@ export function tensorForgeCompletionSource(context) {
     const options = [];
     options.push(cmOption("show", { type: "method", detail: ".show(mode)" }));
     if (kind?.kind === "ode_problem") {
-      options.push(
-        cmOption("classify", { type: "method", detail: ".classify()" }),
-        cmOption("solve", { type: "method", detail: ".solve(details=true)" }),
-      );
+      options.push(cmOption("solve", { type: "method", detail: ".solve(details=true)" }));
     }
     if (kind?.kind === "tensor") {
       options.push(cmOption("T", { type: "property", detail: "transpose" }));

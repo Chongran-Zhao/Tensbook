@@ -46,11 +46,25 @@ const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writin
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 const SCROLL_SYNC_ANCHOR = 0.22;
-const TENS_BUILTINS = new Set([...BUILTINS.map((b) => b.name), "show", "plot"]);
-const TENS_KEYWORDS = new Set([
+const TENS_BUILTINS = new Set(BUILTINS.map((b) => b.name));
+const TENS_METHODS = new Set(["show", "solve", "plot"]);
+const TENS_CONSTANTS = new Set([
   "true",
   "false",
+  "auto",
+  "linear",
+  "separable",
+  "exact",
+  "characteristic",
+  "undetermined",
+  "variation",
+  "power_series",
+  "frobenius",
+]);
+const TENS_KEYWORDS = new Set([
   "order",
+  "details",
+  "method",
   "dim",
   "rules",
   "identity",
@@ -62,6 +76,12 @@ const TENS_KEYWORDS = new Set([
   "components",
   "matrix",
   "block_components",
+  "equation",
+  "boundary",
+  "classification",
+  "methods",
+  "solution",
+  "steps",
   "algebra",
   "tensor",
   "continuum",
@@ -231,7 +251,7 @@ function looksLikeTensorForgeSource(source) {
     if (!t) continue;
     if (t.startsWith("#")) continue;
     return (
-      /\.show\s*\(/.test(t) ||
+      /\.(?:show|solve)\s*\(/.test(t) ||
       /^(?:Scalar|Var|Function|Tensor|ScalarSet|VectorSet|Diff|Derivative|Simplify|Sum|Det|Tr|Inv|Equation|ODE|BoundaryCondition|Integrate|Integral|log|sqrt|exp|sin|cos|tan|sinh|cosh|tanh)\s*\(/.test(t) ||
       /^\[[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*\]\s*=\s*(?:Spec_Decomp|Spectral)\s*\(/.test(t) ||
       /^[A-Za-z_]\w*(?:\[[^\]]+\])+\s*=/.test(t) ||
@@ -472,7 +492,54 @@ function addMark(builder, line, from, to, className) {
   if (to > from) builder.add(line.from + from, line.from + to, Decoration.mark({ class: className }));
 }
 
-function decorateTensTokens(builder, line) {
+function previousNonSpaceChar(text, index) {
+  for (let i = index - 1; i >= 0; i--) {
+    if (!/\s/.test(text[i])) return text[i];
+  }
+  return "";
+}
+
+function nextNonSpaceChar(text, index) {
+  for (let i = index; i < text.length; i++) {
+    if (!/\s/.test(text[i])) return text[i];
+  }
+  return "";
+}
+
+function syntaxDepthAt(text, index) {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < index; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\" && i + 1 < index) {
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "#") break;
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "(" || ch === "[") {
+      depth++;
+    } else if ((ch === ")" || ch === "]") && depth > 0) {
+      depth--;
+    }
+  }
+  return depth;
+}
+
+function assignedSymbolNames(text) {
+  const simple = text.match(/^\s*([A-Za-z_]\w*)\s*=/);
+  if (simple) return [simple[1]];
+  const pair = text.match(/^\s*\[\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\]\s*=/);
+  if (pair) return [pair[1], pair[2]];
+  return [];
+}
+
+function decorateTensTokens(builder, line, knownSymbols = new Set()) {
   const text = line.text;
   const directive = text.match(/^(\s*)(ViewSource)(\s+)(on|off)(\s*)$/i);
   if (directive) {
@@ -515,10 +582,24 @@ function decorateTensTokens(builder, line) {
     if (/[A-Za-z_]/.test(ch)) {
       const m = text.slice(i).match(/^[A-Za-z_]\w*/);
       const word = m[0];
-      const cls = TENS_BUILTINS.has(word)
+      const depth = syntaxDepthAt(text, i);
+      const hasFollowingEquals = nextNonSpaceChar(text, i + word.length) === "=";
+      const isAssignmentLhs = hasFollowingEquals && depth === 0;
+      const isKwarg = hasFollowingEquals && depth > 0;
+      const cls = isAssignmentLhs
+        ? "tf-token-lhs"
+        : isKwarg
+        ? "tf-token-kwarg"
+        : previousNonSpaceChar(text, i) === "." && TENS_METHODS.has(word)
+        ? "tf-token-method"
+        : TENS_BUILTINS.has(word)
         ? "tf-token-builtin"
+        : TENS_CONSTANTS.has(word)
+          ? "tf-token-constant"
         : TENS_KEYWORDS.has(word)
           ? "tf-token-keyword"
+        : knownSymbols.has(word)
+          ? "tf-token-symbol"
           : "tf-token-ident";
       addMark(builder, line, i, i + word.length, cls);
       i += word.length;
@@ -540,6 +621,7 @@ const sourceDecorations = ViewPlugin.fromClass(
     build(view) {
       const decorations = new RangeSetBuilder();
       const doc = view.state.doc;
+      const knownSymbols = new Set();
       for (let n = 1; n <= doc.lines; n++) {
         const line = doc.line(n);
         if (isTensOpen(line.text)) {
@@ -564,8 +646,9 @@ const sourceDecorations = ViewPlugin.fromClass(
                   Decoration.line({ class: classes.join(" ") }),
                 );
                 if (!isEmptyBlock && contentLine.text.trim() !== "") {
-                  decorateTensTokens(decorations, contentLine);
+                  decorateTensTokens(decorations, contentLine, knownSymbols);
                 }
+                for (const name of assignedSymbolNames(contentLine.text)) knownSymbols.add(name);
               }
               n = m;
               break;
@@ -844,6 +927,10 @@ const editorTheme = EditorView.theme({
   ".tf-token-string": { color: "var(--syntax-string)" },
   ".tf-token-number": { color: "var(--syntax-number)" },
   ".tf-token-builtin": { color: "var(--syntax-function)", fontWeight: "600" },
+  ".tf-token-method": { color: "var(--syntax-function)", fontWeight: "600" },
+  ".tf-token-lhs": { color: "var(--text)", fontWeight: "700" },
+  ".tf-token-symbol": { color: "var(--text)", fontWeight: "700" },
+  ".tf-token-kwarg": { color: "var(--muted)", fontWeight: "550" },
   ".tf-token-keyword": { color: "var(--syntax-keyword)" },
   ".tf-token-directive": { color: "var(--syntax-keyword)", fontWeight: "650" },
   ".tf-token-constant": { color: "var(--syntax-number)", fontWeight: "550" },
@@ -1277,39 +1364,6 @@ function insertTensBlock() {
   }
   const pos = endOfTensBlockAfter(line.number) ?? line.to;
   insertTextAtRange(pos, pos, template, { block: true });
-}
-
-function sourceLineLocation(line) {
-  if (!editorView || !Number.isFinite(line)) return null;
-  const n = Math.max(1, Math.min(editorView.state.doc.lines, line));
-  const docLine = editorView.state.doc.line(n);
-  return { line: docLine, offset: docLine.from };
-}
-
-function focusSourceLine(line) {
-  const loc = sourceLineLocation(line);
-  if (!loc) return;
-  editorView.dispatch({
-    selection: { anchor: loc.offset },
-    effects: EditorView.scrollIntoView(loc.offset, { y: "center" }),
-    annotations: internalEdit.of(true),
-  });
-  editorView.focus();
-}
-
-function scrollEditorToLine(line, options = {}) {
-  const loc = sourceLineLocation(line);
-  if (!loc) return;
-  editorView.dispatch({
-    effects: EditorView.scrollIntoView(loc.offset, { y: options.align ?? "center" }),
-    annotations: internalEdit.of(true),
-  });
-}
-
-function jumpToSourceLine(line, options = {}) {
-  if (options.sync === false) suppressScrollSync();
-  if (options.focus) focusSourceLine(line);
-  else scrollEditorToLine(line, { align: "start" });
 }
 
 // ---- files -----------------------------------------------------------------
@@ -1753,7 +1807,6 @@ function renderMarkdownBlock(block) {
   el.dataset.sourceBlockId = String(block.id);
   el.dataset.sourceLine = String(block.sourceLine);
   el.innerHTML = renderMarkdown(block.text, block.sourceLine);
-  makeBlockJump(el, block.sourceLine);
   return el;
 }
 
@@ -1871,7 +1924,6 @@ function renderOutputBlock(item) {
   const sourceBlock = Number.isFinite(line) ? blockForSourceLine(line) : null;
   if (sourceBlock) block.dataset.sourceBlockId = String(sourceBlock.id);
   if (Number.isFinite(line)) block.dataset.sourceLine = String(line);
-  makeBlockJump(block, line);
   const head = document.createElement("div");
   head.className = "head";
 
@@ -1909,6 +1961,12 @@ function renderOutputBlock(item) {
   bar.className = "copy-bar";
   bar.append(copyButton("copy latex", tex));
   head.appendChild(bar);
+
+  if (detail) {
+    block.classList.add("ode-output");
+    block.append(head, renderOdeDetail(detail));
+    return block;
+  }
 
   const math = document.createElement("div");
   math.className = "math";
@@ -2093,10 +2151,12 @@ function renderPlot(detail) {
   });
   svg.appendChild(curves);
 
+  // Inside the frame's bottom-right corner so it cannot collide with the
+  // rightmost tick label (both used to share the same baseline).
   const xLabel = svgNode("text", {
     class: "tf-plot-axis-label",
-    x: margin.left + plotWidth,
-    y: height - 11,
+    x: margin.left + plotWidth - 8,
+    y: margin.top + plotHeight - 9,
     "text-anchor": "end",
   });
   xLabel.textContent = detail.x_label;
@@ -2108,13 +2168,106 @@ function renderPlot(detail) {
   return wrap;
 }
 
+// ---- ODE result chrome (badges + numbered steps) --------------------------
+// Driven by the structured `detail` payload on an output; the math inside each
+// step still goes through KaTeX, everything around it is plain DOM.
+
+function odeChip(text, { muted = false, strong = false } = {}) {
+  const chip = document.createElement("span");
+  chip.className = "ode-chip" + (muted ? " muted" : "") + (strong ? " is-default" : "");
+  chip.textContent = text;
+  return chip;
+}
+
+function odeChipMath(prefix, tex) {
+  const chip = document.createElement("span");
+  chip.className = "ode-chip";
+  chip.appendChild(document.createTextNode(prefix));
+  const math = document.createElement("span");
+  try {
+    katex.render(tex, math, { displayMode: false, macros: KATEX_MACROS, throwOnError: true });
+  } catch (e) {
+    math.textContent = tex;
+  }
+  chip.appendChild(math);
+  return chip;
+}
+
+function renderOdeDetail(detail) {
+  if (detail.type === "ode_classification") {
+    const wrap = document.createElement("div");
+    wrap.className = "ode-badges";
+    wrap.append(
+      odeChip(detail.kind),
+      odeChip(`order ${detail.order}`),
+      odeChip(detail.linear ? "linear" : "nonlinear"),
+      odeChip(detail.homogeneous ? "homogeneous" : "non-homogeneous"),
+    );
+    return wrap;
+  }
+
+  if (detail.type === "ode_boundary") {
+    const wrap = document.createElement("div");
+    wrap.className = "ode-badges";
+    wrap.append(
+      detail.boundary
+        ? odeChipMath("", detail.boundary)
+        : odeChip("no boundary condition", { muted: true }),
+    );
+    return wrap;
+  }
+
+  if (detail.type === "ode_methods") {
+    const wrap = document.createElement("div");
+    wrap.className = "ode-badges";
+    if (!detail.available || detail.available.length === 0) {
+      wrap.append(odeChip(detail.default || "no symbolic method", { muted: true }));
+    } else {
+      for (const method of detail.available) {
+        wrap.append(odeChip(method, { strong: method === detail.default }));
+      }
+    }
+    return wrap;
+  }
+
+  if (detail.type === "ode_steps") {
+    const list = document.createElement("ol");
+    list.className = "ode-steps";
+    detail.steps.forEach((step, index) => {
+      const item = document.createElement("li");
+      item.className = "ode-step";
+      const num = document.createElement("span");
+      num.className = "ode-step-num";
+      num.textContent = String(index + 1);
+      const body = document.createElement("div");
+      body.className = "ode-step-body";
+      const label = document.createElement("div");
+      label.className = "ode-step-label";
+      label.textContent = step.label;
+      const math = document.createElement("div");
+      math.className = "ode-step-math";
+      try {
+        katex.render(step.latex, math, { displayMode: true, macros: KATEX_MACROS, throwOnError: true });
+      } catch (e) {
+        math.textContent = step.latex;
+      }
+      body.append(label, math);
+      item.append(num, body);
+      list.append(item);
+    });
+    return list;
+  }
+
+  const fallback = document.createElement("div");
+  fallback.className = "math";
+  return fallback;
+}
 
 function renderViewSourceBlock(group) {
   const wrapper = document.createElement("div");
   wrapper.className = "block tens-source-preview";
   wrapper.dataset.sourceBlockId = String(group.region.blockId);
   wrapper.dataset.sourceLine = String(group.region.sourceLine);
-  makeBlockJump(wrapper, group.region.sourceLine);
 
   const sourcePane = document.createElement("div");
   sourcePane.className = "tens-source-pane";
@@ -2160,7 +2313,7 @@ function countOutputCalls(source) {
     .reduce(
       (count, line) =>
         count +
-        (line.replace(/#.*/, "").match(/\.(?:show|classify|solve|plot)\s*\(/g)?.length ?? 0),
+        (line.replace(/#.*/, "").match(/\.(?:show|solve|plot)\s*\(/g)?.length ?? 0),
       0,
     );
 }
@@ -2846,46 +2999,6 @@ function syncOutputToEditor() {
   });
 }
 
-function syncEditorToOutput() {
-  if (isScrollSyncSuppressed()) return;
-  if (scrollSyncSource === "editor") return;
-  cancelAnimationFrame(scrollSyncFrame);
-  scrollSyncFrame = requestAnimationFrame(() => {
-    const anchor = previewAnchor();
-    if (!anchor) return;
-    const block = blockForId(anchor.blockId);
-    if (!block || !editorView) return;
-    const lineSpan = Math.max(1, block.sourceEndLine - block.sourceLine + 1);
-    const lineNo = Math.max(
-      1,
-      Math.min(
-        editorView.state.doc.lines,
-        Math.round(block.sourceLine + anchor.progress * lineSpan),
-      ),
-    );
-    const pos = editorView.state.doc.line(lineNo).from;
-    const lineBlock = editorView.lineBlockAt(pos);
-    const scroller = editorView.scrollDOM;
-    const target = lineBlock.top - scroller.clientHeight * SCROLL_SYNC_ANCHOR;
-    withScrollSyncSource("output", () => {
-      scroller.scrollTo({
-        top: clampScrollTop(scroller, target),
-        behavior: "auto",
-      });
-    });
-  });
-}
-
-function makeBlockJump(el, line) {
-  if (line) el.dataset.line = String(line);
-  el.title = `Click to jump to source`;
-  el.addEventListener("click", (e) => {
-    if (e.target.closest("button")) return;
-    const targetLine = Number(e.target.closest("[data-source-line]")?.dataset.sourceLine ?? line);
-    jumpToSourceLine(targetLine, { focus: true, behavior: "auto", sync: false });
-  });
-}
-
 // ---- menus/events ----------------------------------------------------------
 
 function toggleExportMenu() {
@@ -2927,7 +3040,6 @@ tableMenu.addEventListener("click", (e) => {
 });
 document.getElementById("table-insert").addEventListener("click", insertTableIntoMarkdown);
 
-output.addEventListener("scroll", syncEditorToOutput);
 window.addEventListener("resize", resizeAllTextareas);
 window.addEventListener("beforeunload", (e) => {
   if (!isDirty) return;
