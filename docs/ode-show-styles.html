@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TensorForge · ODE output style options</title>
+<link rel="stylesheet" href="/ui/vendor/katex/katex.min.css" />
+<script src="/ui/vendor/katex/katex.min.js"></script>
+<style>
+  :root, html[data-theme="dark"] {
+    --bg: #2a2521; --panel: #332e28; --panel-2: #2c2722; --border: #464037;
+    --text: #ece6da; --muted: #a59c8c; --accent: #93b6df; --tens-frame: #93b6df;
+    --error: #e8867a; --shadow: 0 1px 3px rgba(0,0,0,0.35);
+    --serif: ui-serif, Georgia, Charter, "Times New Roman", "Songti SC", serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f1ea; --panel: #fffdf8; --panel-2: #ece8dd; --border: #e0dccf;
+    --text: #2b2924; --muted: #8c887d; --accent: #355e8a; --tens-frame: #355e8a;
+    --error: #b0432e; --shadow: 0 1px 3px rgba(60,50,30,0.10);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; padding: 26px 22px 64px; }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
+  .toolbar button { font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  .toolbar button:hover { border-color: var(--accent); background: var(--panel-2); }
+  .toolbar .hint { color: var(--muted); font-size: 12.5px; }
+  h2.vt { font: 600 12px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin: 36px 0 4px; }
+  .vd { color: var(--muted); font-size: 13px; margin: 0 0 16px; max-width: 80ch; }
+  .vd b { color: var(--text); font-weight: 600; }
+
+  /* a faux preview pane so styles sit on the real output background */
+  .screen { background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px; }
+
+  /* output header line, shared (mimics the app's [name] + copy latex) */
+  .oh { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
+  .oh .tag { font: italic 13px var(--serif); color: var(--muted); }
+  .oh .copy { font: 11px/1 var(--mono); color: var(--muted); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; }
+  .katex { font-size: 1.12em; }
+  .katex-display { margin: 0; }
+
+  /* ===== Style A — quiet math ===== */
+  .sa .out + .out { margin-top: 22px; }
+  .sa .sub { font-family: var(--serif); font-size: 13.5px; color: var(--muted); margin-top: 7px; }
+  .sa .desc { font-family: var(--serif); font-size: 14px; color: var(--text); margin-top: 8px;
+    letter-spacing: 0.01em; }
+  .sa .desc .sep { color: var(--muted); margin: 0 0.5em; }
+  .sa .desc .k { font-variant: small-caps; letter-spacing: 0.03em; }
+  .sa .method { font-family: var(--serif); font-size: 13.5px; color: var(--muted); margin-top: 6px; }
+  .sa .steps .katex-display { text-align: left; }
+
+  /* ===== Style B — badges + steps ===== */
+  .sb .out + .out { margin-top: 24px; }
+  .sb .probbox { border-left: 3px solid var(--tens-frame);
+    background: color-mix(in srgb, var(--tens-frame) 6%, var(--panel));
+    border-radius: 0 8px 8px 0; padding: 13px 16px; }
+  .eyebrow { font: 10.5px/1.3 var(--mono); text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--muted); margin: 0 0 7px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font: 12px/1 var(--mono);
+    padding: 6px 11px; border-radius: 999px; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 13%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--panel)); }
+  .chip.muted { color: var(--muted); background: var(--panel-2); border-color: var(--border); }
+  .chip .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+  .steps { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 15px; }
+  .step { display: grid; grid-template-columns: 24px 1fr; gap: 13px; align-items: start; }
+  .step .num { width: 24px; height: 24px; border-radius: 50%; text-align: center;
+    font: 600 11px/24px var(--mono); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--panel)); }
+  .step .lab { font: 10.5px/1.3 var(--mono); text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 3px 0 5px; }
+  .step .katex-display { text-align: left; }
+
+  /* ===== Style C — worksheet sections ===== */
+  .sc .sheet { border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+    box-shadow: var(--shadow); overflow: hidden; }
+  .sc .sec { padding: 15px 20px; display: grid; grid-template-columns: 96px 1fr; gap: 18px; align-items: start; }
+  .sc .sec + .sec { border-top: 1px solid var(--border); }
+  .sc .seclabel { font: 10.5px/2 var(--mono); text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); padding-top: 2px; }
+  .sc .seclabel.accent { color: var(--accent); }
+  .sc .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 18px; margin: 0; }
+  .sc .kv dt { font: 11.5px/1.7 var(--mono); text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+  .sc .kv dd { margin: 0; font-family: var(--serif); font-size: 14.5px; }
+  .sc .kv dd .no { color: var(--muted); }
+  .sc .method { font-family: var(--serif); font-size: 14.5px; }
+  .sc .method .badge { font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--panel));
+    border-radius: 5px; padding: 3px 7px; margin-left: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar">
+    <button id="toggle" type="button">Toggle light / dark</button>
+    <span class="hint">Three treatments of the same ODE outputs. Math is the real rendered LaTeX.</span>
+  </div>
+
+  <!-- ============ Style A ============ -->
+  <h2 class="vt">Style A — quiet math</h2>
+  <p class="vd">Closest to today, just cleaned up. Everything stays typographic: the equation leads,
+    and the classification / boundary / method are <b>quiet serif lines</b> beneath it — no boxes,
+    no color. Calm and paper-like.</p>
+  <div class="screen sa">
+    <div class="out">
+      <div class="oh"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
+      <div data-tex="{x}^{2} \, \frac{d y}{d x} + 2 \, y = 5 \, x" data-display></div>
+      <div class="sub">no explicit boundary condition</div>
+    </div>
+    <div class="out">
+      <div class="oh"><span class="tag">[linear_problem.show(classification)]</span><span class="copy">copy latex</span></div>
+      <div data-tex="{x}^{2} \, \frac{d y}{d x} + 2 \, y = 5 \, x" data-display></div>
+      <div class="desc"><span class="k">ODE</span><span class="sep">·</span>order 1<span class="sep">·</span>linear<span class="sep">·</span>non&#8209;homogeneous</div>
+      <div class="method">solver · linear integrating factor</div>
+    </div>
+    <div class="out">
+      <div class="oh"><span class="tag">[linear_problem.solve(details=true)]</span><span class="copy">copy latex</span></div>
+      <div class="steps" data-tex="\begin{gathered}\begin{aligned}&amp;\frac{d y}{d x} + \frac{2}{{x}^{2}} \, y = 5 \, {x}^{-1}\\[3pt]&amp;\mu = e^{-2 \, {x}^{-1}}\\[3pt]&amp;\frac{d}{d x}\left(\mu\, y\right)=\mu\, 5 \, {x}^{-1}\\[3pt]&amp;\mu\, y=\int \mu\, 5 \, {x}^{-1}\, dx+C_1\\[3pt]&amp;y = \frac{5 \, \int e^{-2 \, {x}^{-1}} \, {x}^{-1} \, dx + C_1}{e^{-2 \, {x}^{-1}}}\end{aligned}\end{gathered}" data-display></div>
+    </div>
+  </div>
+
+  <!-- ============ Style B ============ -->
+  <h2 class="vt">Style B — badges &amp; steps</h2>
+  <p class="vd">The semantic metadata becomes <b>pill badges</b> (kind, order, linearity, homogeneity,
+    boundary, method) so the type of problem reads at a glance, and <code>solve(details)</code> turns
+    into a <b>numbered step list</b> with a short label on each line. Most scannable.</p>
+  <div class="screen sb">
+    <div class="out">
+      <div class="oh"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
+      <div class="probbox">
+        <p class="eyebrow">problem</p>
+        <div data-tex="{x}^{2} \, \frac{d y}{d x} + 2 \, y = 5 \, x" data-display></div>
+      </div>
+    </div>
+    <div class="out">
+      <div class="oh"><span class="tag">[linear_problem.show(classification)]</span><span class="copy">copy latex</span></div>
+      <div class="chips">
+        <span class="chip"><span class="dot"></span>ODE</span>
+        <span class="chip">order 1</span>
+        <span class="chip">linear</span>
+        <span class="chip">non-homogeneous</span>
+        <span class="chip muted">no boundary condition</span>
+      </div>
+      <div class="chips" style="margin-top:9px">
+        <span class="chip">method · linear integrating factor</span>
+      </div>
+    </div>
+    <div class="out">
+      <div class="oh"><span class="tag">[linear_problem.solve(details=true)]</span><span class="copy">copy latex</span></div>
+      <ol class="steps">
+        <li class="step"><span class="num">1</span><div class="body"><div class="lab">normalize</div><div data-tex="\frac{d y}{d x} + \frac{2}{{x}^{2}} \, y = 5 \, {x}^{-1}" data-display></div></div></li>
+        <li class="step"><span class="num">2</span><div class="body"><div class="lab">integrating factor</div><div data-tex="\mu = e^{-2 \, {x}^{-1}}" data-display></div></div></li>
+        <li class="step"><span class="num">3</span><div class="body"><div class="lab">exact form</div><div data-tex="\frac{d}{d x}\left(\mu\, y\right)=\mu\, 5 \, {x}^{-1}" data-display></div></div></li>
+        <li class="step"><span class="num">4</span><div class="body"><div class="lab">integrate</div><div data-tex="\mu\, y=\int \mu\, 5 \, {x}^{-1}\, dx+C_1" data-display></div></div></li>
+        <li class="step"><span class="num">5</span><div class="body"><div class="lab">solve for y</div><div data-tex="y = \frac{5 \, \int e^{-2 \, {x}^{-1}} \, {x}^{-1} \, dx + C_1}{e^{-2 \, {x}^{-1}}}" data-display></div></div></li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ============ Style C ============ -->
+  <h2 class="vt">Style C — worksheet sections</h2>
+  <p class="vd">One framed card split into labeled sections — <b>problem / type / method / solution</b> —
+    like a solved-problem worksheet. The classification is a compact key–value table instead of badges.
+    Most document-like.</p>
+  <div class="screen sc">
+    <div class="sheet">
+      <div class="sec">
+        <div class="seclabel accent">problem</div>
+        <div>
+          <div data-tex="{x}^{2} \, \frac{d y}{d x} + 2 \, y = 5 \, x" data-display></div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="seclabel">type</div>
+        <dl class="kv">
+          <dt>kind</dt><dd>ordinary (ODE)</dd>
+          <dt>order</dt><dd>1</dd>
+          <dt>linearity</dt><dd>linear</dd>
+          <dt>homogeneity</dt><dd>non-homogeneous</dd>
+          <dt>boundary</dt><dd><span class="no">none given</span></dd>
+        </dl>
+      </div>
+      <div class="sec">
+        <div class="seclabel">method</div>
+        <div class="method">linear integrating factor<span class="badge">default</span></div>
+      </div>
+      <div class="sec">
+        <div class="seclabel accent">solution</div>
+        <div data-tex="y = \frac{5 \, \int e^{-2 \, {x}^{-1}} \, {x}^{-1} \, dx + C_1}{e^{-2 \, {x}^{-1}}}" data-display></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function renderAll() {
+    document.querySelectorAll('[data-tex]').forEach((el) => {
+      try {
+        katex.render(el.dataset.tex, el, {
+          displayMode: el.hasAttribute('data-display'),
+          throwOnError: false,
+          macros: { "\\bm": "\\boldsymbol{#1}" },
+        });
+      } catch (e) {}
+    });
+  }
+  if (window.katex) renderAll();
+  else window.addEventListener('load', renderAll);
+  document.getElementById('toggle').addEventListener('click', () => {
+    const el = document.documentElement;
+    el.dataset.theme = el.dataset.theme === 'light' ? 'dark' : 'light';
+  });
+</script>
+</body>
+</html>

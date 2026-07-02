@@ -35,6 +35,7 @@
     color: var(--muted); margin: 0 0 7px; }
   .src-code { margin: 0; font: 12px/1.7 var(--mono); color: var(--text);
     white-space: pre; overflow-x: auto; }
+  .src-code.wrap { white-space: pre-wrap; overflow-x: visible; overflow-wrap: anywhere; tab-size: 2; }
   .out-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
     margin: 0 0 6px; }
   .out-head .tag { font: italic 13px var(--serif); color: var(--muted); }
@@ -65,9 +66,9 @@
     box-shadow: var(--shadow); overflow: hidden; }
 
   /* ---- V1 content-fit ---- */
-  .v1 { display: grid; grid-template-columns: fit-content(60ch) minmax(0, 1fr); }
+  .v1 { display: grid; grid-template-columns: fit-content(64ch) minmax(280px, 1fr); }
   .v1 .src { padding: 14px 16px; border-right: 1px solid var(--border);
-    background: color-mix(in srgb, var(--tens-frame) 5%, var(--panel)); min-width: 0; overflow-x: auto; }
+    background: color-mix(in srgb, var(--tens-frame) 5%, var(--panel)); min-width: 0; }
   .v1 .prev { padding: 14px 18px; min-width: 0; }
 
   /* ---- V2 balanced + header bar ---- */
@@ -111,19 +112,18 @@ linear_problem.show()</pre>
       <div class="card">
         <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
         <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
-        <div class="tags">no explicit boundary condition</div>
       </div>
     </div>
   </div>
 
   <h2 class="vt">Option 1 — unified card · source auto-fits its content &nbsp;·&nbsp; recommended</h2>
-  <p class="vd">One bordered panel with a single divider. The source column is <b>sized to the longest
-    code line</b> (capped), and the preview automatically takes whatever width is left — so short code
-    gives the math more room, long code borrows it back. No fixed ratio to tune.</p>
+  <p class="vd">One bordered panel with a single divider. The source column is <b>sized to the code
+    content</b> up to a readable cap, then long lines wrap instead of forcing sideways scrolling. The
+    preview automatically takes whatever width is left.</p>
   <div class="unit v1">
     <div class="src">
       <p class="lbl">source</p>
-      <pre class="src-code">x = Var("x")
+      <pre class="src-code wrap">x = Var("x")
 f = Function("f", x)
 linear_example = Equation(x^2*Derivative(f, x) + 2*f, 5*x)
 linear_problem = ODE(linear_example, f, x)
@@ -135,7 +135,6 @@ linear_problem.show()</pre>
         <div>
           <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
           <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
-          <div class="tags">no explicit boundary condition</div>
         </div>
       </div>
     </div>
@@ -160,7 +159,6 @@ linear_problem.show()</pre>
         <div>
           <div class="out-head"><span class="tag">[linear_problem.show()]</span><span class="copy">copy latex</span></div>
           <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
-          <div class="tags">no explicit boundary condition</div>
         </div>
       </div>
     </div>
@@ -181,7 +179,7 @@ linear_example =
 linear_problem =
   ODE(linear_example, f, x)
 linear_problem.show()
-linear_problem.classify()</pre>
+linear_problem.show(classification)</pre>
     </div>
     <div class="prev">
       <div>
@@ -189,9 +187,8 @@ linear_problem.classify()</pre>
         <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
       </div>
       <div>
-        <div class="out-head"><span class="tag">[linear_problem.classify()]</span><span class="copy">copy latex</span></div>
-        <div class="eq"><i>x</i><sup>2</sup><span class="frac"><span class="n">d<i>f</i></span><span class="d">d<i>x</i></span></span>+ 2<i>f</i> = 5<i>x</i></div>
-        <div class="tags"><b>DE</b> &nbsp; order 1 &nbsp; linear &nbsp; non-homogeneous<br>no explicit boundary condition</div>
+        <div class="out-head"><span class="tag">[linear_problem.show(classification)]</span><span class="copy">copy latex</span></div>
+        <div class="tags"><b>ODE</b> &nbsp; order 1 &nbsp; linear &nbsp; non-homogeneous</div>
       </div>
     </div>
   </div>
