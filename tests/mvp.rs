@@ -481,7 +481,7 @@ fn start_example_runs_end_to_end() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/start.tens"))
         .unwrap();
     let (outputs, interp) = run_source_with_env(&src).unwrap();
-    assert_eq!(outputs.len(), 42);
+    assert_eq!(outputs.len(), 48);
     assert!(outputs.iter().all(|o| o.error.is_none()));
 
     // The tour demonstrates side-by-side rows, component reads, and

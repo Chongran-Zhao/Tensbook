@@ -22,7 +22,9 @@ the very end, as one worked application.
 | Algebraic and tensor simplification | 7 |
 | Indexed sets, sums, and user functions | 8 |
 | Spectral decomposition and eigenpairs | 9 |
-| A worked application: hyperelasticity | 10 |
+| Differential equations: classify, methods, solve | 10 |
+| Plotting functions and ODE solutions | 11 |
+| A worked application: hyperelasticity | 12 |
 
 You can mix prose and math freely. Inline and display math use LaTeX:
 
@@ -224,7 +226,42 @@ E = VectorSet("\bm E", dim=3)
 [nu[1].show(), nu[2].show(), nu[3].show()]
 <!-- /tensorforge:tens -->
 
-## 10. A worked application: hyperelasticity
+## 10. Differential equations
+
+`Function` declares an unknown function of a `Var`. `Equation` plus `ODE` pose
+an initial-value problem, and `BoundaryCondition` pins the integration
+constant. `show(classification)` and `show(methods)` describe the problem
+before you solve it.
+
+<!-- tensorforge:tens -->
+u = Function("u", x)
+ivp = ODE(Equation(Derivative(u, x), x), u, x, BoundaryCondition(u(0), 0))
+
+ivp.show()
+ivp.show(classification)
+ivp.show(methods)
+<!-- /tensorforge:tens -->
+
+`solve()` returns the closed-form solution as an object you can keep using —
+`solve(details=true)` would print the full derivation instead.
+
+<!-- tensorforge:tens -->
+usol = ivp.solve()
+usol.show()
+<!-- /tensorforge:tens -->
+
+## 11. Plotting
+
+`.plot(from, to)` samples any single-variable expression and draws it in the
+preview — `pi` and `e` are built in, a list overlays several curves, and a
+solved ODE plots directly. Gaps and asymptotes are handled automatically.
+
+<!-- tensorforge:tens -->
+[sin(x), cos(x)].plot(-pi, pi)
+usol.plot(0, 2)
+<!-- /tensorforge:tens -->
+
+## 12. A worked application: hyperelasticity
 
 Everything above combines into real derivations. Here is the isochoric
 neo-Hookean second Piola–Kirchhoff stress and its fourth-order material
