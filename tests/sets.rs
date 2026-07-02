@@ -274,7 +274,7 @@ fn manual_spectral_q_supports_hencky_and_polynomial_scales() {
         outputs[0].latex
     );
     assert!(
-        outputs[1].latex.contains("2 \\, {\\lambda}_{a}"),
+        outputs[1].latex.contains("2 \\,") && !outputs[1].latex.contains("{\\lambda}_{a}"),
         "got: {}",
         outputs[1].latex
     );

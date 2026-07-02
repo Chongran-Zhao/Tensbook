@@ -8,7 +8,7 @@ to be read like lecture notes and run like a regression example.
 | `Equation(lhs, rhs)` | Sections 4-9 |
 | `ODE(eq, y, x, BoundaryCondition(...))` | Sections 4-9 |
 | `Integrate(expr, x)` and `Integral(expr, x)` | Section 3 |
-| `ode.classify()` | Section 4 |
+| `ode.show(classification)` | Section 4 |
 | `ode.solve(details=true)` | Sections 5-9 |
 | `BoundaryCondition(y(x0), y0)` | Sections 5 and 8 |
 | multi-variable `Function` and partial derivatives | Sections 2 and 4 |
@@ -90,9 +90,10 @@ I_formal = Integral(exp(-2/x)/x, x)
 ## 4. ODE/PDE classification
 
 `Equation(lhs, rhs)` stores a scalar equation. `ODE(eq, y, x)` turns that
-equation into a differential-equation problem. `ode.classify()` checks whether
-the target is an ODE or PDE, finds the highest derivative order, detects
-linearity and homogeneity, and records first-order subtypes when available.
+equation into a differential-equation problem. `ode.show(classification)` checks whether
+the target is an ODE or PDE, finds the highest derivative order, and detects
+linearity and homogeneity. `ode.show(methods)` lists supported first-order
+solver methods when available.
 
 <!-- tensorforge:tens -->
 linear_eq = Equation(Derivative(y, x) + sin(x), 0)
@@ -104,9 +105,10 @@ second_problem = ODE(second_eq, y, x)
 pde_problem = ODE(pde_eq, u, x)
 
 linear_eq.show()
-linear_problem.classify()
-second_problem.classify()
-pde_problem.classify()
+linear_problem.show(classification)
+linear_problem.show(methods)
+second_problem.show(classification)
+pde_problem.show(classification)
 <!-- /tensorforge:tens -->
 
 ## 5. First-order linear ODE with integrating factor and a boundary condition

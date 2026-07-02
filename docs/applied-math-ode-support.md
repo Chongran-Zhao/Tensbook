@@ -18,10 +18,14 @@ The runnable notebook example is `examples/applied-math-ode.tens`.
 | `BoundaryCondition(y(x0), y0)` | Declares a boundary/initial condition for supported solvers. |
 | `ODE(eq, y, x)` | Builds an ODE/PDE problem object from an equation, target function, and independent variable. |
 | `ODE(eq, y, x, BoundaryCondition(...))` | Builds the same problem with one supported boundary condition. |
-| `ode.show()` | Outputs the equation and either the boundary condition or `no explicit boundary condition`. |
-| `ode.classify()` | Outputs ODE/PDE kind, order, linearity, homogeneity, subtype, and reasons. |
+| `ode.show()` / `ode.show(equation)` | Outputs the equation. |
+| `ode.show(boundary)` | Outputs the boundary condition or `no explicit boundary condition`. |
+| `ode.show(classification)` | Outputs ODE/PDE kind, order, linearity, and homogeneity. |
+| `ode.show(methods)` | Outputs available symbolic solver methods and the default solve path. |
 | `ode.solve()` | Outputs the final solution or an unsupported diagnostic. |
 | `ode.solve(details=true)` | Outputs worked solution steps, warnings, and the final solution. |
+| `ode.solve(method=auto)` | Uses the same default solver path as `ode.solve()`. |
+| `ode.solve(method=linear\|separable\|exact)` | Requests a specific solver path and returns a clear diagnostic if unavailable. |
 | `Integrate(expr, x)` | Applies conservative rule-based indefinite integration. |
 | `Integral(expr, x)` | Builds an unevaluated formal integral. |
 
@@ -33,7 +37,7 @@ ClassifyODE(eq, y, x)
 SolveODE(eq, y, x, ic=...)
 ```
 
-Use `BoundaryCondition(...)` and `ODE(...).classify()` / `ODE(...).solve(...)`
+Use `BoundaryCondition(...)`, `ODE(...).show(classification)`, and `ODE(...).solve(...)`
 instead.
 
 ## Formal Derivatives
@@ -65,17 +69,18 @@ is rejected because explicit expressions should use `Diff(x^2, x)`.
 
 ## Classification
 
-`ode.classify()` inspects the target unknown function and outputs:
+`ode.show(classification)` inspects the target unknown function and outputs:
 
 - `ODE` vs `PDE`
 - highest derivative order
 - linear vs nonlinear
-- homogeneous vs non-homogeneous for linear equations
-- supported first-order subtypes:
-  - `linear`
-  - `separable`
-  - `exact`
-- short reason rows
+- homogeneous vs non-homogeneous by the zero-function test
+
+Use `ode.show(methods)` for supported first-order solver methods:
+
+- `linear`
+- `separable`
+- `exact`
 
 Example:
 
@@ -86,12 +91,25 @@ y = Function("y", x)
 eq = Equation(Derivative(y, x) + sin(x), 0)
 ode = ODE(eq, y, x)
 
-ode.classify()
+ode.show(classification)
 ```
 
 ## Solvers
 
 `ode.solve()` currently solves supported first-order ODEs only.
+
+When multiple methods apply, `ode.solve()` uses the same default path shown by
+`ode.show(methods)`. You can request a method explicitly:
+
+```text
+ode.solve(method=auto)
+ode.solve(method=linear)
+ode.solve(method=separable, details=true)
+ode.solve(method=exact, details=true)
+```
+
+If the requested method is not available, TensorForge returns a diagnostic such
+as `requested method exact is not available` and lists available methods.
 
 ### First-Order Linear
 
@@ -138,7 +156,10 @@ Example:
 
 ```text
 eq = Equation(3*y^2*Derivative(y, x), cos(x))
-ODE(eq, y, x).solve()
+ode = ODE(eq, y, x)
+
+ode.solve(method=separable, details=true)
+ode.solve(method=separable)
 ```
 
 This produces an implicit solution equivalent to:
@@ -168,7 +189,7 @@ Example:
 ```text
 eq = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
 ode = ODE(eq, y, x, BoundaryCondition(y(1), 2))
-ode.solve(details=true)
+ode.solve(method=exact, details=true)
 ```
 
 The tested solution includes the potential:

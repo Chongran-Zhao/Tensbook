@@ -12,7 +12,10 @@ use crate::metadata::{
     display_capabilities_for_kind, display_capability_for_kind, tensor_characteristic, value_kind,
     DisplayCapabilityState, SymbolInfo, ValueKind,
 };
-use crate::ode::{BoundaryCondition, Equation, OdeClassification, OdeProblem, OdeSolution};
+use crate::ode::{
+    BoundaryCondition, Equation, OdeClassification, OdeProblem, OdeSolution, SolveConfig,
+    SolveMethod,
+};
 use crate::renderer::components::{tensor_to_block_component_matrix, tensor_to_component_matrix};
 use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
 use crate::simplifier::{simplify_scalar, simplify_tensor, RuleSet};
@@ -34,8 +37,28 @@ pub enum Value {
     OdeSolution(Rc<OdeSolution>),
 }
 
+/// Structured payload for outputs the UI renders as chrome (badges, numbered
+/// step lists) instead of one opaque LaTeX blob. Only ODE results use this
+/// today; `Output::latex` is always populated too, as the fallback and for
+/// copy-latex / export / the CLI.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputDetail {
+    OdeClassification {
+        kind: String,
+        order: usize,
+        linear: bool,
+        homogeneous: bool,
+    },
+    OdeBoundary {
+        boundary: Option<String>,
+    },
+    OdeMethods {
+        available: Vec<String>,
+        default: String,
+    },
+    OdeSteps {
+        steps: Vec<crate::ode::OdeStep>,
+    },
     Plot(PlotData),
 }
 
@@ -66,8 +89,14 @@ pub struct Output {
     pub error: Option<String>,
     /// Outputs sharing the same row id are rendered side by side in the UI.
     pub row: Option<usize>,
-    /// Structured UI payload, `None` for plain math.
+    /// Structured chrome payload (ODE badges / steps), `None` for plain math.
     pub detail: Option<OutputDetail>,
+}
+
+#[derive(Debug, Clone)]
+struct SolveOptions {
+    details: bool,
+    config: SolveConfig,
 }
 
 #[derive(Default)]
@@ -305,7 +334,7 @@ impl Interpreter {
                 },
                 line,
                 _block,
-            ) if method == "classify" || method == "solve" => {
+            ) if method == "solve" => {
                 self.exec_ode_method_output(target, method, args, kwargs, *line)
             }
             Stmt::OutputRow { exprs, line, block } => self.exec_output_row(exprs, *line, *block),
@@ -945,7 +974,7 @@ impl Interpreter {
                 "`IC(...)` was renamed; use `BoundaryCondition(y(x0), y0)`",
             )),
             "ClassifyODE" => Err(Error::msg(
-                "`ClassifyODE(eq, y, x)` was removed; use `ODE(eq, y, x).classify()`",
+                "`ClassifyODE(eq, y, x)` was removed; use `ODE(eq, y, x).show(classification)`",
             )),
             "SolveODE" => Err(Error::msg(
                 "`SolveODE(eq, y, x, ic=...)` was removed; use \
@@ -1100,21 +1129,35 @@ impl Interpreter {
         args: &[Expr],
         kwargs: &[(String, Expr)],
     ) -> Result<Value, Error> {
-        if args.len() != 2 || !kwargs.is_empty() {
+        if !(args.len() == 2 || args.len() == 3) || !kwargs.is_empty() {
             return Err(Error::msg(
-                "`BoundaryCondition` expects two arguments: BoundaryCondition(y(x0), y0)",
+                "`BoundaryCondition` expects BoundaryCondition(y(x0), y0) or BoundaryCondition(Derivative(y, x), x0, y0)",
             ));
         }
         let function = self.expect_scalar_value(&args[0], "BoundaryCondition")?;
-        let point = match &*function {
-            ScalarExpr::UnknownFunc { args, .. } if args.len() == 1 => args[0].clone(),
-            _ => {
-                return Err(Error::msg(
-                    "`BoundaryCondition` first argument must be a function value such as y(1)",
-                ))
-            }
+        let (function, point, value) = if args.len() == 2 {
+            let point =
+                match &*function {
+                    ScalarExpr::UnknownFunc { args, .. } if args.len() == 1 => args[0].clone(),
+                    _ => return Err(Error::msg(
+                        "`BoundaryCondition` first argument must be a function value such as y(1)",
+                    )),
+                };
+            let value = self.expect_scalar_value(&args[1], "BoundaryCondition")?;
+            (function, point, value)
+        } else {
+            let point = self.expect_scalar_value(&args[1], "BoundaryCondition")?;
+            let value = self.expect_scalar_value(&args[2], "BoundaryCondition")?;
+            match &*function {
+                ScalarExpr::UnknownFunc { .. } => {}
+                _ => {
+                    return Err(Error::msg(
+                        "`BoundaryCondition` first argument must be y(x0) or Derivative(y, x)",
+                    ))
+                }
+            };
+            (function, point, value)
         };
-        let value = self.expect_scalar_value(&args[1], "BoundaryCondition")?;
         Ok(Value::BoundaryCondition(Rc::new(BoundaryCondition {
             function,
             point,
@@ -1123,9 +1166,9 @@ impl Interpreter {
     }
 
     fn builtin_ode(&mut self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<Value, Error> {
-        if args.len() < 3 || args.len() > 4 || !kwargs.is_empty() {
+        if args.len() < 3 || !kwargs.is_empty() {
             return Err(Error::msg(
-                "`ODE` expects ODE(eq, y, x) or ODE(eq, y, x, BoundaryCondition(...))",
+                "`ODE` expects ODE(eq, y, x) or ODE(eq, y, x, BoundaryCondition(...), ...)",
             ));
         }
         let eq = match self.eval(&args[0])? {
@@ -1139,24 +1182,23 @@ impl Interpreter {
         };
         let target = self.expect_scalar_value(&args[1], "ODE")?;
         let independent = self.expect_scalar_value(&args[2], "ODE")?;
-        let boundary_condition = if let Some(arg) = args.get(3) {
+        let mut boundary_conditions = Vec::new();
+        for arg in args.iter().skip(3) {
             match self.eval(arg)? {
-                Value::BoundaryCondition(v) => Some((*v).clone()),
+                Value::BoundaryCondition(v) => boundary_conditions.push((*v).clone()),
                 other => {
                     return Err(Error::msg(format!(
-                        "`ODE` fourth argument expects BoundaryCondition(...), got {}",
+                        "`ODE` boundary arguments expect BoundaryCondition(...), got {}",
                         kind(&other)
                     )))
                 }
             }
-        } else {
-            None
-        };
+        }
         Ok(Value::OdeProblem(Rc::new(crate::ode::problem(
             (*eq).clone(),
             target,
             independent,
-            boundary_condition,
+            boundary_conditions,
         ))))
     }
 
@@ -1177,35 +1219,44 @@ impl Interpreter {
             }
         };
         match method {
-            "classify" => {
-                if !args.is_empty() || !kwargs.is_empty() {
-                    return Err(Error::msg("`ODE.classify()` does not take arguments"));
-                }
-                Ok(Value::OdeClassification(Rc::new(
-                    crate::ode::classify_problem(&problem)?,
-                )))
-            }
+            "classify" => Err(Error::msg(
+                "`ODE.classify()` was removed; use `ODE.show(classification)`",
+            )),
             "solve" => {
-                self.solve_details_arg(args, kwargs)?;
-                Ok(Value::OdeSolution(Rc::new(crate::ode::solve_problem(
-                    &problem,
-                )?)))
+                let options = self.solve_options(args, kwargs)?;
+                Ok(Value::OdeSolution(Rc::new(
+                    crate::ode::solve_problem_with_config(&problem, options.config)?,
+                )))
             }
             _ => Err(Error::msg(format!("unknown ODE method `.{method}(...)`"))),
         }
     }
 
-    fn solve_details_arg(&self, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<bool, Error> {
+    fn solve_options(
+        &mut self,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<SolveOptions, Error> {
         if !args.is_empty() {
             return Err(Error::msg(
-                "`ODE.solve(...)` takes only the optional keyword `details=true`",
+                "`ODE.solve(...)` takes only optional keywords such as `details=true`, `method=separable`, `about=0`, or `terms=6`",
             ));
         }
         let mut details = false;
+        let mut config = SolveConfig::default();
         for (key, value) in kwargs {
             match key.as_str() {
                 "details" => {
                     details = expect_bool(value, "details")?;
+                }
+                "method" => {
+                    config.method = expect_solve_method(value)?;
+                }
+                "about" => {
+                    config.about = Some(self.expect_scalar_value(value, "about")?);
+                }
+                "terms" => {
+                    config.terms = expect_usize(value, "terms")?;
                 }
                 other => {
                     return Err(Error::msg(format!(
@@ -1214,7 +1265,7 @@ impl Interpreter {
                 }
             }
         }
-        Ok(details)
+        Ok(SolveOptions { details, config })
     }
 
     fn exec_ode_method_output(
@@ -1236,22 +1287,24 @@ impl Interpreter {
                 )))
             }
         };
-        let latex = match method {
+        let (latex, detail) = match method {
             "classify" => {
-                if !args.is_empty() || !kwargs.is_empty() {
-                    return Err(Error::msg("`ODE.classify()` does not take arguments"));
-                }
-                let class = crate::ode::classify_problem(&problem)?;
-                crate::ode::render_classification(&class, "details")
+                return Err(Error::msg(
+                    "`ODE.classify()` was removed; use `ODE.show(classification)`",
+                ))
             }
             "solve" => {
-                let details = self.solve_details_arg(args, kwargs)?;
-                let solution = crate::ode::solve_problem(&problem)?;
-                if details {
+                let options = self.solve_options(args, kwargs)?;
+                let solution = crate::ode::solve_problem_with_config(&problem, options.config)?;
+                if options.details {
                     let class = crate::ode::classify_problem(&problem)?;
-                    crate::ode::render_solution_details(&solution, &class)
+                    let latex = crate::ode::render_solution_details(&solution, &class);
+                    let detail = OutputDetail::OdeSteps {
+                        steps: crate::ode::solution_steps(&solution),
+                    };
+                    (latex, Some(detail))
                 } else {
-                    crate::ode::render_solution(&solution, "solution")
+                    (crate::ode::render_solution(&solution, "solution"), None)
                 }
             }
             _ => return Err(Error::msg(format!("unknown ODE method `.{method}(...)`"))),
@@ -1262,7 +1315,7 @@ impl Interpreter {
             line,
             error: None,
             row: None,
-            detail: None,
+            detail,
         });
         Ok(())
     }
@@ -2137,13 +2190,14 @@ impl Interpreter {
         };
 
         let latex = self.render_display(&value, subject.lhs.as_deref(), &mode)?;
+        let detail = ode_show_detail(&value, &mode);
         self.outputs.push(Output {
             header: show_header(&subject.header, &mode, args.is_empty()),
             latex,
             line,
             error: None,
             row,
-            detail: None,
+            detail,
         });
         Ok(())
     }
@@ -2585,7 +2639,10 @@ impl Interpreter {
             (Value::Tensor(t), "block_components") => {
                 Ok(format!("{lhs}{}", tensor_to_block_component_matrix(t)?))
             }
-            (Value::OdeProblem(problem), "symbol") => Ok(crate::ode::render_problem(problem)),
+            (
+                Value::OdeProblem(problem),
+                "symbol" | "equation" | "boundary" | "classification" | "methods",
+            ) => crate::ode::render_problem(problem, mode),
             (Value::Tensor(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
             (Value::Scalar(_), other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
             (_, other) => Err(Error::msg(format!("unknown display mode `{other}`"))),
@@ -2681,6 +2738,35 @@ fn render_set_decl(set: &SetDecl) -> String {
     format!("{{{}}}_{{a}}\\quad \\text{{with }} a={values}", set.latex)
 }
 
+/// Structured ODE payload for `show(classification)` / `show(methods)`, so the
+/// UI can render badges instead of the LaTeX `array`. `None` for everything
+/// else (plain math).
+fn ode_show_detail(value: &Value, mode: &str) -> Option<OutputDetail> {
+    let Value::OdeProblem(problem) = value else {
+        return None;
+    };
+    match mode {
+        "classification" => crate::ode::classification_info(problem).ok().map(|info| {
+            OutputDetail::OdeClassification {
+                kind: info.kind,
+                order: info.order,
+                linear: info.linear,
+                homogeneous: info.homogeneous,
+            }
+        }),
+        "boundary" => Some(OutputDetail::OdeBoundary {
+            boundary: crate::ode::boundary_info(problem),
+        }),
+        "methods" => crate::ode::methods_info(problem)
+            .ok()
+            .map(|info| OutputDetail::OdeMethods {
+                available: info.available,
+                default: info.default,
+            }),
+        _ => None,
+    }
+}
+
 fn show_mode(args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, Error> {
     if !kwargs.is_empty() {
         return Err(Error::msg(
@@ -2691,10 +2777,10 @@ fn show_mode(args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, Error> 
         [] => Ok("symbol".to_string()),
         [Expr::Ident(mode)] | [Expr::Str(mode)] => Ok(mode.clone()),
         [_] => Err(Error::msg(
-            "`.show(...)` mode must be a bare identifier such as `matrix`",
+            "`.show(...)` mode must be a bare identifier such as `matrix` or `classification`",
         )),
         _ => Err(Error::msg(
-            "`.show(...)` takes at most one mode: symbol, components, matrix, or block_components",
+            "`.show(...)` takes at most one mode, such as `symbol`, `matrix`, `classification`, or `methods`",
         )),
     }
 }
@@ -2716,12 +2802,23 @@ fn ode_method_header(
     if args.is_empty() && kwargs.is_empty() {
         return format!("{subject}.{method}()");
     }
-    if method == "solve" && args.is_empty() && kwargs.len() == 1 {
-        let (key, value) = &kwargs[0];
-        if key == "details" {
-            if let Expr::Bool(value) = value {
-                return format!("{subject}.solve(details={value})");
+    if method == "solve" && args.is_empty() {
+        let mut parts = Vec::new();
+        for (key, value) in kwargs {
+            match (key.as_str(), value) {
+                ("details", Expr::Bool(value)) => parts.push(format!("details={value}")),
+                ("method", Expr::Ident(name) | Expr::Str(name)) => {
+                    parts.push(format!("method={name}"))
+                }
+                ("about", Expr::Num(value)) => parts.push(format!("about={value}")),
+                ("terms", Expr::Num(value)) if value.fract() == 0.0 => {
+                    parts.push(format!("terms={}", *value as usize))
+                }
+                _ => return format!("{subject}.{method}(...)"),
             }
+        }
+        if !parts.is_empty() {
+            return format!("{subject}.solve({})", parts.join(", "));
         }
     }
     format!("{subject}.{method}(...)")
@@ -3072,4 +3169,20 @@ fn expect_bool(expr: &Expr, what: &str) -> Result<bool, Error> {
         Expr::Bool(b) => Ok(*b),
         _ => Err(Error::msg(format!("`{what}` must be true or false"))),
     }
+}
+
+fn expect_solve_method(expr: &Expr) -> Result<SolveMethod, Error> {
+    let name = match expr {
+        Expr::Ident(name) | Expr::Str(name) => name.as_str(),
+        _ => {
+            return Err(Error::msg(
+                "`method` must be one of auto, linear, separable, exact, characteristic, undetermined, variation, power_series, or frobenius",
+            ))
+        }
+    };
+    SolveMethod::parse(name).ok_or_else(|| {
+        Error::msg(format!(
+            "unknown ODE solve method `{name}`; expected auto, linear, separable, exact, characteristic, undetermined, variation, power_series, or frobenius"
+        ))
+    })
 }

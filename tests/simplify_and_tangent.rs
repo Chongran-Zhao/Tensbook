@@ -71,6 +71,21 @@ fn simplify_trace_cyclic() {
     assert_eq!(a[0].latex, b[0].latex);
 }
 
+#[test]
+fn simplify_scalar_power_quotient() {
+    let src = "x = Var(\"x\")\nq = Simplify(x/x^2)\nq.show()";
+    let outputs = run_source(src).unwrap();
+    let latex = &outputs[0].latex;
+    assert!(
+        latex.contains("{x}^{-1}") || latex.contains("\\frac{1}{x}"),
+        "got: {latex}"
+    );
+    assert!(
+        !latex.contains("\\frac{x}{{x}^{2}}"),
+        "quotient should be simplified: {latex}"
+    );
+}
+
 // ---- material tangent A = ∂P/∂F --------------------------------------------
 
 #[test]

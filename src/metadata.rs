@@ -125,9 +125,21 @@ pub fn tensor_characteristic(t: &TensorExpr, derived: bool) -> TensorCharacteris
 }
 
 pub fn display_capabilities_for_kind(kind: &ValueKind) -> Vec<DisplayCapability> {
-    const MODES: [&str; 4] = ["symbol", "components", "matrix", "block_components"];
-    MODES
-        .into_iter()
+    let modes: &[&str] = match kind {
+        ValueKind::OdeProblem => &[
+            "symbol",
+            "equation",
+            "boundary",
+            "classification",
+            "methods",
+        ],
+        ValueKind::OdeClassification => &["symbol", "details"],
+        ValueKind::OdeSolution => &["symbol", "solution", "steps"],
+        _ => &["symbol", "components", "matrix", "block_components"],
+    };
+    modes
+        .iter()
+        .copied()
         .map(|mode| display_capability_for_kind(kind, mode))
         .collect()
 }
@@ -139,7 +151,10 @@ pub fn display_capability_for_kind(kind: &ValueKind, mode: &str) -> DisplayCapab
         | (ValueKind::Tensor { .. }, "symbol")
         | (ValueKind::Equation, "symbol")
         | (ValueKind::BoundaryCondition, "symbol")
-        | (ValueKind::OdeProblem, "symbol")
+        | (
+            ValueKind::OdeProblem,
+            "symbol" | "equation" | "boundary" | "classification" | "methods",
+        )
         | (ValueKind::OdeClassification, "symbol" | "details")
         | (ValueKind::OdeSolution, "symbol" | "solution" | "steps") => {
             DisplayCapability::available(mode)

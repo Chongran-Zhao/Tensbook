@@ -12,7 +12,7 @@
 //!   `tr(I) → dim`, `det(I) → 1`
 
 use crate::error::Error;
-use crate::symbolic::{extract_coeff, fold_add, fold_mul, with_coeff, ScalarExpr};
+use crate::symbolic::{extract_coeff, fold_add, fold_mul, fold_sub, with_coeff, ScalarExpr};
 use crate::tensor::TensorExpr;
 use std::rc::Rc;
 
@@ -549,7 +549,19 @@ fn rewrite_scalar(s: Rc<ScalarExpr>, rules: RuleSet) -> Rc<ScalarExpr> {
             (ScalarExpr::Num(x), _) if *x == 0.0 => Rc::new(ScalarExpr::Num(0.0)),
             (_, ScalarExpr::Num(x)) if *x == 1.0 => a.clone(),
             _ if a == b => Rc::new(ScalarExpr::Num(1.0)),
-            _ => s,
+            // x^p / x^q → x^{p-q}; x / x^q → x^{1-q}; x^p / x → x^{p-1}
+            (ScalarExpr::Pow(xa, p), ScalarExpr::Pow(xb, q)) if xa == xb => {
+                Rc::new(ScalarExpr::Pow(xa.clone(), fold_sub(p.clone(), q.clone())))
+            }
+            (_, ScalarExpr::Pow(xb, q)) if a == xb => Rc::new(ScalarExpr::Pow(
+                a.clone(),
+                fold_sub(Rc::new(ScalarExpr::Num(1.0)), q.clone()),
+            )),
+            (ScalarExpr::Pow(xa, p), _) if xa == b => Rc::new(ScalarExpr::Pow(
+                xa.clone(),
+                fold_sub(p.clone(), Rc::new(ScalarExpr::Num(1.0))),
+            )),
+            _ => cancel_power_quotient(a, b).unwrap_or(s),
         },
         ScalarExpr::Pow(a, b) => match (&**a, &**b) {
             (ScalarExpr::Num(x), ScalarExpr::Num(n)) => Rc::new(ScalarExpr::Num(x.powf(*n))),
@@ -643,6 +655,28 @@ fn with_coeff_from_product(s: &Rc<ScalarExpr>) -> Rc<ScalarExpr> {
 fn negative_coeff(s: &Rc<ScalarExpr>) -> Option<Rc<ScalarExpr>> {
     let (coeff, rest) = extract_coeff(s);
     (coeff < 0.0).then(|| with_coeff(-coeff, rest))
+}
+
+fn cancel_power_quotient(
+    numerator: &Rc<ScalarExpr>,
+    denominator: &Rc<ScalarExpr>,
+) -> Option<Rc<ScalarExpr>> {
+    let (den_base, den_exp) = scalar_power_parts(denominator);
+    let (coeff, mut factors) = scalar_product_factors(numerator);
+    let hit = factors.iter().position(|factor| {
+        let (base, _) = scalar_power_parts(factor);
+        base == den_base
+    })?;
+    let (_, num_exp) = scalar_power_parts(&factors[hit]);
+    factors[hit] = Rc::new(ScalarExpr::Pow(den_base, fold_sub(num_exp, den_exp)));
+    Some(scalar_from_coeff_and_factors(coeff, factors))
+}
+
+fn scalar_power_parts(expr: &Rc<ScalarExpr>) -> (Rc<ScalarExpr>, Rc<ScalarExpr>) {
+    match &**expr {
+        ScalarExpr::Pow(base, exp) => (base.clone(), exp.clone()),
+        _ => (expr.clone(), Rc::new(ScalarExpr::Num(1.0))),
+    }
 }
 
 // ---- trace cyclic canonicalization helpers ---------------------------------

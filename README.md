@@ -77,9 +77,12 @@ charts.
 | `Integrate(expr, x)`, `Integral(expr, x)` | Rule-based scalar integration, with a formal `Integral(...)` fallback when unsupported. |
 | `ODE(eq, y, x, BoundaryCondition(...))` | Declare an ODE/PDE problem object. The boundary condition is optional. |
 | `BoundaryCondition(y(x0), y0)` | Boundary/initial condition used by supported ODE solvers. |
-| `ode.show()` | Output the equation and boundary-condition status. |
-| `ode.classify()` | Output ODE/PDE type, order, linearity, homogeneity, subtype, and reasons. |
+| `ode.show()` / `ode.show(equation)` | Output the equation. |
+| `ode.show(boundary)` | Output the boundary-condition status. |
+| `ode.show(classification)` | Output ODE/PDE type, order, linearity, and homogeneity. |
+| `ode.show(methods)` | Output available symbolic solver methods and the default solve path. |
 | `ode.solve()`, `ode.solve(details=true)` | Solve supported first-order linear, separable, and exact ODEs. |
+| `ode.solve(method=auto\|linear\|separable\|exact)` | Select a specific solver path. `auto` keeps the default path shown by `ode.show(methods)`. |
 | `Simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
 | `expr.show()` | Render symbol mode output in the app. |
 | `expr.show(matrix)`, `expr.show(components)`, `expr.show(block_components)` | Render a specific output mode. |
@@ -132,7 +135,7 @@ y = Function("y", x)
 eq = Equation(Derivative(y, x) + 2*y, exp(x))
 ode = ODE(eq, y, x, BoundaryCondition(y(0), 1))
 
-ode.classify()
+ode.show(classification)
 ode.solve(details=true)
 ```
 
@@ -147,6 +150,14 @@ exact = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
 
 ODE(sep, y, x).solve()
 ODE(exact, y, x, BoundaryCondition(y(1), 2)).solve()
+```
+
+When a first-order equation supports more than one method, choose the path
+explicitly:
+
+```text
+ode.solve(method=separable, details=true)
+ode.solve(method=exact, details=true)
 ```
 
 ## Example

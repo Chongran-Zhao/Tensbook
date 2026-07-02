@@ -18,9 +18,27 @@ struct RunOutput {
     detail: Option<RunDetail>,
 }
 
+/// Structured ODE payload mirrored from `tensorforge::interpreter::OutputDetail`
+/// so the front end can render badges / numbered steps. Tagged by `type`.
 #[derive(Serialize)]
 #[serde(tag = "type")]
 enum RunDetail {
+    #[serde(rename = "ode_classification")]
+    Classification {
+        kind: String,
+        order: usize,
+        linear: bool,
+        homogeneous: bool,
+    },
+    #[serde(rename = "ode_boundary")]
+    Boundary { boundary: Option<String> },
+    #[serde(rename = "ode_methods")]
+    Methods {
+        available: Vec<String>,
+        default: String,
+    },
+    #[serde(rename = "ode_steps")]
+    Steps { steps: Vec<RunStep> },
     #[serde(rename = "plot")]
     CurvePlot {
         x_label: String,
@@ -31,14 +49,45 @@ enum RunDetail {
 }
 
 #[derive(Serialize)]
+struct RunStep {
+    label: String,
+    latex: String,
+}
+
+#[derive(Serialize)]
 struct RunPlotSeries {
     label_latex: String,
     segments: Vec<Vec<[f64; 2]>>,
 }
 
 fn convert_detail(detail: tensorforge::interpreter::OutputDetail) -> RunDetail {
+    use tensorforge::interpreter::OutputDetail;
     match detail {
-        tensorforge::interpreter::OutputDetail::Plot(plot) => RunDetail::CurvePlot {
+        OutputDetail::OdeClassification {
+            kind,
+            order,
+            linear,
+            homogeneous,
+        } => RunDetail::Classification {
+            kind,
+            order,
+            linear,
+            homogeneous,
+        },
+        OutputDetail::OdeBoundary { boundary } => RunDetail::Boundary { boundary },
+        OutputDetail::OdeMethods { available, default } => {
+            RunDetail::Methods { available, default }
+        }
+        OutputDetail::OdeSteps { steps } => RunDetail::Steps {
+            steps: steps
+                .into_iter()
+                .map(|step| RunStep {
+                    label: step.label,
+                    latex: step.latex,
+                })
+                .collect(),
+        },
+        OutputDetail::Plot(plot) => RunDetail::CurvePlot {
             x_label: plot.x_label,
             x_range: plot.x_range,
             y_range: plot.y_range,
