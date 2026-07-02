@@ -3,7 +3,7 @@ members = [".", "src-tauri"]
 
 [package]
 name = "tensorforge"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "A symbolic tensor algebra system for continuum mechanics (MVP: .tens DSL interpreter + LaTeX renderer)"
 license = "MIT"

@@ -1,6 +1,6 @@
 [package]
 name = "tensorforge-app"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "TensorForge desktop app (Tauri shell around the tensorforge engine)"
 license = "MIT"
