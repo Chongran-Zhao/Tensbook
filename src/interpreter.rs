@@ -2189,6 +2189,14 @@ impl Interpreter {
                         .solution
                         .as_ref()
                         .ok_or_else(|| Error::msg("no closed-form solution to plot"))?;
+                    // Only explicit solutions may be plotted: for an implicit
+                    // one like `y^3 = sin x + C` the rhs is NOT y(x), and
+                    // plotting it would silently draw the wrong curve.
+                    if !is_bare_unknown(&solution.lhs) {
+                        return Err(Error::msg(
+                            "solution is implicit; plot needs an explicit y(x) solution",
+                        ));
+                    }
                     if !is_numeric_plot_candidate(&solution.rhs) {
                         return Err(Error::msg("solution is not in closed form; cannot plot"));
                     }
@@ -2725,6 +2733,17 @@ fn plot_header(target: &Expr, fallback: &str) -> String {
         _ => fallback,
     }
     .to_string()
+}
+
+/// Is this the unknown function itself (e.g. `y(x)`, no derivative applied)?
+/// Used to decide whether an ODE solution is explicit and therefore plottable.
+fn is_bare_unknown(expr: &ScalarExpr) -> bool {
+    matches!(
+        expr,
+        ScalarExpr::UnknownFunc {
+            derivative_orders, ..
+        } if derivative_orders.iter().all(|&order| order == 0)
+    )
 }
 
 fn is_numeric_plot_candidate(expr: &ScalarExpr) -> bool {

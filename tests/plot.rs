@@ -76,6 +76,22 @@ x = Var("x")
 }
 
 #[test]
+fn plot_rejects_implicit_ode_solution() {
+    // Separable solve yields the implicit `y^3 = sin x + C`; plotting its rhs
+    // would silently draw y^3 instead of y.
+    let err = run_source(
+        r#"
+x = Var("x")
+y = Function("y", x)
+sep = ODE(Equation(3*y^2*Derivative(y, x), cos(x)), y, x, BoundaryCondition(y(0), 2)).solve()
+sep.plot(0, 6)
+"#,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("implicit"), "got: {}", err.message);
+}
+
+#[test]
 fn plots_explicit_ode_solution() {
     let outputs = run_source(
         r#"
