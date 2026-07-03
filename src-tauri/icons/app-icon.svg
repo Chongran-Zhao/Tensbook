@@ -1,15 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <rect x="100" y="100" width="824" height="824" rx="186" fill="#f3f1ea"/>
-  <text x="306" y="520" text-anchor="middle" dominant-baseline="central"
-        font-family="Georgia, 'Times New Roman', serif" font-weight="700"
-        font-style="italic" font-size="310" fill="#355e8a">F</text>
-  <rect x="430" y="460" width="76" height="30" rx="15" fill="#8c887d"/>
-  <rect x="430" y="534" width="76" height="30" rx="15" fill="#8c887d"/>
-  <path d="M596 380 H553 V644 H596" fill="none" stroke="#355e8a"
-        stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M749 380 H792 V644 H749" fill="none" stroke="#355e8a"
-        stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="623" cy="438" r="28" fill="#355e8a"/>
-  <circle cx="673" cy="512" r="28" fill="#9a7b3a"/>
-  <circle cx="723" cy="586" r="28" fill="#355e8a"/>
+  <path d="M512 330 Q392 268 236 288 V706 Q392 686 512 748 Z" fill="#fffdf8" stroke="#355e8a"
+        stroke-width="30" stroke-linejoin="round"/>
+  <path d="M512 330 Q632 268 788 288 V706 Q632 686 512 748 Z" fill="#fffdf8" stroke="#355e8a"
+        stroke-width="30" stroke-linejoin="round"/>
+  <circle cx="376" cy="428" r="38" fill="#355e8a"/>
+  <circle cx="512" cy="508" r="38" fill="#9a7b3a"/>
+  <circle cx="648" cy="588" r="38" fill="#355e8a"/>
 </svg>

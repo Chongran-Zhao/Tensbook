@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tensbook · app icon options</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f3f1ea; color: #2b2924;
+    font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; padding: 30px 26px 70px; }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  h1 { font: 600 17px/1.3 ui-serif, Georgia, serif; margin: 0 0 4px; }
+  .sub { color: #8c887d; font-size: 12.5px; margin: 0 0 30px; }
+  h2.vt { font: 600 12px/1.3 "SF Mono", Menlo, monospace; letter-spacing: 0.08em;
+    text-transform: uppercase; color: #355e8a; margin: 40px 0 4px; }
+  .vd { color: #8c887d; font-size: 13px; margin: 0 0 16px; max-width: 78ch; }
+  .vd b { color: #2b2924; }
+  .row { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .hero svg { width: 200px; height: 200px; display: block;
+    filter: drop-shadow(0 3px 9px rgba(60,50,30,0.18)); }
+  .strips { display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
+  .strip { display: flex; align-items: center; gap: 18px; padding: 14px 20px; border-radius: 14px; }
+  .strip.light { background: #e7e2d6; }
+  .strip.dark { background: #23201c; }
+  .strip .lab { font: 10.5px/1 "SF Mono", Menlo, monospace; letter-spacing: 0.06em;
+    text-transform: uppercase; width: 64px; }
+  .strip.light .lab { color: #8c887d; }
+  .strip.dark .lab { color: #a59c8c; }
+  .strip svg { display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.25)); }
+  .s64 { width: 64px; height: 64px; }
+  .s48 { width: 48px; height: 48px; }
+  .s32 { width: 32px; height: 32px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Tensbook — app icon options</h1>
+  <p class="sub">Same palette as today (cream · slate #355e8a · grey · gold #9a7b3a accent on the middle dot). Each shown at 200 / 64 / 48 / 32 px on a light and a dark dock.</p>
+
+  <!-- ============ current ============ -->
+  <h2 class="vt">Current — F = [⋱]</h2>
+  <p class="vd">The deformation gradient. Mathematically still fine, but it reads mechanics-first,
+    and the italic F no longer echoes the product name.</p>
+  <div class="row">
+    <div class="hero">
+      <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+        <rect x="100" y="100" width="824" height="824" rx="186" fill="#f3f1ea"/>
+        <text x="306" y="520" text-anchor="middle" dominant-baseline="central" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-style="italic" font-size="310" fill="#355e8a">F</text>
+        <rect x="430" y="460" width="76" height="30" rx="15" fill="#8c887d"/>
+        <rect x="430" y="534" width="76" height="30" rx="15" fill="#8c887d"/>
+        <path d="M596 380 H553 V644 H596" fill="none" stroke="#355e8a" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M749 380 H792 V644 H749" fill="none" stroke="#355e8a" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="623" cy="438" r="28" fill="#355e8a"/>
+        <circle cx="673" cy="512" r="28" fill="#9a7b3a"/>
+        <circle cx="723" cy="586" r="28" fill="#355e8a"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============ A ============ -->
+  <h2 class="vt">A — T = [⋱]</h2>
+  <p class="vd"><b>Minimal continuity.</b> Swap the F for a generic tensor <b>T</b> — the letter now
+    matches the name, the composition and every proportion stay identical. Safest handoff.</p>
+  <div class="row">
+    <div class="hero">
+      <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+        <rect x="100" y="100" width="824" height="824" rx="186" fill="#f3f1ea"/>
+        <text x="300" y="520" text-anchor="middle" dominant-baseline="central" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-style="italic" font-size="310" fill="#355e8a">T</text>
+        <rect x="430" y="460" width="76" height="30" rx="15" fill="#8c887d"/>
+        <rect x="430" y="534" width="76" height="30" rx="15" fill="#8c887d"/>
+        <path d="M596 380 H553 V644 H596" fill="none" stroke="#355e8a" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M749 380 H792 V644 H749" fill="none" stroke="#355e8a" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="623" cy="438" r="28" fill="#355e8a"/>
+        <circle cx="673" cy="512" r="28" fill="#9a7b3a"/>
+        <circle cx="723" cy="586" r="28" fill="#355e8a"/>
+      </svg>
+    </div>
+    <div class="strips" id="strips-a"></div>
+  </div>
+
+  <!-- ============ B ============ -->
+  <h2 class="vt">B — [⋱] as the mark</h2>
+  <p class="vd"><b>Boldest and cleanest.</b> Drop the equation; the bracketed diagonal itself becomes
+    the logo, scaled up. One idea, instantly legible at 32 px, and the gold dot carries the accent.</p>
+  <div class="row">
+    <div class="hero">
+      <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+        <rect x="100" y="100" width="824" height="824" rx="186" fill="#f3f1ea"/>
+        <path d="M400 316 H330 V708 H400" fill="none" stroke="#355e8a" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M624 316 H694 V708 H624" fill="none" stroke="#355e8a" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="438" cy="400" r="42" fill="#355e8a"/>
+        <circle cx="512" cy="512" r="42" fill="#9a7b3a"/>
+        <circle cx="586" cy="624" r="42" fill="#355e8a"/>
+      </svg>
+    </div>
+    <div class="strips" id="strips-b"></div>
+  </div>
+
+  <!-- ============ C ============ -->
+  <h2 class="vt">C — notebook page + [⋱]</h2>
+  <p class="vd"><b>Notebook-first, literally.</b> A dog-eared page carries the tensor matrix — “the
+    .tens notebook” in one picture. The page is the app’s paper theme; the mark stays the brackets.</p>
+  <div class="row">
+    <div class="hero">
+      <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+        <rect x="100" y="100" width="824" height="824" rx="186" fill="#f3f1ea"/>
+        <path d="M292 220 H620 L732 332 V804 Q732 838 698 838 H292 Q258 838 258 804 V254 Q258 220 292 220 Z" fill="#fffdf8" stroke="#d8d2c2" stroke-width="10"/>
+        <path d="M620 220 L732 332 H654 Q620 332 620 298 Z" fill="#ece8dd" stroke="#d8d2c2" stroke-width="10" stroke-linejoin="round"/>
+        <path d="M438 448 H392 V692 H438" fill="none" stroke="#355e8a" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M576 448 H622 V692 H576" fill="none" stroke="#355e8a" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="452" cy="512" r="27" fill="#355e8a"/>
+        <circle cx="507" cy="581" r="27" fill="#9a7b3a"/>
+        <circle cx="562" cy="650" r="27" fill="#355e8a"/>
+        <rect x="392" y="316" width="230" height="26" rx="13" fill="#c9c2b0"/>
+      </svg>
+    </div>
+    <div class="strips" id="strips-c"></div>
+  </div>
+
+  <!-- ============ D ============ -->
+  <h2 class="vt">D — open book + ⋱</h2>
+  <p class="vd"><b>The “book” in Tensbook.</b> An open spread with the diagonal dots running across
+    the pages. Warmest and most literal; the risk is fine detail at the smallest sizes.</p>
+  <div class="row">
+    <div class="hero">
+      <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+        <rect x="100" y="100" width="824" height="824" rx="186" fill="#f3f1ea"/>
+        <path d="M512 330 Q392 268 236 288 V706 Q392 686 512 748 Z" fill="#fffdf8" stroke="#355e8a" stroke-width="30" stroke-linejoin="round"/>
+        <path d="M512 330 Q632 268 788 288 V706 Q632 686 512 748 Z" fill="#fffdf8" stroke="#355e8a" stroke-width="30" stroke-linejoin="round"/>
+        <circle cx="376" cy="428" r="38" fill="#355e8a"/>
+        <circle cx="512" cy="508" r="38" fill="#9a7b3a"/>
+        <circle cx="648" cy="588" r="38" fill="#355e8a"/>
+      </svg>
+    </div>
+    <div class="strips" id="strips-d"></div>
+  </div>
+</div>
+
+<script>
+  // Duplicate each hero SVG into 64/48/32 strips on light + dark docks.
+  for (const key of ["a", "b", "c", "d"]) {
+    const hero = document.querySelector(`#strips-${key}`).parentElement.querySelector(".hero svg");
+    const holder = document.getElementById(`strips-${key}`);
+    for (const mode of ["light", "dark"]) {
+      const strip = document.createElement("div");
+      strip.className = `strip ${mode}`;
+      const lab = document.createElement("span");
+      lab.className = "lab";
+      lab.textContent = mode === "light" ? "light dock" : "dark dock";
+      strip.appendChild(lab);
+      for (const size of ["s64", "s48", "s32"]) {
+        const clone = hero.cloneNode(true);
+        clone.classList.add(size);
+        clone.removeAttribute("width"); clone.removeAttribute("height");
+        strip.appendChild(clone);
+      }
+      holder.appendChild(strip);
+    }
+  }
+</script>
+</body>
+</html>
