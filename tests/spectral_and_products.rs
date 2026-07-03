@@ -1,9 +1,9 @@
 //! Phase-5 tests: spectral decomposition, operator products, and removed
 //! helper commands.
 
-use tensorforge::interpreter::Value;
-use tensorforge::run_source;
-use tensorforge::run_source_with_env;
+use tensbook::interpreter::Value;
+use tensbook::run_source;
+use tensbook::run_source_with_env;
 
 const PRELUDE: &str = r#"
 F = Tensor("\bm F", order=2, dim=3)

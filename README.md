@@ -1,25 +1,26 @@
-# TensorForge
+# Tensbook
 
-Rigorous symbolic tensor algebra for finite-deformation continuum mechanics,
-driven by a small declarative `.tens` DSL.
+A symbolic math notebook driven by a small declarative `.tens` language —
+rigorous tensor algebra, calculus, differential equations, and plotting, with
+finite-deformation continuum mechanics as its flagship application.
 
-![TensorForge feature tour](docs/tensorforge-default.png)
+![Tensbook feature tour](docs/tensorforge-default.png)
 
 ## Install
 
 ```sh
-brew install --cask Chongran-Zhao/tensorforge/tensorforge
+brew install --cask Chongran-Zhao/tensbook/tensbook
 ```
 
 Homebrew requires the full `owner/tap/cask` form for untapped casks.
-`brew install --cask Chongran-Zhao/tensorforge` is only a tap reference, not an
+`brew install --cask Chongran-Zhao/tensbook` is only a tap reference, not an
 installable app cask.
 
 ## Update
 
 ```sh
 brew update
-brew upgrade --cask tensorforge
+brew upgrade --cask tensbook
 ```
 
 ## Release Preparation
@@ -91,13 +92,13 @@ Operators: `+`, `-`, `*`, `/`, `^`, `A & B`, `A : B`, and `A.T`.
 
 ## Current Scope
 
-TensorForge intentionally favors strict symbolic tensor algebra over broad CAS
+Tensbook intentionally favors strict symbolic tensor algebra over broad CAS
 coverage. When a rule is not implemented, the app reports a source-line error
 instead of guessing.
 
 Current 1.x limits:
 
-- The DSL is the source of truth; TensorForge does not parse arbitrary LaTeX,
+- The DSL is the source of truth; Tensbook does not parse arbitrary LaTeX,
   Python, Mathematica, or Maple expressions.
 - `Matrix` and `Vector` are not separate public DSL constructors yet. Use
   `Tensor(..., order=2, ...)` and `VectorSet(...)` / order-1 tensor values where

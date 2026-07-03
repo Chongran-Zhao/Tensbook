@@ -10,12 +10,12 @@ Examples:
   scripts/prepare-release.sh 1.1.0
   scripts/prepare-release.sh 1.1.0 --sha256 <64-hex-sha>
 
-Updates version-bearing files for a TensorForge release:
+Updates version-bearing files for a Tensbook release:
   - Cargo.toml
   - src-tauri/Cargo.toml
   - src-tauri/tauri.conf.json
   - ui/index.html
-  - packaging/tensorforge-cask.rb
+  - packaging/tensbook-cask.rb
 
 When --sha256 is omitted, the cask checksum is reset to the release placeholder.
 EOF
@@ -101,23 +101,23 @@ replace_once("src-tauri/tauri.conf.json", r'("version": ")[^"]+(")', rf'\g<1>{ve
 
 index = Path("ui/index.html")
 text = index.read_text()
-text = re.sub(r'TensorForge v[0-9A-Za-z.+-]+(?:\.[0-9A-Za-z.+-]+)*', f'TensorForge v{display_version}', text)
+text = re.sub(r'Tensbook v[0-9A-Za-z.+-]+(?:\.[0-9A-Za-z.+-]+)*', f'Tensbook v{display_version}', text)
 text = re.sub(r'\u2014 v[0-9A-Za-z.+-]+(?:\.[0-9A-Za-z.+-]+)*', f'\u2014 v{display_version}', text)
 index.write_text(text)
 
-cask = Path("packaging/tensorforge-cask.rb")
+cask = Path("packaging/tensbook-cask.rb")
 text = cask.read_text()
 text = re.sub(r'version "[^"]+"', f'version "{version}"', text, count=1)
 text = re.sub(r'sha256 "[^"]+"', f'sha256 "{sha256}"', text, count=1)
 text = re.sub(
-    r'releases/download/v[^/]+/TensorForge-v#\{version\}-aarch64-apple-darwin\.dmg',
-    r'releases/download/v#{version}/TensorForge-v#{version}-aarch64-apple-darwin.dmg',
+    r'releases/download/v[^/]+/Tensbook-v#\{version\}-aarch64-apple-darwin\.dmg',
+    r'releases/download/v#{version}/Tensbook-v#{version}-aarch64-apple-darwin.dmg',
     text,
     count=1,
 )
 cask.write_text(text)
 
-print(f"updated TensorForge release metadata to {version} (UI v{display_version})")
+print(f"updated Tensbook release metadata to {version} (UI v{display_version})")
 PY
 
 if [[ "$run_cargo_check" -eq 1 ]]; then

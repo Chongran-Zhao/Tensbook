@@ -1,7 +1,7 @@
 //! User-defined scalar functions: `Var("\lambda")` declares a function
 //! argument; expressions mentioning it apply with call syntax.
 
-use tensorforge::run_source;
+use tensbook::run_source;
 
 const PRELUDE: &str = r#"
 lam = Var("\lambda")

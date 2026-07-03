@@ -1,4 +1,4 @@
-//! TensorForge — a symbolic tensor algebra system for continuum mechanics.
+//! Tensbook — a symbolic math notebook engine: tensor algebra, calculus, ODEs, and plotting.
 //!
 //! MVP pipeline:
 //! ```text

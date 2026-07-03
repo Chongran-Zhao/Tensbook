@@ -1,7 +1,7 @@
 //! Tests for the fourth-order tangent: ∂(X⁻¹)/∂X via the ⊠ product and the
 //! full material tangent ℂ = 2 ∂S/∂C of an isochoric neo-Hookean model.
 
-use tensorforge::run_source;
+use tensbook::run_source;
 
 const PRELUDE: &str = r#"
 mu = Scalar("\mu")

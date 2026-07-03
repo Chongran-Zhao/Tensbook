@@ -1,6 +1,6 @@
 //! Integer matrix power `A^n` and the display of `A*A` as `A²`.
 
-use tensorforge::run_source;
+use tensbook::run_source;
 
 const PRELUDE: &str = r#"
 F = Tensor("\bm F", order=2, dim=3)

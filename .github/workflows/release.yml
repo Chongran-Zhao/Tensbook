@@ -43,11 +43,11 @@ jobs:
 
           metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))
           for package in metadata["packages"]:
-              if package["name"] == "tensorforge":
+              if package["name"] == "tensbook":
                   print(package["version"])
                   break
           else:
-              raise SystemExit("tensorforge package not found")
+              raise SystemExit("tensbook package not found")
           PY
           )
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -58,7 +58,7 @@ jobs:
       - name: Package DMG + checksum
         run: |
           version="${{ steps.version.outputs.version }}"
-          dmg="TensorForge-v${version}-aarch64-apple-darwin.dmg"
+          dmg="Tensbook-v${version}-aarch64-apple-darwin.dmg"
           found=$(find target src-tauri/target -path "*/bundle/dmg/*.dmg" -print 2>/dev/null | head -n 1)
           if [ -z "$found" ]; then
             echo "No Tauri DMG was produced."
@@ -71,8 +71,8 @@ jobs:
         with:
           name: aarch64-apple-darwin
           path: |
-            TensorForge-*.dmg
-            TensorForge-*.sha256
+            Tensbook-*.dmg
+            Tensbook-*.sha256
 
   release:
     name: publish release + cask tap
@@ -86,31 +86,31 @@ jobs:
       - name: Render Homebrew cask with real checksum
         run: |
           tag="${GITHUB_REF_NAME}"
-          dmg=$(ls dist/TensorForge-v*-aarch64-apple-darwin.dmg)
-          version="${dmg#dist/TensorForge-v}"
+          dmg=$(ls dist/Tensbook-v*-aarch64-apple-darwin.dmg)
+          version="${dmg#dist/Tensbook-v}"
           version="${version%-aarch64-apple-darwin.dmg}"
-          dmg_sha=$(awk '{print $1}' "dist/TensorForge-v${version}-aarch64-apple-darwin.dmg.sha256")
+          dmg_sha=$(awk '{print $1}' "dist/Tensbook-v${version}-aarch64-apple-darwin.dmg.sha256")
           mkdir -p out
-          cat > out/tensorforge-cask.rb <<EOF
-          cask "tensorforge" do
+          cat > out/tensbook-cask.rb <<EOF
+          cask "tensbook" do
             version "${version}"
             sha256 "${dmg_sha}"
 
-            url "https://github.com/Chongran-Zhao/TensorForge/releases/download/${tag}/TensorForge-v#{version}-aarch64-apple-darwin.dmg"
-            name "TensorForge"
-            desc "Symbolic tensor algebra app for continuum mechanics"
-            homepage "https://github.com/Chongran-Zhao/TensorForge"
+            url "https://github.com/Chongran-Zhao/Tensbook/releases/download/${tag}/Tensbook-v#{version}-aarch64-apple-darwin.dmg"
+            name "Tensbook"
+            desc "Symbolic math notebook for tensors, calculus, and ODEs"
+            homepage "https://github.com/Chongran-Zhao/Tensbook"
 
-            app "TensorForge.app"
+            app "Tensbook.app"
 
             postflight do
               system_command "/usr/bin/xattr",
-                             args: ["-dr", "com.apple.quarantine", "#{appdir}/TensorForge.app"],
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/Tensbook.app"],
                              sudo: false
             end
           end
           EOF
-          cat out/tensorforge-cask.rb
+          cat out/tensbook-cask.rb
       - name: Delete existing mutable release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,26 +122,26 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/TensorForge-*.dmg
-            out/tensorforge-cask.rb
+            dist/Tensbook-*.dmg
+            out/tensbook-cask.rb
       - name: Push cask to Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
             echo "No HOMEBREW_TAP_TOKEN secret set — skipping tap update."
-            echo "Copy out/tensorforge-cask.rb into Chongran-Zhao/homebrew-tensorforge by hand,"
+            echo "Copy out/tensbook-cask.rb into Chongran-Zhao/homebrew-tensbook by hand,"
             echo "or add the secret to automate this step."
             exit 0
           fi
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Chongran-Zhao/homebrew-tensorforge.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Chongran-Zhao/homebrew-tensbook.git" tap
           mkdir -p tap/Casks
-          cp out/tensorforge-cask.rb tap/Casks/tensorforge.rb
+          cp out/tensbook-cask.rb tap/Casks/tensbook.rb
           cd tap
-          git rm -f Formula/tensorforge.rb 2>/dev/null || true
+          git rm -f Formula/tensbook.rb 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/tensorforge.rb
-          git commit -m "tensorforge ${GITHUB_REF_NAME#v}" || { echo "no changes"; exit 0; }
+          git add Casks/tensbook.rb
+          git commit -m "tensbook ${GITHUB_REF_NAME#v}" || { echo "no changes"; exit 0; }
           # HEAD:main works whether the tap repo is empty or already initialized.
           git push origin HEAD:main

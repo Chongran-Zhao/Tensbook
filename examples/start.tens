@@ -1,6 +1,6 @@
-# TensorForge — a feature tour
+# Tensbook — a feature tour
 
-**TensorForge** is a notebook for *symbolic* tensor algebra. Ordinary text is
+**Tensbook** is a *symbolic math* notebook. Ordinary text is
 Markdown, and the blue `tens` blocks are executable code. Press **Run** to
 evaluate every block; the preview on the right follows the same order as the
 editor, so each result appears right where you introduce it.
@@ -143,7 +143,7 @@ C = F.T * F
 C.show()
 <!-- /tensorforge:tens -->
 
-TensorForge differentiates scalar expressions with respect to tensors. The
+Tensbook differentiates scalar expressions with respect to tensors. The
 gradient of a scalar field is a tensor of the same order.
 
 <!-- tensorforge:tens -->

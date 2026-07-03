@@ -1,7 +1,7 @@
 # Applied Math ODE Support
 
 This document describes the ODE/PDE functionality currently implemented in
-TensorForge. It is a capability reference, not a roadmap.
+Tensbook. It is a capability reference, not a roadmap.
 
 The runnable notebook example is `examples/applied-math-ode.tens`.
 
@@ -108,7 +108,7 @@ ode.solve(method=separable, details=true)
 ode.solve(method=exact, details=true)
 ```
 
-If the requested method is not available, TensorForge returns a diagnostic such
+If the requested method is not available, Tensbook returns a diagnostic such
 as `requested method exact is not available` and lists available methods.
 
 ### First-Order Linear
@@ -143,7 +143,7 @@ If a required integral is unsupported, the solution keeps a formal
 
 ### Separable
 
-TensorForge recognizes forms such as:
+Tensbook recognizes forms such as:
 
 ```text
 A(y) * dy/dx = B(x)
@@ -170,7 +170,7 @@ y^3 = sin(x) + C_1
 
 ### Exact
 
-TensorForge recognizes first-order differential form:
+Tensbook recognizes first-order differential form:
 
 ```text
 M(x,y) + N(x,y) * dy/dx = 0
@@ -201,7 +201,7 @@ The tested solution includes the potential:
 ## Integration
 
 `Integrate(expr, x)` is intentionally rule-based. When no rule applies,
-TensorForge keeps a formal `Integral(...)` node instead of guessing.
+Tensbook keeps a formal `Integral(...)` node instead of guessing.
 
 Implemented rules include:
 
@@ -235,10 +235,10 @@ Integrate(exp(-2/x)/x, x)
 One boundary condition is supported when the constant can be eliminated through
 simple symbolic substitution and linear extraction.
 
-For explicit linear solutions, TensorForge substitutes `x = x0`, evaluates
+For explicit linear solutions, Tensbook substitutes `x = x0`, evaluates
 `y(x0) = y0`, and solves for `C_1` when the expression is linear in `C_1`.
 
-For implicit separable/exact solutions, TensorForge substitutes both `x0` and
+For implicit separable/exact solutions, Tensbook substitutes both `x0` and
 `y0` into the implicit equation to determine the constant when possible.
 
 If the constant cannot be eliminated safely, the solver keeps `C_1` and reports
@@ -246,7 +246,7 @@ a warning in `ode.solve(details=true)`.
 
 ## Unsupported Boundaries
 
-TensorForge does not currently support:
+Tensbook does not currently support:
 
 - PDE solving
 - second-order or higher-order ODE solving

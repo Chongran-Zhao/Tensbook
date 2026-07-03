@@ -1,8 +1,8 @@
 //! Tests for the hand-written spectral Hill–CR derivation chain end to end.
 
-use tensorforge::interpreter::Value;
-use tensorforge::run_source;
-use tensorforge::run_source_with_env;
+use tensbook::interpreter::Value;
+use tensbook::run_source;
+use tensbook::run_source_with_env;
 
 const PRELUDE: &str = r#"
 mu = Scalar("\mu")

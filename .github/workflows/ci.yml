@@ -21,9 +21,9 @@ jobs:
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy -p tensorforge --all-targets -- -D warnings
+        run: cargo clippy -p tensbook --all-targets -- -D warnings
       - name: Tests
-        run: cargo test -p tensorforge
+        run: cargo test -p tensbook
 
   app:
     name: Tauri app check
@@ -39,4 +39,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check desktop app
-        run: cargo check -p tensorforge-app
+        run: cargo check -p tensbook-app

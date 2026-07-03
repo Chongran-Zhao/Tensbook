@@ -1,8 +1,8 @@
 //! Tests for user-reported gaps: compound-denominator diff (Diff(W, C)),
 //! the `:` operator, otimes alias, scalar-by-scalar diff.
 
-use tensorforge::interpreter::Value;
-use tensorforge::{run_source, run_source_with_env};
+use tensbook::interpreter::Value;
+use tensbook::{run_source, run_source_with_env};
 
 const PRELUDE: &str = r#"
 mu = Scalar("\mu")

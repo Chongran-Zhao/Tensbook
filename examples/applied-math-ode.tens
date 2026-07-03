@@ -1,6 +1,6 @@
-# TensorForge Applied Math ODE Demo
+# Tensbook Applied Math ODE Demo
 
-This notebook demonstrates the TensorForge 1.1 applied-math layer. It is meant
+This notebook demonstrates the Tensbook 1.1 applied-math layer. It is meant
 to be read like lecture notes and run like a regression example.
 
 | Feature | Where it appears |
@@ -74,7 +74,7 @@ I_tan = Integrate(tan(2*x), x)
 [I_sin.show(), I_cos.show(), I_tan.show()]
 <!-- /tensorforge:tens -->
 
-When a rule is not implemented, TensorForge keeps a formal `Integral(...)`
+When a rule is not implemented, Tensbook keeps a formal `Integral(...)`
 node. This is intentional: the solver can still show a correct symbolic
 workflow without pretending to be a general CAS.
 
@@ -143,7 +143,7 @@ hard_linear_problem.solve()
 
 ## 7. Separable ODE
 
-For separable equations, TensorForge returns an implicit solution.
+For separable equations, Tensbook returns an implicit solution.
 
 <!-- tensorforge:tens -->
 sep_eq = Equation(3*y^2*Derivative(y, x), cos(x))

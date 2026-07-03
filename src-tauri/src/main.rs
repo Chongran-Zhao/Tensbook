@@ -1,4 +1,4 @@
-//! TensorForge desktop app: a thin Tauri shell around the `tensorforge`
+//! Tensbook desktop app: a thin Tauri shell around the `tensbook`
 //! engine crate. The frontend (../ui) sends `.tens` source via the
 //! `run_tens` command and receives structured outputs for KaTeX rendering.
 
@@ -18,7 +18,7 @@ struct RunOutput {
     detail: Option<RunDetail>,
 }
 
-/// Structured ODE payload mirrored from `tensorforge::interpreter::OutputDetail`
+/// Structured ODE payload mirrored from `tensbook::interpreter::OutputDetail`
 /// so the front end can render badges / numbered steps. Tagged by `type`.
 #[derive(Serialize)]
 #[serde(tag = "type")]
@@ -60,8 +60,8 @@ struct RunPlotSeries {
     segments: Vec<Vec<[f64; 2]>>,
 }
 
-fn convert_detail(detail: tensorforge::interpreter::OutputDetail) -> RunDetail {
-    use tensorforge::interpreter::OutputDetail;
+fn convert_detail(detail: tensbook::interpreter::OutputDetail) -> RunDetail {
+    use tensbook::interpreter::OutputDetail;
     match detail {
         OutputDetail::OdeClassification {
             kind,
@@ -185,7 +185,7 @@ fn opened_file(path: std::path::PathBuf) -> Result<OpenedFile, String> {
 /// (the rest of the file can't be tokenized reliably).
 #[tauri::command]
 fn run_tens(source: String) -> RunResult {
-    let stmts = match tensorforge::parser::parse(&source) {
+    let stmts = match tensbook::parser::parse(&source) {
         Ok(stmts) => stmts,
         Err(e) => {
             return RunResult {
@@ -195,7 +195,7 @@ fn run_tens(source: String) -> RunResult {
             }
         }
     };
-    let outputs = tensorforge::interpreter::Interpreter::new().run_lenient(&stmts);
+    let outputs = tensbook::interpreter::Interpreter::new().run_lenient(&stmts);
     RunResult {
         ok: true,
         outputs: outputs
@@ -224,8 +224,8 @@ async fn open_tens(app: tauri::AppHandle) -> Result<Option<OpenedFile>, String> 
     let Some(path) = app
         .dialog()
         .file()
-        .add_filter("TensorForge / Markdown", &["tens", "md", "markdown"])
-        .add_filter("TensorForge", &["tens"])
+        .add_filter("Tensbook / Markdown", &["tens", "md", "markdown"])
+        .add_filter("Tensbook", &["tens"])
         .add_filter("Markdown", &["md", "markdown"])
         .blocking_pick_file()
     else {
@@ -275,7 +275,7 @@ async fn save_tens(
             let Some(picked) = app
                 .dialog()
                 .file()
-                .add_filter("TensorForge", &["tens"])
+                .add_filter("Tensbook", &["tens"])
                 .set_file_name(default_filename.as_deref().unwrap_or("untitled.tens"))
                 .blocking_save_file()
             else {
@@ -327,5 +327,5 @@ fn main() {
             print_window
         ])
         .run(tauri::generate_context!())
-        .expect("error while running TensorForge");
+        .expect("error while running Tensbook");
 }

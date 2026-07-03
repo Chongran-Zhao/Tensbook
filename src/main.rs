@@ -1,22 +1,22 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-TensorForge — rigorous symbolic tensor algebra for continuum mechanics
+Tensbook — a symbolic math notebook: tensors, calculus, ODEs, and plots
 
 Usage:
-  tensorforge run <file.tens>     parse, derive, and print LaTeX results
-  tensorforge --version | -V      print the version
-  tensorforge --help    | -h      print this help
+  tensbook run <file.tens>     parse, derive, and print LaTeX results
+  tensbook --version | -V      print the version
+  tensbook --help    | -h      print this help
 
 Examples:
-  tensorforge run examples/start.tens";
+  tensbook run examples/start.tens";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let argv: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let path = match argv.as_slice() {
         ["--version" | "-V"] => {
-            println!("tensorforge {}", env!("CARGO_PKG_VERSION"));
+            println!("tensbook {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
         ["--help" | "-h"] => {
@@ -39,7 +39,7 @@ fn main() -> ExitCode {
         }
     };
 
-    match tensorforge::run_source(&src) {
+    match tensbook::run_source(&src) {
         Ok(outputs) => {
             for out in outputs {
                 println!("[{}]", out.header);

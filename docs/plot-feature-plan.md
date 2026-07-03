@@ -1,6 +1,6 @@
 # Plot feature for `.tens` (1-D) — implementation spec for codex
 
-Add a 1-D plotting feature to TensorForge. The engine is **purely symbolic** today —
+Add a 1-D plotting feature to Tensbook. The engine is **purely symbolic** today —
 there is no numeric evaluation of `ScalarExpr`, and no `pi`/`e`. This feature adds a
 numeric channel: sample the expression in Rust → ship points through the existing
 `Output.detail` payload → draw a themed SVG in the front end.

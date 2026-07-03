@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TensorForge",
+  "productName": "Tensbook",
   "version": "1.1.0",
-  "identifier": "com.tensorforge.app",
+  "identifier": "com.tensbook.app",
   "build": {
     "beforeDevCommand": {
       "script": "npm run bundle:cm",
@@ -15,7 +15,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "TensorForge",
+        "title": "Tensbook",
         "width": 1280,
         "height": 800,
         "minWidth": 800,

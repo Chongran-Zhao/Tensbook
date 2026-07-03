@@ -1,5 +1,5 @@
-use tensorforge::interpreter::OutputDetail;
-use tensorforge::run_source;
+use tensbook::interpreter::OutputDetail;
+use tensbook::run_source;
 
 fn approx(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol

@@ -1,5 +1,5 @@
-// TensorForge frontend. The visible editor is a single CodeMirror source
-// buffer: Markdown is the default, TensorForge code lives inside the saved
+// Tensbook frontend. The visible editor is a single CodeMirror source
+// buffer: Markdown is the default, Tensbook code lives inside the saved
 // tensorforge:tens sentinels. The on-disk .tens format stays unchanged.
 
 import {
@@ -42,7 +42,7 @@ const NOTE_OPEN = "<!-- tensorforge:note -->";
 const NOTE_CLOSE = "<!-- /tensorforge:note -->";
 
 const DEFAULT_SOURCE_URL = "start.tens";
-const FALLBACK_DEFAULT_SOURCE = "# TensorForge\n\nClick **Open** or start writing.";
+const FALLBACK_DEFAULT_SOURCE = "# Tensbook\n\nClick **Open** or start writing.";
 
 const KATEX_MACROS = { "\\bm": "\\boldsymbol{#1}" };
 const SCROLL_SYNC_ANCHOR = 0.22;
@@ -245,7 +245,7 @@ function isNoteClose(line) {
   return line.trim().toLowerCase() === NOTE_CLOSE.toLowerCase();
 }
 
-function looksLikeTensorForgeSource(source) {
+function looksLikeTensbookSource(source) {
   for (const line of source.split(/\r?\n/)) {
     const t = line.trim();
     if (!t) continue;
@@ -262,7 +262,7 @@ function looksLikeTensorForgeSource(source) {
 }
 
 function blockKindForFreeform(source) {
-  return looksLikeTensorForgeSource(source) ? "tens" : "markdown";
+  return looksLikeTensbookSource(source) ? "tens" : "markdown";
 }
 
 function trimBlockLines(lines, startLine) {
@@ -906,7 +906,7 @@ const editorTheme = EditorView.theme({
     borderLeftColor: "color-mix(in srgb, var(--tens-frame) 82%, var(--panel))",
   },
   ".tf-tens-empty::before": {
-    content: '"TensorForge code"',
+    content: '"Tensbook code"',
     position: "absolute",
     left: "11px",
     color: "var(--muted)",
@@ -1832,7 +1832,7 @@ function tensBlockNoteHint(line, error) {
   if (isSentinelDocLine(editorView.state.doc, line)) return null;
   const lineText = sourceTextAtLine(line);
   if (!looksLikeAccidentalNotesInTens(lineText, error)) return null;
-  return "This line is inside a TensorForge code block. Press Enter on an empty tens line to return to Markdown.";
+  return "This line is inside a Tensbook code block. Press Enter on an empty tens line to return to Markdown.";
 }
 
 function viewSourceRegionsForBlock(block) {
@@ -2610,14 +2610,14 @@ async function buildExportDocument() {
     if (invoke) {
       const result = await invoke("run_tens", { source });
       if (!result.ok) {
-        showError(`Export stopped: fix the TensorForge error first.\n\n${result.error}`);
+        showError(`Export stopped: fix the Tensbook error first.\n\n${result.error}`);
         return null;
       }
       outputs = result.outputs ?? [];
       const firstError = outputs.find((item) => item.error);
       if (firstError) {
         const where = Number.isFinite(firstError.line) ? ` on line ${firstError.line}` : "";
-        showError(`Export stopped: fix the TensorForge error${where} first.\n\n${firstError.error}`);
+        showError(`Export stopped: fix the Tensbook error${where} first.\n\n${firstError.error}`);
         return null;
       }
       renderOutputs(outputs, { preserveScroll: true });
@@ -2724,7 +2724,7 @@ async function exportPdf() {
 }
 
 function defaultExportName(ext) {
-  const base = currentPath ? currentPath.split("/").pop().replace(/\.[^.]+$/, "") : "tensorforge-export";
+  const base = currentPath ? currentPath.split("/").pop().replace(/\.[^.]+$/, "") : "tensbook-export";
   return `${base}.${ext}`;
 }
 

@@ -4,9 +4,9 @@
 //! 6. C.show(components) is a 3x3 matrix; 7. C.show();
 //! 8. the shipped start.tens feature tour runs end to end.
 
-use tensorforge::interpreter::Value;
-use tensorforge::tensor::TensorExpr;
-use tensorforge::{run_source, run_source_with_env};
+use tensbook::interpreter::Value;
+use tensbook::tensor::TensorExpr;
+use tensbook::{run_source, run_source_with_env};
 
 const PRELUDE: &str = r#"
 mu = Scalar("\mu")
@@ -19,7 +19,7 @@ fn scalar_parses() {
     let (_, interp) = run_source_with_env(r#"mu = Scalar("\mu")"#).unwrap();
     match interp.get("mu") {
         Some(Value::Scalar(s)) => {
-            assert_eq!(**s, tensorforge::symbolic::ScalarExpr::sym("\\mu", "\\mu"));
+            assert_eq!(**s, tensbook::symbolic::ScalarExpr::sym("\\mu", "\\mu"));
         }
         other => panic!("expected Scalar, got {other:?}"),
     }
@@ -43,7 +43,7 @@ mu.show(symbol)
 ```notes
 ## More notes
 
-- These lines are Markdown, not TensorForge DSL.
+- These lines are Markdown, not Tensbook DSL.
 - Symbols like $$, #, and `code` stay inside the note block.
 ```
 "#;
@@ -90,7 +90,7 @@ fn tens_blocks_execute_inside_markdown_document() {
     let src = r#"
 # Markdown first
 
-This prose is not TensorForge DSL.
+This prose is not Tensbook DSL.
 
 <!-- tensorforge:tens -->
 mu = Scalar("\mu")

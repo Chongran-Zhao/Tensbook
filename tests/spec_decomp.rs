@@ -1,7 +1,7 @@
 //! Component-filled tensors (`F[1][1] = ...`) and the computed spectral
 //! decomposition `[a, b] = Spec_Decomp(C)` for diagonal symbolic tensors.
 
-use tensorforge::run_source;
+use tensbook::run_source;
 
 /// Uniaxial incompressible stretch: F = diag(λ, λ^{-1/2}, λ^{-1/2}).
 const PRELUDE: &str = r#"

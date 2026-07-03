@@ -3646,11 +3646,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "tensorforge"
+name = "tensbook"
 version = "1.1.0"
 
 [[package]]
-name = "tensorforge-app"
+name = "tensbook-app"
 version = "1.1.0"
 dependencies = [
  "serde",
@@ -3659,7 +3659,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
- "tensorforge",
+ "tensbook",
 ]
 
 [[package]]

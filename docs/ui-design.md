@@ -1,4 +1,4 @@
-# TensorForge UI — design & code guide
+# Tensbook UI — design & code guide
 
 A reference for the desktop app's front-end: how it's structured, themed, and
 wired. The UI is a single WebView (macOS WKWebView) hosted by Tauri; all of it

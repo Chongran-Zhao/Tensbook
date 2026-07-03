@@ -4,9 +4,9 @@
 //! ∂C_ij/∂F_mn component formula with Kronecker deltas; ∂Tr(C)/∂F = 2F;
 //! order/shape bookkeeping of Diff nodes; unsupported-form errors.
 
-use tensorforge::interpreter::Value;
-use tensorforge::tensor::TensorExpr;
-use tensorforge::{run_source, run_source_with_env};
+use tensbook::interpreter::Value;
+use tensbook::tensor::TensorExpr;
+use tensbook::{run_source, run_source_with_env};
 
 const PRELUDE: &str = r#"
 mu = Scalar("\mu")

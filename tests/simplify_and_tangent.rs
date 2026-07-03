@@ -1,7 +1,7 @@
 //! Phase 3–4 tests: simplify rule sets, fourth-order material tangent,
 //! block_components display.
 
-use tensorforge::run_source;
+use tensbook::run_source;
 
 const PRELUDE: &str = r#"
 mu = Scalar("\mu")

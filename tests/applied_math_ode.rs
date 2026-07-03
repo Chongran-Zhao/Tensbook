@@ -1,4 +1,4 @@
-use tensorforge::run_source;
+use tensbook::run_source;
 
 #[test]
 fn integrate_basic_and_affine_functions() {
@@ -250,7 +250,7 @@ ode.solve(method=characteristic)
 
 #[test]
 fn solve_second_order_undetermined_and_variation() {
-    use tensorforge::interpreter::OutputDetail;
+    use tensbook::interpreter::OutputDetail;
     let src = r#"
 x = Var("x")
 y = Function("y", x)
@@ -312,7 +312,7 @@ bessel.solve(method=frobenius, details=true)
 
 #[test]
 fn separable_and_exact_details_are_stepwise() {
-    use tensorforge::interpreter::OutputDetail;
+    use tensbook::interpreter::OutputDetail;
     let src = r#"
 x = Var("x")
 y = Function("y", x)
@@ -437,7 +437,7 @@ fn applied_math_ode_example_runs_end_to_end() {
 
 #[test]
 fn structured_detail_for_classification_methods_and_steps() {
-    use tensorforge::interpreter::OutputDetail;
+    use tensbook::interpreter::OutputDetail;
     let src = r#"
 x = Var("x")
 y = Function("y", x)

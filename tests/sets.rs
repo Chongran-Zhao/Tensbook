@@ -1,8 +1,8 @@
 //! Indexed families (`ScalarSet`/`VectorSet`), element access `lambda[a]`,
 //! and the `Sum(body, a)` spectral-sum builtin.
 
-use tensorforge::metadata::{DisplayCapabilityState, ValueKind};
-use tensorforge::{run_source, run_source_with_env};
+use tensbook::metadata::{DisplayCapabilityState, ValueKind};
+use tensbook::{run_source, run_source_with_env};
 
 const PRELUDE: &str = r#"
 lambda = ScalarSet("\lambda", dim=3)
