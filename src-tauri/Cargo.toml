@@ -1,6 +1,6 @@
 [package]
 name = "tensbook-app"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 description = "Tensbook desktop app (Tauri shell around the tensbook engine)"
 license = "MIT"
