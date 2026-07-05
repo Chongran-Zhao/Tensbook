@@ -1,7 +1,8 @@
 {
   "type": "module",
   "scripts": {
-    "bundle:cm": "node scripts/bundle-codemirror.mjs"
+    "bundle:cm": "node scripts/bundle-codemirror.mjs",
+    "test:ui": "node --test ui/tests/*.test.js"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.6",

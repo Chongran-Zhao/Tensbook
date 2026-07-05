@@ -40,3 +40,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check desktop app
         run: cargo check -p tensbook-app
+
+  ui:
+    name: ui document model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test ui/tests/*.test.js
