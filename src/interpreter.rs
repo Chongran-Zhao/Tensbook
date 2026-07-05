@@ -1193,6 +1193,35 @@ impl Interpreter {
         ))))
     }
 
+    /// Evaluate `target` and require an `ODE(...)` problem for `.{method}(...)`.
+    fn expect_ode_problem(
+        &mut self,
+        target: &Expr,
+        method: &str,
+    ) -> Result<Rc<crate::ode::OdeProblem>, Error> {
+        match self.eval(target)? {
+            Value::OdeProblem(problem) => Ok(problem),
+            other => Err(Error::msg(format!(
+                "`.{method}(...)` expects an ODE problem, got {}",
+                kind(&other)
+            ))),
+        }
+    }
+
+    /// Parse `.solve(...)` keywords and run the solver. Shared by the
+    /// expression position (`sol = p.solve()`) and the output-statement
+    /// position (`p.solve()` on its own line).
+    fn run_ode_solve(
+        &mut self,
+        problem: &crate::ode::OdeProblem,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<(crate::ode::OdeSolution, bool), Error> {
+        let options = self.solve_options(args, kwargs)?;
+        let solution = crate::ode::solve_problem_with_config(problem, options.config)?;
+        Ok((solution, options.details))
+    }
+
     fn eval_ode_method(
         &mut self,
         target: &Expr,
@@ -1200,26 +1229,15 @@ impl Interpreter {
         args: &[Expr],
         kwargs: &[(String, Expr)],
     ) -> Result<Value, Error> {
-        let problem = match self.eval(target)? {
-            Value::OdeProblem(problem) => problem,
-            other => {
-                return Err(Error::msg(format!(
-                    "`.{method}(...)` expects an ODE problem, got {}",
-                    kind(&other)
-                )))
-            }
-        };
+        let problem = self.expect_ode_problem(target, method)?;
         match method {
-            "classify" => Err(Error::msg(
-                "`ODE.classify()` was removed; use `ODE.show(classification)`",
-            )),
             "solve" => {
-                let options = self.solve_options(args, kwargs)?;
-                Ok(Value::OdeSolution(Rc::new(
-                    crate::ode::solve_problem_with_config(&problem, options.config)?,
-                )))
+                // `details=true` only affects the printed output; in
+                // expression position the solution object is the same.
+                let (solution, _details) = self.run_ode_solve(&problem, args, kwargs)?;
+                Ok(Value::OdeSolution(Rc::new(solution)))
             }
-            _ => Err(Error::msg(format!("unknown ODE method `.{method}(...)`"))),
+            _ => Err(unsupported_ode_method_error(method)),
         }
     }
 
@@ -1269,25 +1287,11 @@ impl Interpreter {
     ) -> Result<(), Error> {
         let subject = self.output_subject(target);
         let header = ode_method_header(&subject.header, method, args, kwargs);
-        let problem = match self.eval(target)? {
-            Value::OdeProblem(problem) => problem,
-            other => {
-                return Err(Error::msg(format!(
-                    "`.{method}(...)` expects an ODE problem, got {}",
-                    kind(&other)
-                )))
-            }
-        };
+        let problem = self.expect_ode_problem(target, method)?;
         let (latex, detail) = match method {
-            "classify" => {
-                return Err(Error::msg(
-                    "`ODE.classify()` was removed; use `ODE.show(classification)`",
-                ))
-            }
             "solve" => {
-                let options = self.solve_options(args, kwargs)?;
-                let solution = crate::ode::solve_problem_with_config(&problem, options.config)?;
-                if options.details {
+                let (solution, details) = self.run_ode_solve(&problem, args, kwargs)?;
+                if details {
                     let class = crate::ode::classify_problem(&problem)?;
                     let latex = crate::ode::render_solution_details(&solution, &class);
                     let detail = OutputDetail::OdeSteps {
@@ -1298,7 +1302,7 @@ impl Interpreter {
                     (crate::ode::render_solution(&solution, "solution"), None)
                 }
             }
-            _ => return Err(Error::msg(format!("unknown ODE method `.{method}(...)`"))),
+            _ => return Err(unsupported_ode_method_error(method)),
         };
         self.outputs.push(Output {
             header,
@@ -2817,6 +2821,16 @@ fn ode_method_header(
 
 fn renamed_builtin_error(old: &str, new: &str) -> Error {
     Error::msg(format!("`{old}(...)` was renamed; use `{new}(...)`"))
+}
+
+/// Rejection for `.classify()` (removed, with a migration hint) and any other
+/// unknown method on an ODE problem. Shared by both `.solve()` call positions.
+fn unsupported_ode_method_error(method: &str) -> Error {
+    if method == "classify" {
+        Error::msg("`ODE.classify()` was removed; use `ODE.show(classification)`")
+    } else {
+        Error::msg(format!("unknown ODE method `.{method}(...)`"))
+    }
 }
 
 fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {
