@@ -16,8 +16,9 @@ The runnable notebook example is `examples/applied-math-ode.tens`.
 | `Diff(expr, x, order=1)` | Evaluates explicit scalar/tensor derivatives. It intentionally rejects unknown functions and tells the user to use `Derivative(...)`. |
 | `Equation(lhs, rhs)` | Builds a scalar equation object and stores the residual `lhs - rhs`. |
 | `BoundaryCondition(y(x0), y0)` | Declares a boundary/initial condition for supported solvers. |
+| `BoundaryCondition(Derivative(y, x), x0, y0)` | Declares a derivative boundary condition such as `y'(x0)=y0`. |
 | `ODE(eq, y, x)` | Builds an ODE/PDE problem object from an equation, target function, and independent variable. |
-| `ODE(eq, y, x, BoundaryCondition(...))` | Builds the same problem with one supported boundary condition. |
+| `ODE(eq, y, x, BoundaryCondition(...), ...)` | Builds the same problem with zero or more boundary conditions. |
 | `ode.show()` / `ode.show(equation)` | Outputs the equation. |
 | `ode.show(boundary)` | Outputs the boundary condition or `no explicit boundary condition`. |
 | `ode.show(classification)` | Outputs ODE/PDE kind, order, linearity, and homogeneity. |
@@ -25,7 +26,9 @@ The runnable notebook example is `examples/applied-math-ode.tens`.
 | `ode.solve()` | Outputs the final solution or an unsupported diagnostic. |
 | `ode.solve(details=true)` | Outputs worked solution steps, warnings, and the final solution. |
 | `ode.solve(method=auto)` | Uses the same default solver path as `ode.solve()`. |
-| `ode.solve(method=linear\|separable\|exact)` | Requests a specific solver path and returns a clear diagnostic if unavailable. |
+| `ode.solve(method=linear\|separable\|exact)` | Requests a first-order solver path and returns a clear diagnostic if unavailable. |
+| `ode.solve(method=characteristic\|undetermined\|variation)` | Requests a second-order constant-coefficient linear solver path. |
+| `ode.solve(method=power_series\|frobenius, about=0, terms=6)` | Requests a finite formal series workflow. |
 | `Integrate(expr, x)` | Applies conservative rule-based indefinite integration. |
 | `Integral(expr, x)` | Builds an unevaluated formal integral. |
 
@@ -76,11 +79,21 @@ is rejected because explicit expressions should use `Diff(x^2, x)`.
 - linear vs nonlinear
 - homogeneous vs non-homogeneous by the zero-function test
 
-Use `ode.show(methods)` for supported first-order solver methods:
+Use `ode.show(methods)` for supported solver methods.
+
+First-order methods:
 
 - `linear`
 - `separable`
 - `exact`
+
+Second-order teaching methods:
+
+- `characteristic`
+- `undetermined`
+- `variation`
+- `power_series`
+- `frobenius`
 
 Example:
 
@@ -96,7 +109,8 @@ ode.show(classification)
 
 ## Solvers
 
-`ode.solve()` currently solves supported first-order ODEs only.
+`ode.solve()` solves supported first-order ODEs and a teaching-oriented subset
+of second-order linear ODEs.
 
 When multiple methods apply, `ode.solve()` uses the same default path shown by
 `ode.show(methods)`. You can request a method explicitly:
@@ -106,6 +120,8 @@ ode.solve(method=auto)
 ode.solve(method=linear)
 ode.solve(method=separable, details=true)
 ode.solve(method=exact, details=true)
+ode.solve(method=characteristic, details=true)
+ode.solve(method=power_series, about=0, terms=6, details=true)
 ```
 
 If the requested method is not available, Tensbook returns a diagnostic such
@@ -198,6 +214,53 @@ The tested solution includes the potential:
 2*y + 1/2*x^2*y^2 = 6
 ```
 
+### Second-Order Linear
+
+Tensbook extracts supported second-order linear equations in the form:
+
+```text
+A(x) d^2y/dx^2 + B(x) dy/dx + C(x) y = G(x)
+```
+
+For constant-coefficient homogeneous equations, the characteristic method
+handles distinct real roots, repeated roots, and complex conjugate roots:
+
+```text
+x = Var("x")
+y = Function("y", x)
+
+eq = Equation(Derivative(y, x, order=2) + 5*Derivative(y, x) + 6*y, 0)
+ode = ODE(eq, y, x)
+
+ode.solve(method=characteristic, details=true)
+```
+
+For simple non-homogeneous constant-coefficient equations, Tensbook can show:
+
+- `undetermined` coefficients for polynomial forcing used in the lecture path
+- `variation` of parameters as a formal workflow with Wronskian terms
+
+Example:
+
+```text
+eq = Equation(Derivative(y, x, order=2) + y, x^2)
+ode = ODE(eq, y, x)
+
+ode.solve(method=undetermined, details=true)
+ode.solve(method=variation, details=true)
+```
+
+Series methods are finite, formal workflows:
+
+```text
+ode.solve(method=power_series, about=0, terms=6, details=true)
+ode.solve(method=frobenius, about=0, terms=6, details=true)
+```
+
+`frobenius` recognizes the regular-singular lecture form, including the Bessel
+indicial equation path. It reports roots and named-solution structure where the
+full symbolic series is not yet expanded.
+
 ## Integration
 
 `Integrate(expr, x)` is intentionally rule-based. When no rule applies,
@@ -232,7 +295,7 @@ Integrate(exp(-2/x)/x, x)
 
 ## Boundary Conditions
 
-One boundary condition is supported when the constant can be eliminated through
+Boundary conditions are supported when the constants can be eliminated through
 simple symbolic substitution and linear extraction.
 
 For explicit linear solutions, Tensbook substitutes `x = x0`, evaluates
@@ -240,6 +303,20 @@ For explicit linear solutions, Tensbook substitutes `x = x0`, evaluates
 
 For implicit separable/exact solutions, Tensbook substitutes both `x0` and
 `y0` into the implicit equation to determine the constant when possible.
+
+For supported second-order constant-coefficient solutions, two linear boundary
+conditions can be used to determine `C_1` and `C_2` when the resulting system is
+simple enough:
+
+```text
+ode = ODE(
+  Equation(Derivative(y, x, order=2) + y, 0),
+  y,
+  x,
+  BoundaryCondition(y(0), 1),
+  BoundaryCondition(Derivative(y, x), 0, 0)
+)
+```
 
 If the constant cannot be eliminated safely, the solver keeps `C_1` and reports
 a warning in `ode.solve(details=true)`.
@@ -249,12 +326,11 @@ a warning in `ode.solve(details=true)`.
 Tensbook does not currently support:
 
 - PDE solving
-- second-order or higher-order ODE solving
-- multiple boundary conditions
+- general nonlinear higher-order ODE solving
 - general integrating-factor search for nonlinear non-exact equations
 - numerical ODE solving
 - broad CAS integration or special functions such as `Ei`
 - arbitrary algebraic equation solving for boundary conditions
 
-PDEs and higher-order ODEs can still be classified. Unsupported solver calls
-return a diagnostic object instead of guessing.
+PDEs and unsupported higher-order ODEs can still be classified. Unsupported
+solver calls return a diagnostic object instead of guessing.

@@ -1,192 +1,290 @@
 # Tensbook
 
-A symbolic math notebook driven by a small declarative `.tens` language —
-rigorous tensor algebra, calculus, differential equations, and plotting, with
-finite-deformation continuum mechanics as its flagship application.
+[![CI](https://github.com/Chongran-Zhao/Tensbook/actions/workflows/ci.yml/badge.svg)](https://github.com/Chongran-Zhao/Tensbook/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Chongran-Zhao/Tensbook?label=release)](https://github.com/Chongran-Zhao/Tensbook/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+
+A symbolic math notebook for derivations that should stay readable, editable,
+and executable: tensor algebra, calculus, ODEs, plots, and finite-deformation
+continuum mechanics.
+
+Tensbook notebooks are plain text. Markdown is prose; executable `.tens` blocks
+hold a small declarative language for symbolic math. The app renders the result
+next to the source, so a derivation can be both a note and a reproducible
+calculation.
 
 ![Tensbook feature tour](docs/tensorforge-default.png)
 
 ## Install
 
+The prebuilt macOS app is published through the Homebrew tap:
+
 ```sh
 brew install --cask Chongran-Zhao/tensbook/tensbook
 ```
 
-Homebrew requires the full `owner/tap/cask` form for untapped casks.
-`brew install --cask Chongran-Zhao/tensbook` is only a tap reference, not an
-installable app cask.
-
-## Update
+Update later with:
 
 ```sh
 brew update
 brew upgrade --cask tensbook
 ```
 
-## Release Preparation
-
-Before tagging a release, update all version-bearing files from one entry point:
+If you installed the old TensorForge 1.0 cask, remove it first:
 
 ```sh
-scripts/prepare-release.sh 1.1.0
+brew uninstall --cask tensorforge
+brew install --cask Chongran-Zhao/tensbook/tensbook
 ```
 
-If you are rendering the checked-in Homebrew cask manually, pass the built DMG
-checksum:
+Homebrew requires the full `owner/tap/cask` form for untapped casks.
+`brew install --cask Chongran-Zhao/tensbook` names the tap, not the app.
 
-```sh
-scripts/prepare-release.sh 1.1.0 --sha256 <64-hex-sha>
+## What It Does
+
+- **Notebook-first editing**: Markdown prose, executable Tensbook code blocks,
+  source/preview split, ViewSource blocks, export, and print-to-PDF support.
+- **Symbolic tensor algebra**: typed tensors, tensor products, contractions,
+  traces, determinants, inverses, components, spectral decompositions, and
+  fourth-order tangent displays.
+- **Calculus for mechanics**: `Diff(...)` for evaluated derivatives of explicit
+  expressions and tensors; `Derivative(...)` for formal unknown-function
+  derivatives.
+- **Applied math ODEs**: `Equation(...)`, `ODE(...)`, boundary conditions,
+  classification, solver-method inspection, and worked solution steps.
+- **Plots**: static SVG plots for one-variable scalar expressions, multi-curve
+  rows, and explicit ODE solutions.
+- **Conservative symbolic behavior**: unsupported math returns a diagnostic or
+  a formal object such as `Integral(...)`; Tensbook does not silently guess.
+
+## A First Notebook
+
+```text
+mu = Scalar("\mu")
+F = Tensor("\bm F", order=2, dim=3)
+
+C = F.T * F
+J = Det(F)
+
+[C.show(), J.show()]
 ```
 
-The GitHub release workflow still computes the real DMG checksum and renders the
-tap cask automatically when a `v*` tag is pushed.
+The same notebook can mix prose, equations, and executable derivations:
 
-## Editor
+````markdown
+The right Cauchy-Green tensor is computed from the deformation gradient:
 
-Markdown blocks use native spellcheck for English prose while keeping automatic
-text replacement off, so source-like input such as `---` and LaTeX stays literal.
-At the start of a Markdown line, type `/` for slash-command completions such as
-`/h1`, `/bold`, `/math`, `/table`, and `/hr`; press `Tab` or, after typing part
-of a command, `Enter` to accept.
-The toolbar `Markdown` menu inserts common blocks, configurable tables, and
-math-array diagram templates such as logic trees and three-case comparison
-charts.
+<!-- tensorforge:tens -->
+F = Tensor("\bm F", order=2, dim=3)
+C = F.T * F
+C.show()
+<!-- /tensorforge:tens -->
+````
 
-## Functions
+The sentinel comments are the saved `.tens` file format. The editor presents
+them as Tensbook code blocks.
 
-| Function | Use |
-|---|---|
-| `Scalar("\mu")` | Declare a symbolic scalar. |
-| `Tensor("\bm F", order=2, dim=3, ...)` | Declare a tensor. Keyword args: `order`, `dim`, `identity`, `symmetric`, `antisymmetric`, `orthogonal`, `isotropic`. |
-| `Det(A)` | Symbolic determinant. |
-| `Tr(A)` | Symbolic trace. |
-| `Inv(A)` | Symbolic tensor inverse. |
-| `log(x)`, `sqrt(x)`, `exp(x)`, `sin(x)`, `cos(x)`, `tan(x)` | Symbolic scalar functions. |
-| `sinh(x)`, `cosh(x)`, `tanh(x)` | Symbolic scalar hyperbolic functions. |
-| `Var("x")`, `Function("y", x)`, `Function("u", x, y, t)` | Declare independent variables and unknown scalar functions for ODE/PDE-style expressions. |
-| `A * B` | Scalar multiplication, tensor scaling, or second-order tensor product / single contraction. |
-| `A & B` | Tensor product `A \otimes B`. |
-| `A : B` | Standard double contraction. |
-| `ScalarSet("\lambda", dim=3)`, `VectorSet("\bm N", dim=3)` | Indexed families; elements `lambda[a]`, `N[1]`. |
-| `Sum(expr, a)` | Symbolic sum over a set index. |
-| `F[1][1] = expr` | Assign tensor components (unset entries are zero). |
-| `[lambda, N] = Spectral(C, "\lambda", "\bm N")` | Declare paired symbolic eigenvalue/eigenvector sets for `C`. |
-| `[c, N] = Spec_Decomp(C)` | Symbolic eigendecomposition of a diagonal component-filled tensor. |
-| `Diff(expr, X, order=1)` | Evaluated derivative of explicit scalar/tensor expressions. `order` repeats the derivative. |
-| `Derivative(f, x, order=1)` | Formal derivative or partial derivative of an unknown `Function(...)`. |
-| `Equation(lhs, rhs)` | Declare a scalar equation object. |
-| `Integrate(expr, x)`, `Integral(expr, x)` | Rule-based scalar integration, with a formal `Integral(...)` fallback when unsupported. |
-| `ODE(eq, y, x, BoundaryCondition(...))` | Declare an ODE/PDE problem object. The boundary condition is optional. |
-| `BoundaryCondition(y(x0), y0)` | Boundary/initial condition used by supported ODE solvers. |
-| `ode.show()` / `ode.show(equation)` | Output the equation. |
-| `ode.show(boundary)` | Output the boundary-condition status. |
-| `ode.show(classification)` | Output ODE/PDE type, order, linearity, and homogeneity. |
-| `ode.show(methods)` | Output available symbolic solver methods and the default solve path. |
-| `ode.solve()`, `ode.solve(details=true)` | Solve supported first-order linear, separable, and exact ODEs. |
-| `ode.solve(method=auto\|linear\|separable\|exact)` | Select a specific solver path. `auto` keeps the default path shown by `ode.show(methods)`. |
-| `Simplify(expr, rules=...)` | Exact rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
-| `expr.show()` | Render symbol mode output in the app. |
-| `expr.show(matrix)`, `expr.show(components)`, `expr.show(block_components)` | Render a specific output mode. |
-
-Operators: `+`, `-`, `*`, `/`, `^`, `A & B`, `A : B`, and `A.T`.
-
-## Current Scope
-
-Tensbook intentionally favors strict symbolic tensor algebra over broad CAS
-coverage. When a rule is not implemented, the app reports a source-line error
-instead of guessing.
-
-Current 1.x limits:
-
-- The DSL is the source of truth; Tensbook does not parse arbitrary LaTeX,
-  Python, Mathematica, or Maple expressions.
-- `Matrix` and `Vector` are not separate public DSL constructors yet. Use
-  `Tensor(..., order=2, ...)` and `VectorSet(...)` / order-1 tensor values where
-  supported.
-- General `contract(A, B, indices=...)` is not implemented yet. Use `*`,
-  `:`, `&`, and indexed `Sum(...)` for the supported contractions.
-- `.show(components|matrix)` focuses on order-1/order-2 tensors and
-  explicit diagonal/spectral cases. Unsupported inverse, outer-product, or
-  spectral component expansions should be shown with `.show()` / `.show(symbol)`.
-- `.show(block_components)` is for supported order-4 derivative
-  structures, especially tensor-by-tensor derivatives.
-- Export is handled by the app toolbar `Export` button, not by a DSL command.
-- Applied-math ODE support covers first-order linear, separable, and exact
-  equations. Unsupported integrations remain as formal `Integral(...)` nodes,
-  and unsupported solver paths return a diagnostic instead of guessing.
-- PDEs and higher-order ODEs can be classified, but only first-order ODEs are
-  solved in the current release.
-- `Spec_Decomp(C)` currently requires a diagonal component-filled second-order
-  tensor in the working basis.
-- Differentiation covers the continuum-mechanics paths in the tests, including
-  scalar/tensor derivatives, compound tensor denominators, spectral strain
-  derivatives, and fourth-order tangents. Eigenvector derivatives and some fully
-  general tensor-chain rules are deliberately rejected.
-
-## Applied Math / ODE Example
-
-The full runnable demo is available at `examples/applied-math-ode.tens`.
-The current ODE capability reference lives in
-`docs/applied-math-ode-support.md`.
+## ODE Example
 
 ```text
 x = Var("x")
 y = Function("y", x)
 
 eq = Equation(Derivative(y, x) + 2*y, exp(x))
-ode = ODE(eq, y, x, BoundaryCondition(y(0), 1))
+problem = ODE(eq, y, x, BoundaryCondition(y(0), 1))
 
-ode.show(classification)
-ode.solve(details=true)
+problem.show(classification)
+problem.show(methods)
+problem.solve(details=true)
 ```
 
-Separable and exact equations are supported in the same style:
+When more than one method applies, choose the path explicitly:
+
+```text
+problem.solve(method=linear)
+problem.solve(method=separable, details=true)
+problem.solve(method=exact, details=true)
+```
+
+Second-order teaching examples are supported for the Lecture 03-05 path:
+
+```text
+ode = ODE(Equation(Derivative(y, x, order=2) + 5*Derivative(y, x) + 6*y, 0), y, x)
+ode.solve(method=characteristic, details=true)
+
+series = ODE(Equation(Derivative(y, x, order=2) + x*Derivative(y, x) + y, 0), y, x)
+series.solve(method=power_series, about=0, terms=6, details=true)
+```
+
+## Plot Example
 
 ```text
 x = Var("x")
-y = Function("y", x)
 
-sep = Equation(3*y^2*Derivative(y, x), cos(x))
-exact = Equation((2 + x^2*y)*Derivative(y, x) + x*y^2, 0)
-
-ODE(sep, y, x).solve()
-ODE(exact, y, x, BoundaryCondition(y(1), 2)).solve()
+sin(x).plot(-pi, pi)
+[sin(x), cos(x)].plot(-pi, pi)
 ```
 
-When a first-order equation supports more than one method, choose the path
-explicitly:
+Explicit ODE solutions can also be plotted when the right-hand side is closed
+form and numeric over the requested range.
 
-```text
-ode.solve(method=separable, details=true)
-ode.solve(method=exact, details=true)
+## DSL At A Glance
+
+### Declarations
+
+| Syntax | Meaning |
+|---|---|
+| `Scalar("\mu")` | Symbolic scalar. |
+| `Var("x")` | Independent scalar variable. |
+| `Function("y", x)` | Unknown scalar function `y(x)`. |
+| `Function("u", x, y, t)` | Multi-variable unknown function for formal partials/PDE classification. |
+| `Tensor("\bm F", order=2, dim=3)` | Tensor declaration. Keyword args include `identity`, `symmetric`, `antisymmetric`, `orthogonal`, `isotropic`. |
+| `ScalarSet("\lambda", dim=3)` | Indexed scalar family. |
+| `VectorSet("\bm N", dim=3)` | Indexed vector family. |
+| `[lambda, N] = Spectral(C, "\lambda", "\bm N")` | Paired symbolic eigenvalue/eigenvector sets. |
+| `[c, N] = Spec_Decomp(C)` | Component-based spectral decomposition for diagonal second-order tensors. |
+| `F[1][1] = expr` | Tensor component assignment. Unset entries are zero. |
+
+### Algebra And Tensor Operations
+
+| Syntax | Meaning |
+|---|---|
+| `A * B` | Scalar multiplication, tensor scaling, or second-order single contraction. |
+| `A : B` | Standard double contraction. |
+| `A & B` | Tensor product `A \otimes B`. |
+| `A.T` | Transpose. |
+| `Det(A)`, `Tr(A)`, `Inv(A)` | Determinant, trace, inverse. |
+| `Sum(expr, a)` | Sum over an indexed set element. |
+| `Simplify(expr, rules=algebra)` | Conservative rewriting. Rule sets: `algebra`, `tensor`, `continuum`. |
+
+### Scalar Functions And Calculus
+
+| Syntax | Meaning |
+|---|---|
+| `sin(x)`, `cos(x)`, `tan(x)` | Trigonometric scalar functions. |
+| `exp(x)`, `log(x)`, `sqrt(x)` | Elementary scalar functions. |
+| `sinh(x)`, `cosh(x)`, `tanh(x)` | Hyperbolic scalar functions. |
+| `Diff(expr, X, order=1)` | Evaluated derivative of explicit scalar/tensor expressions. |
+| `Derivative(f, x, order=1)` | Formal derivative or partial derivative of unknown `Function(...)` objects. |
+| `Integrate(expr, x)` | Rule-based scalar integration. |
+| `Integral(expr, x)` | Unevaluated formal integral. |
+
+### Equations, ODEs, And Plots
+
+| Syntax | Meaning |
+|---|---|
+| `Equation(lhs, rhs)` | Scalar equation object. |
+| `BoundaryCondition(y(x0), y0)` | Boundary or initial condition. |
+| `BoundaryCondition(Derivative(y, x), x0, y0)` | Derivative boundary condition such as `y'(x0)=y0`. |
+| `ODE(eq, y, x, ...)` | ODE/PDE problem object. Boundary conditions are optional and repeatable. |
+| `ode.show()` / `ode.show(equation)` | Display the equation. |
+| `ode.show(boundary)` | Display boundary-condition status. |
+| `ode.show(classification)` | Display type, order, linearity, and homogeneity. |
+| `ode.show(methods)` | Display available symbolic solve paths. |
+| `ode.solve(details=true)` | Display worked symbolic solution steps. |
+| `ode.solve(method=...)` | Select `auto`, `linear`, `separable`, `exact`, `characteristic`, `undetermined`, `variation`, `power_series`, or `frobenius`. |
+| `expr.plot(from, to)` | Plot a scalar expression. |
+| `[expr1, expr2].plot(from, to)` | Plot multiple scalar curves together. |
+
+### Display
+
+| Syntax | Meaning |
+|---|---|
+| `expr.show()` | Symbol display mode. |
+| `expr.show(matrix)` | Matrix display where supported. |
+| `expr.show(components)` | Component display where supported. |
+| `expr.show(block_components)` | Order-4 block component display for supported derivative tensors. |
+| `[A.show(), B.show()]` | Side-by-side preview row. |
+| `ViewSource on` / `ViewSource off` | Notebook directive for source/preview comparison blocks. |
+
+## Examples And Docs
+
+- `examples/start.tens` - the default feature tour.
+- `examples/applied-math-ode.tens` - runnable applied-math / ODE demo.
+- `docs/applied-math-ode-support.md` - ODE capability reference.
+- `docs/plot-feature-plan.md` - plot implementation notes.
+- `docs/ui-design.md` - editor and notebook design notes.
+
+## Current Scope
+
+Tensbook is deliberately narrower than a general-purpose CAS. It is strict about
+the mathematical objects it knows how to manipulate, and explicit about what it
+does not support.
+
+Current 1.1 boundaries:
+
+- The DSL is the source of truth. Tensbook does not parse arbitrary LaTeX,
+  Python, Mathematica, or Maple expressions.
+- `Matrix` and `Vector` are not separate public constructors yet. Use typed
+  tensors and indexed sets.
+- General `contract(A, B, indices=...)` is not implemented. Use `*`, `:`, `&`,
+  and indexed `Sum(...)` for supported contractions.
+- `.show(matrix|components)` focuses on order-1/order-2 tensors and explicit
+  diagonal/spectral cases.
+- `.show(block_components)` is for supported order-4 derivative structures.
+- Integration is rule-based. Unsupported antiderivatives remain as
+  `Integral(...)` instead of being guessed.
+- ODE support covers first-order linear, separable, and exact equations, plus a
+  teaching-oriented set of second-order linear methods: characteristic roots,
+  undetermined coefficients, variation of parameters, power series, and
+  Frobenius/Bessel-style indicial output.
+- PDEs can be represented and classified, but not solved.
+- Plotting is one-dimensional and scalar-valued. Tensor-valued expressions,
+  implicit ODE solutions, and formal integrals are rejected with diagnostics.
+- Spectral decomposition support is intentionally conservative. `Spec_Decomp(C)`
+  currently requires a diagonal component-filled second-order tensor in the
+  working basis.
+- Continuum-mechanics differentiation covers the tested paths for scalar/tensor
+  derivatives, spectral strain derivatives, compound tensor denominators, and
+  fourth-order tangents. Fully general tensor-chain rules and eigenvector
+  derivatives are still rejected when unsupported.
+
+## Development
+
+Run the core checks:
+
+```sh
+cargo fmt --all --check
+cargo test
+cargo clippy -p tensbook --all-targets -- -D warnings
+cargo clippy -p tensbook-app --all-targets -- -D warnings
+npm run test:ui
+node --check ui/main.js
+node --check ui/completion.js
 ```
 
-## Example
+Run the desktop app locally:
 
-```text
-mu = Scalar("\mu")
-kappa = Scalar("\kappa")
-m = Scalar("m")
-n = Scalar("n")
-
-F = Tensor("\bm F", order=2, dim=3)
-lambda = ScalarSet("\lambda", dim=3)
-N = VectorSet("\bm N", dim=3)
-
-lam = Var("\lambda")
-Ecr = (lam^m - lam^(-n))/(m + n)
-
-C = Sum(lambda[a]^2 * N[a] & N[a], a)
-E = Sum(Ecr(lambda[a]) * N[a] & N[a], a)
-Q = 2 * Diff(E, C)
-W = mu * (E : E) + kappa/2 * Tr(E)^2
-
-T = Diff(W, E)
-S = T : Q
-
-E.show()
-Q.show()
-S.show()
+```sh
+cargo tauri dev
 ```
 
-License: MIT.
+If the project directory is renamed or moved, stale Tauri/Rust build cache may
+contain old absolute paths. In that case only, run:
+
+```sh
+cargo clean
+```
+
+## Release Notes For Maintainers
+
+Before tagging a release, update version-bearing files from one entry point:
+
+```sh
+scripts/prepare-release.sh 1.1.0
+```
+
+Push an annotated tag to trigger the release workflow:
+
+```sh
+git tag -a v1.1.0 -m "Tensbook v1.1.0"
+git push origin v1.1.0
+```
+
+The workflow builds the macOS DMG and publishes the GitHub Release. To update
+the Homebrew tap automatically, configure the main repository secret
+`HOMEBREW_TAP_TOKEN` with write access to `Chongran-Zhao/homebrew-tensbook`.
+
+## License
+
+MIT.
