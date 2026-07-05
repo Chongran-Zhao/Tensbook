@@ -16,6 +16,11 @@ use crate::ode::{
     BoundaryCondition, Equation, OdeClassification, OdeProblem, OdeSolution, SolveConfig,
     SolveMethod,
 };
+use crate::plot::{
+    is_bare_unknown, is_numeric_plot_candidate, plot_header, robust_y_range, sample_plot_series,
+    split_asymptote_jumps,
+};
+pub use crate::plot::{PlotData, PlotSeries};
 use crate::renderer::components::{tensor_to_block_component_matrix, tensor_to_component_matrix};
 use crate::renderer::latex::{scalar_to_latex, tensor_to_latex};
 use crate::simplifier::{simplify_scalar, simplify_tensor, RuleSet};
@@ -60,20 +65,6 @@ pub enum OutputDetail {
         steps: Vec<crate::ode::OdeStep>,
     },
     Plot(PlotData),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlotData {
-    pub x_label: String,
-    pub x_range: [f64; 2],
-    pub y_range: [f64; 2],
-    pub series: Vec<PlotSeries>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlotSeries {
-    pub label_latex: String,
-    pub segments: Vec<Vec<[f64; 2]>>,
 }
 
 /// One line of output produced by `.show(...)`.
@@ -2824,123 +2815,8 @@ fn ode_method_header(
     format!("{subject}.{method}(...)")
 }
 
-fn plot_header(target: &Expr, fallback: &str) -> String {
-    match target {
-        Expr::List(_) => "[...]",
-        _ => fallback,
-    }
-    .to_string()
-}
-
-/// Is this the unknown function itself (e.g. `y(x)`, no derivative applied)?
-/// Used to decide whether an ODE solution is explicit and therefore plottable.
-fn is_bare_unknown(expr: &ScalarExpr) -> bool {
-    matches!(
-        expr,
-        ScalarExpr::UnknownFunc {
-            derivative_orders, ..
-        } if derivative_orders.iter().all(|&order| order == 0)
-    )
-}
-
-fn is_numeric_plot_candidate(expr: &ScalarExpr) -> bool {
-    match expr {
-        ScalarExpr::Num(_) | ScalarExpr::Sym { .. } => true,
-        ScalarExpr::Add(a, b)
-        | ScalarExpr::Sub(a, b)
-        | ScalarExpr::Mul(a, b)
-        | ScalarExpr::Div(a, b)
-        | ScalarExpr::Pow(a, b) => is_numeric_plot_candidate(a) && is_numeric_plot_candidate(b),
-        ScalarExpr::Neg(a) | ScalarExpr::Log(a) => is_numeric_plot_candidate(a),
-        ScalarExpr::Func { arg, .. } => is_numeric_plot_candidate(arg),
-        ScalarExpr::UnknownFunc { .. } | ScalarExpr::Integral { .. } => false,
-        ScalarExpr::Det(_)
-        | ScalarExpr::Tr(_)
-        | ScalarExpr::Ddot(_, _)
-        | ScalarExpr::SpecSum { .. }
-        | ScalarExpr::SetElem { .. } => false,
-    }
-}
-
 fn renamed_builtin_error(old: &str, new: &str) -> Error {
     Error::msg(format!("`{old}(...)` was renamed; use `{new}(...)`"))
-}
-
-fn sample_plot_series(
-    expr: &Rc<ScalarExpr>,
-    abscissa: &str,
-    from: f64,
-    to: f64,
-) -> Result<PlotSeries, Error> {
-    const SAMPLES: usize = 512;
-    let mut segments = Vec::new();
-    let mut current = Vec::new();
-    for i in 0..SAMPLES {
-        let t = i as f64 / (SAMPLES - 1) as f64;
-        let x = from + (to - from) * t;
-        if let Some(y) = crate::numeric::eval_at(expr, abscissa, x) {
-            current.push([x, y]);
-        } else if !current.is_empty() {
-            if current.len() > 1 {
-                segments.push(std::mem::take(&mut current));
-            } else {
-                current.clear();
-            }
-        }
-    }
-    if current.len() > 1 {
-        segments.push(current);
-    }
-    if segments.is_empty() {
-        return Err(Error::msg("nothing to plot over this range"));
-    }
-    Ok(PlotSeries {
-        label_latex: scalar_to_latex(expr),
-        segments,
-    })
-}
-
-fn robust_y_range(values: &[f64]) -> Result<[f64; 2], Error> {
-    if values.is_empty() {
-        return Err(Error::msg("nothing to plot over this range"));
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let last = sorted.len() - 1;
-    let low = sorted[last * 2 / 100];
-    let high = sorted[last * 98 / 100];
-    if (high - low).abs() < 1e-12 {
-        return Ok([low - 1.0, high + 1.0]);
-    }
-    let pad = (high - low).abs() * 0.06;
-    Ok([low - pad, high + pad])
-}
-
-fn split_asymptote_jumps(segments: Vec<Vec<[f64; 2]>>, y_range: [f64; 2]) -> Vec<Vec<[f64; 2]>> {
-    let [y_min, y_max] = y_range;
-    let mut split_segments = Vec::new();
-    for segment in segments {
-        let mut current: Vec<[f64; 2]> = Vec::new();
-        for point in segment {
-            if let Some(prev) = current.last().copied() {
-                let jumps_across_band = ((prev[1] < y_min && point[1] > y_max)
-                    || (prev[1] > y_max && point[1] < y_min))
-                    && prev[1].signum() != point[1].signum();
-                if jumps_across_band {
-                    if current.len() > 1 {
-                        split_segments.push(std::mem::take(&mut current));
-                    } else {
-                        current.clear();
-                    }
-                }
-            }
-            current.push(point);
-        }
-        if current.len() > 1 {
-            split_segments.push(current);
-        }
-    }
-    split_segments
 }
 
 fn simplified_tensor_value(t: Rc<TensorExpr>) -> Value {

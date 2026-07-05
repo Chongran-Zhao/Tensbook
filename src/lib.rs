@@ -1,6 +1,6 @@
 //! Tensbook — a symbolic math notebook engine: tensor algebra, calculus, ODEs, and plotting.
 //!
-//! MVP pipeline:
+//! Pipeline:
 //! ```text
 //! .tens source --parser--> syntactic AST --interpreter--> semantic values
 //!                                             |
@@ -8,12 +8,19 @@
 //! ```
 //!
 //! Module layout:
-//! - [`parser`]      — lexer + Pratt parser for the `.tens` DSL
-//! - [`ast`]         — syntactic AST (no mathematical meaning)
-//! - [`symbolic`]    — symbolic scalar expressions (the symbolic engine)
-//! - [`tensor`]      — tensor object system + conservative property inference
-//! - [`interpreter`] — evaluation, environment, type checking
-//! - [`renderer`]    — LaTeX symbol-mode and component-mode rendering
+//! - [`parser`]          — lexer + Pratt parser for the `.tens` DSL
+//! - [`ast`]             — syntactic AST (no mathematical meaning)
+//! - [`symbolic`]        — symbolic scalar expressions (the symbolic engine)
+//! - [`tensor`]          — tensor object system + conservative property inference
+//! - [`interpreter`]     — evaluation, environment, type checking, outputs
+//! - [`differentiation`] — Diff/Derivative rules for scalars and tensors
+//! - [`integration`]     — rule-based scalar integration
+//! - [`simplifier`]      — algebra / tensor / continuum rewrite rules
+//! - [`ode`]             — ODE classification, solvers, and result rendering
+//! - [`numeric`]         — f64 evaluation of scalar expressions (plot sampling)
+//! - [`plot`]            — curve sampling and y-range selection for `.plot()`
+//! - [`renderer`]        — LaTeX symbol-mode and component-mode rendering
+//! - [`metadata`]        — symbol info + display-mode capabilities for the UI
 
 pub mod ast;
 pub mod differentiation;
@@ -25,6 +32,7 @@ pub mod metadata;
 pub mod numeric;
 pub mod ode;
 pub mod parser;
+pub mod plot;
 pub mod renderer;
 pub mod simplifier;
 pub mod substitute;
