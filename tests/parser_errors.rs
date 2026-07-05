@@ -42,7 +42,9 @@ fn unexpected_token_in_expression() {
 #[test]
 fn positional_after_keyword_argument() {
     let err = error_of("A = Tensor(\"\\bm A\", order=2, 3)");
-    assert!(err.message.contains("positional argument after keyword argument"));
+    assert!(err
+        .message
+        .contains("positional argument after keyword argument"));
 }
 
 #[test]
