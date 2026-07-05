@@ -129,6 +129,10 @@ const exportPdfBtn = document.getElementById("export-pdf");
 const themeBtn = document.getElementById("theme");
 const filenameEl = document.getElementById("filename");
 
+function currentCspNonce() {
+  return document.querySelector("style[nonce], script[nonce]")?.nonce || "";
+}
+
 let currentPath = null;
 let currentSavePath = null;
 let lastRenderedOutputs = [];
@@ -842,6 +846,7 @@ function initEditor() {
         highlightActiveLineGutter(),
         markdown(),
         syntaxHighlighting(markdownHighlight),
+        EditorView.cspNonce.of(currentCspNonce()),
         EditorView.lineWrapping,
         EditorView.decorations.compute(["doc"], (state) => buildSentinelHiding(state.doc)),
         editorTheme,
