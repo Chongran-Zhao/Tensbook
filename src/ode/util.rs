@@ -856,14 +856,18 @@ pub(crate) fn solve_constant_from_explicit(
     let x_name = scalar_symbol_name(independent)?;
     let at_x = subst_symbol(rhs, x_name, &ic.point);
     let (coeff, rest) = linear_coeff_const(&at_x, constant_name())?;
-    Some(simplify_scalar(
+    let solution = simplify_scalar(
         &Rc::new(ScalarExpr::Div(
             Rc::new(ScalarExpr::Sub(ic.value.clone(), rest)),
             coeff.clone(),
         )),
         RuleSet::Continuum,
-    ))
-    .filter(|_| !is_zero(&coeff))
+    );
+    if is_zero(&coeff) {
+        None
+    } else {
+        Some(solution)
+    }
 }
 
 pub(crate) fn solve_constant_from_implicit(
