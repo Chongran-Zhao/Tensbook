@@ -6,6 +6,9 @@ Before tagging a release, update version-bearing files from one entry point:
 scripts/prepare-release.sh <version>
 ```
 
+Add the GitHub Release body at `docs/releases/v<version>.md`. The tag workflow
+checks out that file and publishes it alongside the generated DMG and cask.
+
 Push an annotated tag to trigger the release workflow:
 
 ```sh

@@ -4,3 +4,4 @@
 /node_modules
 /ui/vendor/codemirror/cm.bundle.js
 /.claude
+/.understand-anything

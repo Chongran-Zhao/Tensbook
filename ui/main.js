@@ -57,8 +57,10 @@ import {
   signatureHint,
   tensorForgeCompletionSource,
 } from "./completion.js";
+import { createLatestTaskGate } from "./latest-task.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
+const runTaskGate = createLatestTaskGate();
 
 
 const DEFAULT_SOURCE_URL = "start.tens";
@@ -250,6 +252,7 @@ function refreshDocumentModel() {
 }
 
 function setDocumentSource(source, options = {}) {
+  runTaskGate.invalidate();
   replacingDocument = true;
   try {
     replaceEditorSource(source);
@@ -1709,18 +1712,28 @@ function showError(message) {
 }
 
 async function run() {
+  clearTimeout(liveTimer);
+  liveTimer = null;
   syncSourceFromBlocks();
   if (!invoke) {
+    runTaskGate.invalidate();
     renderOutputs([]);
     return;
   }
   const source = executableSource();
   if (!source) {
+    runTaskGate.invalidate();
     renderOutputs([]);
     lastGoodShown = true;
     return;
   }
-  const result = await invoke("run_tens", { source });
+  const outcome = await runTaskGate.run(() => invoke("run_tens", { source }));
+  if (!outcome) return;
+  if (outcome.status === "rejected") {
+    showError(outcome.error);
+    return;
+  }
+  const result = outcome.value;
   if (!result.ok) {
     showError(result.error);
     return;
@@ -1731,36 +1744,53 @@ async function run() {
 async function liveRun() {
   syncSourceFromBlocks();
   if (!invoke) {
+    runTaskGate.invalidate();
     renderOutputs([], { preserveScroll: true });
     return;
   }
   const source = executableSource();
   if (!source) {
+    runTaskGate.invalidate();
     renderOutputs([], { preserveScroll: true });
     lastGoodShown = true;
     return;
   }
-  const result = await invoke("run_tens", { source });
+  const outcome = await runTaskGate.run(() => invoke("run_tens", { source }));
+  if (!outcome) return;
+  if (outcome.status === "rejected") {
+    showLiveRunError(outcome.error);
+    return;
+  }
+  const result = outcome.value;
   if (!result.ok) {
-    if (!lastGoodShown) showError(result.error);
-    else {
-      let banner = output.querySelector(".parse-banner");
-      if (!banner) {
-        banner = document.createElement("div");
-        banner.className = "error parse-banner";
-        output.prepend(banner);
-      }
-      banner.textContent = result.error;
-    }
+    showLiveRunError(result.error);
     return;
   }
   renderOutputs(result.outputs, { preserveScroll: true });
   lastGoodShown = true;
 }
 
+function showLiveRunError(message) {
+  if (!lastGoodShown) {
+    showError(message);
+    return;
+  }
+  let banner = output.querySelector(".parse-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.className = "error parse-banner";
+    output.prepend(banner);
+  }
+  banner.textContent = String(message);
+}
+
 function scheduleLiveRun() {
+  runTaskGate.invalidate();
   clearTimeout(liveTimer);
-  liveTimer = setTimeout(liveRun, 350);
+  liveTimer = setTimeout(() => {
+    liveTimer = null;
+    liveRun();
+  }, 350);
 }
 
 // ---- signature hint -------------------------------------------------------
@@ -1865,13 +1895,18 @@ function updateSignatureHint() {
 }
 
 async function buildExportDocument() {
+  clearTimeout(liveTimer);
+  liveTimer = null;
   syncSourceFromBlocks();
   let outputs = [];
   const source = executableSource();
 
   if (source) {
     if (invoke) {
-      const result = await invoke("run_tens", { source });
+      const outcome = await runTaskGate.run(() => invoke("run_tens", { source }));
+      if (!outcome) return null;
+      if (outcome.status === "rejected") throw outcome.error;
+      const result = outcome.value;
       if (!result.ok) {
         showError(`Export stopped: fix the Tensbook error first.\n\n${result.error}`);
         return null;

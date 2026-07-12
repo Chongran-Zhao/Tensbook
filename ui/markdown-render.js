@@ -166,20 +166,20 @@ export function findInlineMathEnd(text, start) {
 export function renderInlinePlain(text) {
   const parts = [];
   let rest = text;
-  const img = /!\[([^\]]*)\]\((data:image\/[a-zA-Z+.-]+;base64,[A-Za-z0-9+/=]+)\)/;
-  for (let m = rest.match(img); m; m = rest.match(img)) {
+  // Match both asset types in one pass so their source order is preserved.
+  const asset =
+    /!\[([^\]]*)\]\((data:image\/[a-zA-Z+.-]+;base64,[A-Za-z0-9+/=]+)\)|\[([^\]]+)\]\(([^)\s]+)\)/;
+  for (let m = rest.match(asset); m; m = rest.match(asset)) {
     parts.push(inlineStyles(rest.slice(0, m.index)));
-    parts.push(`<img class="md-img" alt="${escapeAttr(m[1])}" src="${m[2]}">`);
-    rest = rest.slice(m.index + m[0].length);
-  }
-  const link = /\[([^\]]+)\]\(([^)\s]+)\)/;
-  for (let m = rest.match(link); m; m = rest.match(link)) {
-    parts.push(inlineStyles(rest.slice(0, m.index)));
-    const href = safeMarkdownHref(m[2]);
-    if (href) {
-      parts.push(`<a href="${escapeAttr(href)}">${inlineStyles(m[1])}</a>`);
+    if (m[2] !== undefined) {
+      parts.push(`<img class="md-img" alt="${escapeAttr(m[1])}" src="${m[2]}">`);
     } else {
-      parts.push(inlineStyles(m[0]));
+      const href = safeMarkdownHref(m[4]);
+      if (href) {
+        parts.push(`<a href="${escapeAttr(href)}">${inlineStyles(m[3])}</a>`);
+      } else {
+        parts.push(inlineStyles(m[0]));
+      }
     }
     rest = rest.slice(m.index + m[0].length);
   }
