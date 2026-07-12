@@ -3,7 +3,7 @@ members = [".", "src-tauri"]
 
 [package]
 name = "tensbook"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 description = "Symbolic math engine behind the Tensbook notebook (.tens DSL: tensor algebra, calculus, ODEs, plotting)"
 license = "MIT"

@@ -7,7 +7,7 @@
 # release workflow fills in the real sha256 and copies the rendered cask to the
 # tap repository.
 cask "tensbook" do
-  version "1.1.1"
+  version "1.1.2"
   sha256 "REPLACE_WITH_AARCH64_APPLE_DARWIN_DMG_SHA256"
 
   url "https://github.com/Chongran-Zhao/Tensbook/releases/download/v#{version}/Tensbook-v#{version}-aarch64-apple-darwin.dmg"

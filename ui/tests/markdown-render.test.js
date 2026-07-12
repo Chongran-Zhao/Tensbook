@@ -30,6 +30,14 @@ test("inlineMarkdown handles links, styles, code, and unsafe links", () => {
   );
 });
 
+test("inlineMarkdown preserves source order when links and embedded images are mixed", () => {
+  const image = "![dot](data:image/png;base64,AA==)";
+  assert.equal(
+    inlineMarkdown(`[docs](https://example.com) ${image} [mail](mailto:a@example.com)`),
+    '<a href="https://example.com/">docs</a> <img class="md-img" alt="dot" src="data:image/png;base64,AA=="> <a href="mailto:a@example.com">mail</a>',
+  );
+});
+
 test("table helpers preserve cell text and alignment", () => {
   assert.deepEqual(tableCells("| a | b |"), [" a ", " b "]);
   assert.deepEqual(tableAlignments("| :--- | ---: | :---: |"), ["left", "right", "center"]);
